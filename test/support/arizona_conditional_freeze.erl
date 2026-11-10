@@ -41,6 +41,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([helper_raw_template_nodiff/1]).
 -export([helper_raw_template_json/1]).
 -export([literal_raw_template/1]).
+-export([literal_raw_attr/1]).
+-export([helper_raw_attr/1]).
 -export([raw_in_list_item/1]).
 -export([raw_in_stream_item/1]).
 -export([raw_in_branch/1]).
@@ -434,6 +436,15 @@ literal_raw_template(Bindings) ->
 
 text_or_template(true, Name) -> ?html({b, [], [Name]});
 text_or_template(false, Name) -> Name.
+
+%% The same in an attribute value, written literally and returned by a helper.
+-spec literal_raw_attr(az:bindings()) -> az:template().
+literal_raw_attr(Bindings) ->
+    ?html({'div', [{id, ~"x"}, {title, ?raw(text_or_template(?get(wrap), ?get(name)))}], []}).
+
+-spec helper_raw_attr(az:bindings()) -> az:template().
+helper_raw_attr(Bindings) ->
+    ?html({'div', [{id, ~"x"}, {title, maybe_raw_template(?get(wrap), ?get(name))}], []}).
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

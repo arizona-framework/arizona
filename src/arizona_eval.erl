@@ -738,7 +738,10 @@ eval_val(Val) ->
 %% A content `?local` init and a `raw/1` value skip `mark_esc/1`, so a command in
 %% one, or a map in a raw, would otherwise be refused only at output
 %% (`arizona_template:to_bin/1`), where the slot's location is gone. Refused here,
-%% inside the located evaluation.
+%% inside the located evaluation. A raw inside is not classified: that would refuse a
+%% map in it here on the live render while SSR refuses it at output, as another name.
+refuse_effect({arizona_raw, _}) ->
+    ok;
 refuse_effect(V) ->
     case arizona_template:classify_trusted(V) of
         {effect, Cmd} -> arizona_template:effect_in_content(Cmd);

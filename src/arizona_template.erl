@@ -670,7 +670,8 @@ format_error({raw_template, V}) ->
     lists:flatten(
         io_lib:format(
             "raw/1 around ~0tp: raw opts text out of escaping, and a template, component "
-            "or ?local is not text. A template is markup already, so drop the raw",
+            "or ?local is markup, not text: drop the raw in content; an attribute value "
+            "must be text",
             [V]
         )
     );
@@ -757,11 +758,12 @@ client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boun
 The `?json` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
 with no defined meaning; using it in a `?json`/`?terminal` template is unsupported.
 
-`Value` is text. A template or other map held directly by the raw raises
-`{raw_template, Map}` where its slot is evaluated, so it is located on every path; a
-template is markup already, so drop the raw. One nested deeper (in a list, or in a
-raw inside the raw) is not looked for, and raises `bad_template_value` at output,
-where only SSR still knows the slot's location.
+`Value` is text. A template or other map held directly by the raw, in content or an
+attribute value, raises `{raw_template, Map}` where its slot is evaluated, so it is
+located on every path: a template is markup, not text, so drop the raw in content,
+and an attribute value must be text. One nested deeper (in a list, or in a raw
+inside the raw) is not looked for, and may raise only at output, as
+`bad_template_value`, where only SSR still knows the slot's location.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -791,7 +793,8 @@ bool_attr(Value) -> Value.
 -doc """
 Classifies the trusted shapes: a `raw/1` opt-out (`{arizona_raw, V}`, returned
 unwrapped) and an effect command or command list (`{arizona_effect, _}`). Every
-other value is `value`.
+other value is `value`. A raw holding a map raises `{raw_template, Map}`, so every
+caller -- content and each backend's attribute renderer -- refuses it alike.
 
 The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
 the backends' attribute renderers dispatch on it. `to_bin/1` matches the raw
@@ -804,6 +807,7 @@ and `mark_esc/1` deliberately unwraps and re-escapes a helper-produced raw.
 -spec classify_trusted(Value) -> {raw, term()} | {effect, Effect} | value when
     Value :: term(),
     Effect :: term().
+classify_trusted({arizona_raw, V}) when is_map(V) -> raw_not_text(V);
 classify_trusted({arizona_raw, V}) -> {raw, V};
 classify_trusted({arizona_effect, _} = Cmd) -> {effect, Cmd};
 classify_trusted([{arizona_effect, _} | _] = Cmds) -> {effect, Cmds};
@@ -877,7 +881,8 @@ the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
 across the live diff). A map held directly by the raw -- a template, a descriptor,
 a `?local` -- is not text, so it raises `{raw_template, Map}`, as a literal `?raw`
-around one does; one nested deeper is refused only at output (see `raw/1`).
+around one does (`classify_trusted/1` raises it). A raw inside the raw is unwrapped
+the same way; a map in a list is refused only at output (see `raw/1`).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -887,7 +892,7 @@ mark_esc(V) when is_map(V) ->
     V;
 mark_esc(V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> mark_raw_esc(V);
+        {raw, V} -> mark_esc(V);
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> {arizona_esc, V0}
     end.
@@ -898,18 +903,13 @@ mark_esc(V0) ->
 %% init spliced, a template one rendered, any other escaped -- so it keeps diffing.
 mark_local_init({arizona_raw, _} = Raw) -> Raw;
 mark_local_init(Init) -> mark_esc(Init).
-%% A map unwrapped from a raw was never evaluated, so passing it through as a nested
-%% template would reach the live render with its dynamics still unevaluated.
-mark_raw_esc(V) when is_map(V) ->
-    raw_not_text(V);
-mark_raw_esc(V) ->
-    mark_esc(V).
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
 %% `?local` -- held directly by a `raw/1`, which opts text out of escaping. Raised
 %% where the slot is evaluated, so it carries the slot's location. A map nested
 %% deeper (in a list, in a raw in the raw) is not walked for, which would cost every
-%% raw value; output refuses it as `bad_template_value`, unlocated on the live render.
+%% raw value; output may refuse it as `bad_template_value`, unlocated on the live
+%% render.
 -doc false.
 -spec raw_not_text(Value) -> no_return() when
     Value :: map().

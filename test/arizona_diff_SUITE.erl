@@ -2131,22 +2131,24 @@ helper_raw_template_refused_on_diff(Config) when is_list(Config) ->
     end).
 
 %% A literal `?raw` around a template is refused at the slot's line on SSR, the live
-%% render and the diff alike, not only where SSR locates it.
+%% render and the diff alike, not only where SSR locates it -- in content and in an
+%% attribute value, written literally or returned by a helper.
 literal_raw_template_refused(Config) when is_list(Config) ->
     M = arizona_conditional_freeze,
     B = #{wrap => true, name => ~"<a>"},
-    ok = assert_raw_template_error(M, fun() ->
-        arizona_render:render_to_iolist(M:literal_raw_template(B))
-    end),
-    ok = assert_raw_template_error(M, fun() ->
-        arizona_render:render(M:literal_raw_template(B), #{})
-    end),
-    {_, S0, V0} = arizona_render:render(
-        M:literal_raw_template(#{wrap => false, name => ~"a"}), #{}
-    ),
-    ok = assert_raw_template_error(M, fun() ->
-        arizona_diff:diff(M:literal_raw_template(B), S0, V0, #{wrap => true})
-    end).
+    [
+        begin
+            ok = assert_raw_template_error(M, fun() ->
+                arizona_render:render_to_iolist(M:Fun(B))
+            end),
+            ok = assert_raw_template_error(M, fun() -> arizona_render:render(M:Fun(B), #{}) end),
+            {_, S0, V0} = arizona_render:render(M:Fun(#{wrap => false, name => ~"a"}), #{}),
+            ok = assert_raw_template_error(M, fun() ->
+                arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
+            end)
+        end
+     || Fun <- [literal_raw_template, literal_raw_attr, helper_raw_attr]
+    ].
 
 %% Runs `Fun`, which must raise `{raw_template, Template}` located in module `M`,
 %% formatted with the remedy.
@@ -2157,7 +2159,8 @@ assert_raw_template_error(M, Fun) ->
         error:Reason:ST ->
             ?assertMatch({arizona_loc, {M, _}, {raw_template, #{s := _}}}, Reason),
             Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
-            ?assertNotEqual(nomatch, binary:match(Msg, ~"drop the raw")),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"drop the raw in content")),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"an attribute value must be text")),
             ok
     end.
 
