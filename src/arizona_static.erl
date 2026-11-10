@@ -77,11 +77,11 @@ client and calls its `start()` instead of `connect('/ws')`:
 
 A data value under an `az-*` name is never run as a command, so the client only
 delegates the event names proven to hold one, exactly as the live socket's
-connect frame does. `generate/2,3` therefore hands those names to each page that
-has any -- the compile-time names of the handler, its layouts and every module
+connect frame does. `generate/2,3` therefore hands those names to each page --
+the compile-time names of the handler, its layouts and every module
 rendered into the page, plus the names whose command was built at render time --
-through its render target's `static_document/2` callback. An `?html` page embeds
-them as `<script type="application/json" id="arizona-attrs">` appended after the
+through its render target's `static_document/2` callback, an empty set too. An
+`?html` page embeds them as `<script type="application/json" id="arizona-attrs">` appended after the
 document, which the HTML parser moves into the body; a `?json` document is
 written as rendered, its client handed the names by `start({attrs})`. A
 `push_event` has no server to reach and is dropped with a warning; a

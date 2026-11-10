@@ -21,7 +21,7 @@
 -export([collects_non_map_spec_opts/1]).
 -export([embeds_compile_time_proven_attrs/1]).
 -export([embeds_render_time_proven_attrs/1]).
--export([page_without_events_has_no_attrs/1]).
+-export([page_without_events_embeds_no_attrs/1]).
 -export([page_without_body_gets_the_names_after_it/1]).
 -export([html_embed_never_searches_the_document/1]).
 -export([target_decides_how_a_document_carries_names/1]).
@@ -48,7 +48,7 @@ groups() ->
             collects_non_map_spec_opts,
             embeds_compile_time_proven_attrs,
             embeds_render_time_proven_attrs,
-            page_without_events_has_no_attrs,
+            page_without_events_embeds_no_attrs,
             page_without_body_gets_the_names_after_it,
             html_embed_never_searches_the_document,
             target_decides_how_a_document_carries_names,
@@ -235,9 +235,11 @@ embeds_render_time_proven_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "proven_render", arizona_static_runtime_cmd),
     ?assertEqual([~"az-dblclick"], embedded_attrs(Content)).
 
-page_without_events_has_no_attrs(Config) when is_list(Config) ->
+%% A page with no names still carries an empty set: the client reads the last
+%% embed, and without one that is an element the page content holds.
+page_without_events_embeds_no_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "no_events", arizona_static_page),
-    ?assertEqual(nomatch, binary:match(Content, ~"arizona-attrs")).
+    ?assertEqual([], embedded_attrs(Content)).
 
 %% A page with no `</body>` (no layout) is a body's content to the parser, so the
 %% names follow it like any other page's, which stays exactly what rendering

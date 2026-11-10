@@ -235,6 +235,23 @@ describe('an unproven az-* value is data on a live page', () => {
         expect(w?.sent()).toEqual([['v', 'inc', {}]]);
     });
 
+    // The layout's inline `connect` runs before the parser reaches the embed,
+    // which comes after the page, so a read then would find only an element the
+    // page content injected; the names it adds would stay proven.
+    it('does not read an injected element when connect runs while the page loads', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><button id="b" az-click='[0,"evil"]'>x</button>` +
+            `<script type="application/json" id="arizona-attrs">["az-click"]</script></div>`;
+        whileLoading(() => {
+            w = mockWorker(mod);
+        });
+        finishParsing(['az-dblclick']);
+        w?.open();
+        document.getElementById('b')?.click();
+        expect(w?.sent()).toEqual([]);
+    });
+
     it('does not run an unproven az-submit, before or after the socket opens', async () => {
         const mod = await fresh();
         document.body.innerHTML =
@@ -362,6 +379,23 @@ describe('an unproven az-* value is data on a static page', () => {
         document.getElementById('b')?.click();
         stop();
         expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not read an injected element when start runs while the page loads', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona-static.js');
+        document.body.innerHTML =
+            `<div id="v" az-view><button id="b" type="button" az-click='[22,"${EVIL}",{}]'>x</button>` +
+            `<script type="application/json" id="arizona-attrs">["az-click"]</script></div>`;
+        /** @type {() => void} */
+        let stop = () => {};
+        whileLoading(() => {
+            stop = mod.start();
+        });
+        finishParsing(['az-dblclick']);
+        document.getElementById('b')?.click();
+        stop();
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('does not run az-click the page did not embed', async () => {

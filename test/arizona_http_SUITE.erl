@@ -127,7 +127,9 @@ render_threads_cookie(Config) when is_list(Config) ->
 render_embeds_the_proven_attrs(Config) when is_list(Config) ->
     ?assertEqual([~"az-click"], embedded_attrs(render_in_layout(arizona_counter))),
     ?assertEqual([~"az-dblclick"], embedded_attrs(render_in_layout(arizona_static_runtime_cmd))),
-    ?assertEqual(nomatch, binary:match(render_in_layout(arizona_static_page), ~"arizona-attrs")).
+    %% A page with none still carries an empty set: the client reads the last
+    %% embed, and without one that is an element the page content holds.
+    ?assertEqual([], embedded_attrs(render_in_layout(arizona_static_page))).
 
 %% A request process may serve several requests: the collector is armed for one
 %% page's render only.

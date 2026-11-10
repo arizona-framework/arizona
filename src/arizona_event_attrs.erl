@@ -223,8 +223,9 @@ Runs `Render`, a request-free render of a page whose compile-time walk roots are
 `Roots` (its handler and layout modules), with the collector armed, and hands
 the document the `az-*` names proven for it -- what the walk finds from the
 roots and the modules the render instantiated, plus what the render evaluated to
-a command -- through its render target's `static_document/2`. A page with none
-is returned as rendered.
+a command -- through its render target's `static_document/2`, even when there
+are none: the client reads the last embed, so a page without one would leave it
+reading an element the page content holds.
 """.
 -spec embed(Roots, Render) -> {Backend, iodata()} when
     Roots :: [module()],
@@ -237,10 +238,7 @@ embed(Roots, Render) ->
         {Backend, Doc} = Render(),
         {Rendered, Mods} = drain(),
         {Compiled, _Walked} = reach(Roots, Mods),
-        case lists:umerge(Rendered, Compiled) of
-            [] -> {Backend, Doc};
-            Names -> {Backend, Backend:static_document(Doc, Names)}
-        end
+        {Backend, Backend:static_document(Doc, lists:umerge(Rendered, Compiled))}
     after
         ok = restore(Saved)
     end.

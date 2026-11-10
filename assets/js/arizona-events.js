@@ -319,8 +319,7 @@ const ATTRS_ID = 'arizona-attrs';
 /**
  * The names a page embeds for its client before the socket can deliver them
  * (`<script type="application/json" id="arizona-attrs">`, the render target's
- * `static_document/2`, appended after the document), or none: a page with no event
- * attributes gets no element.
+ * `static_document/2`, appended after the document, even when empty), or none.
  * @returns {string[]}
  */
 function embeddedAttrs() {
@@ -340,18 +339,19 @@ function embeddedAttrs() {
 }
 
 /**
- * Note the names the page embeds, now and, when the document is still parsing,
- * again once it is parsed: a classic script or an early module may call
- * `connect`/`start` before the parser reaches the embed, which comes after the page.
+ * Note the names the page embeds, once the document is parsed. A classic script or
+ * an early module may call `connect`/`start` before the parser reaches the embed,
+ * which comes after the page, and the last match then is one the page content
+ * holds: a read then would prove its names for good, since proofs only add.
  * @param {AbortSignal} signal
  */
 export function noteEmbeddedAttrs(signal) {
-    noteAzAttrs(embeddedAttrs());
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', () => noteAzAttrs(embeddedAttrs()), {
             once: true,
             signal,
         });
+    else noteAzAttrs(embeddedAttrs());
 }
 
 /**

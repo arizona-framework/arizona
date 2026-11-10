@@ -2040,7 +2040,8 @@ type). The transport handler translates the returned result into its native repl
 The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
 render target's `static_document/2`: an `?html` page gets `<script type="application/json"
 id="arizona-attrs">` appended after the document, which the HTML parser moves into the body as
-its last element), the same set the socket's connect frame
+its last element, even when the set is empty, so the client's last match is never an element
+the page content holds), the same set the socket's connect frame
 delivers. The client runs a command only under a proven name, and that frame lands a round trip
 after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
 between would find no proof. Appending rather than splicing means the page is neither flattened
@@ -2102,7 +2103,7 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   of `t:arizona_live:route_opts/0` (`bindings`/`on_mount`/`layouts`; no `middlewares`). The client
   `<script>` lives in the layout: a pure-static page loads `arizona-static.min.js` and calls
   `start()` instead of `connect('/ws')`, and browser-side commands (`?local`, toggles, dialogs,
-  PiP) run with no server. Each page with event attributes is handed their proven names -- what
+  PiP) run with no server. Each page is handed its proven names, an empty set too -- what
   an HTTP-rendered live page embeds the same way -- through its target's
   `static_document/2` renderer callback: HTML embeds them as
   `<script type="application/json" id="arizona-attrs">` appended after the document, and
