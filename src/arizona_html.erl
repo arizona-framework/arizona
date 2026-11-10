@@ -312,25 +312,15 @@ content_context_name(_Other, Parent) ->
 
 -spec static_document(iodata(), [binary()]) -> iodata().
 static_document(Doc, Names) ->
-    %% Before the last `</body>`, where the static client reads it. A document with
-    %% none (a fragment) is left as rendered: appending markup could corrupt it.
-    %% `<` is escaped so no name can close the script element.
-    Html = iolist_to_binary(Doc),
-    case binary:matches(Html, ~"</body>") of
-        [] ->
-            Html;
-        Matches ->
-            {At, _Len} = lists:last(Matches),
-            Json = binary:replace(iolist_to_binary(json:encode(Names)), ~"<", ~"\\u003c", [global]),
-            <<Before:At/binary, After/binary>> = Html,
-            [
-                Before,
-                ~"<script type=\"application/json\" id=\"arizona-attrs\">",
-                Json,
-                ~"</script>",
-                After
-            ]
-    end.
+    %% After the document, not inside it: the HTML parser moves content past
+    %% `</body>`/`</html>` into the body, as its last element, and a fragment's
+    %% content is the body's anyway. So the page is neither flattened nor searched
+    %% (a `</BODY>` or a data island's `</body>` text cannot misplace it), and the
+    %% embed is the document's last JSON script, which is how the client tells it
+    %% from an element that merely shares its id. `<` is escaped so no name can
+    %% close the script element.
+    Json = binary:replace(iolist_to_binary(json:encode(Names)), ~"<", ~"\\u003c", [global]),
+    [Doc, ~"<script type=\"application/json\" id=\"arizona-attrs\">", Json, ~"</script>"].
 
 %% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
 %% transform builds the marker from the id, so the fingerprint is always the

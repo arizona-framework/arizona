@@ -35,10 +35,11 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
-| `make test-e2e` | Playwright E2E tests (incl. the `json` wire project) |
+| `make test-e2e` | Playwright E2E tests (incl. the `json` wire and `firefox` projects; needs Chromium and Firefox, `make setup-e2e`) |
 | `make test-e2e-parallel` | Playwright `parallel` project only |
-| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, since its specs disturb every connection) |
+| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, `firefox` included, since its specs disturb every connection -- this target skips them with `--no-deps`) |
 | `make test-e2e-json` | Playwright `json` project only (`?json` wire, no browser) |
+| `make test-e2e-firefox` | Playwright `firefox` project only (the specs whose behaviour differs per engine, e.g. the proven-name embedding, in Firefox) |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -272,7 +273,7 @@ arizona_static:generate(~"_site", [
 ], #{layouts => [{site_layout, render}]}).
 ```
 
-A generated page has no server, but its browser-side commands still run: the layout loads the **static client** (`priv/static/assets/js/arizona-static.min.js`, `@arizona-framework/client/static`) and calls `start()` in place of `connect('/ws')`. `?local` updates, toggles, dialogs, view transitions, PiP and `az-hook`s all work; a `push_event` warns and is dropped, and a `navigate`/`patch` loads its URL as a page. Only proven event names are delegated (a data value under an `az-*` name never runs), so `generate` embeds each page's names -- compile-time ones from the handler, its layouts and every rendered module, plus commands built at render time -- through the render target's `static_document/2` callback: an `?html` page carries them as `<script type="application/json" id="arizona-attrs">` before the last `</body>`, as an HTTP-rendered live page does ahead of its connect frame.
+A generated page has no server, but its browser-side commands still run: the layout loads the **static client** (`priv/static/assets/js/arizona-static.min.js`, `@arizona-framework/client/static`) and calls `start()` in place of `connect('/ws')`. `?local` updates, toggles, dialogs, view transitions, PiP and `az-hook`s all work; a `push_event` warns and is dropped, and a `navigate`/`patch` loads its URL as a page. Only proven event names are delegated (a data value under an `az-*` name never runs), so `generate` embeds each page's names -- compile-time ones from the handler, its layouts and every rendered module, plus commands built at render time -- through the render target's `static_document/2` callback: an `?html` page carries them as `<script type="application/json" id="arizona-attrs">` appended after the document (the HTML parser moves it into the body), as an HTTP-rendered live page does ahead of its connect frame.
 
 ## Native-shell capabilities -- `arizona_os`
 

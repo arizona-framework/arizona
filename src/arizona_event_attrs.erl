@@ -78,8 +78,8 @@ Known limits, all loud or documented rather than silent:
 
 - A command that reaches a LAYOUT attribute opaquely reaches the client only
   through the document `embed/2` builds (layouts render once, at SSR; no frame
-  re-renders one): a document with nowhere to embed (an `?html` fragment with
-  no `</body>`, a `?json` document) loses it, as does a layout rendered
+  re-renders one): a document with nowhere to embed (a `?json` document)
+  loses it, as does a layout rendered
   through any other path -- that render warns (`observe_attr/1`'s unarmed
   branch). A `?stateless` with a runtime-bound module inside a layout is the
   same case one level up; `?stateful` in a layout is already a render-time

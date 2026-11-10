@@ -11,6 +11,7 @@ SHELL := /bin/bash
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
 	build-js analyze-js \
 	test test-eunit test-ct test-erl test-js test-e2e \
+	test-e2e-parallel test-e2e-sequential test-e2e-firefox test-e2e-json \
 	bench bench-client bench-client-connect  \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
@@ -131,6 +132,11 @@ test-e2e-sequential:
 test-e2e-json:
 	npx playwright test --project json
 
+# The specs whose behaviour differs per engine, in Firefox (`npx playwright
+# install firefox`, or `make setup-e2e`).
+test-e2e-firefox:
+	npx playwright test --project firefox
+
 # Performance bench. Intentionally NOT wired into ci/precommit:
 # numbers are noisy under shared CI runners and need human comparison.
 # Compile under the test profile so test/support/ fixtures are on the path.
@@ -211,7 +217,7 @@ doc-js:
 
 setup-e2e:
 	npm install
-	npx playwright install chromium
+	npx playwright install chromium firefox
 
 clean:
 	rebar3 clean

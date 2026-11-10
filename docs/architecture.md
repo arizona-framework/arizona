@@ -2039,11 +2039,13 @@ type). The transport handler translates the returned result into its native repl
 
 The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
 render target's `static_document/2`: an `?html` page gets `<script type="application/json"
-id="arizona-attrs">` before its last `</body>`), the same set the socket's connect frame
+id="arizona-attrs">` appended after the document, which the HTML parser moves into the body as
+its last element), the same set the socket's connect frame
 delivers. The client runs a command only under a proven name, and that frame lands a round trip
 after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
-between would find no proof. A document with nowhere to embed (a fragment, a `?json` page) waits
-for the connect frame.
+between would find no proof. Appending rather than splicing means the page is neither flattened
+nor searched: no case or data-island text can misplace the embed. A `?json` page has nowhere to
+embed and waits for the connect frame.
 
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
@@ -2103,7 +2105,7 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   PiP) run with no server. Each page with event attributes is handed their proven names -- what
   an HTTP-rendered live page embeds the same way -- through its target's
   `static_document/2` renderer callback: HTML embeds them as
-  `<script type="application/json" id="arizona-attrs">` before its last `</body>`, and
+  `<script type="application/json" id="arizona-attrs">` appended after the document, and
   `start()` delegates exactly those.
 
 ## Roadrunner handlers

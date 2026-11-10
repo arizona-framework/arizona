@@ -314,8 +314,8 @@ const ATTRS_ID = 'arizona-attrs';
 /**
  * The names a page embeds for its client before the socket can deliver them
  * (`<script type="application/json" id="arizona-attrs">`, the render target's
- * `static_document/2`), or none: a page with no event attributes, or a fragment
- * with no `</body>` to embed before, gets no element.
+ * `static_document/2`, appended after the document), or none: a page with no event
+ * attributes gets no element.
  * @returns {string[]}
  */
 function embeddedAttrs() {
@@ -440,7 +440,7 @@ export function bindDocumentEvents(target, signal, abort) {
             // be exactly what happened.
             e.preventDefault();
             // Unproven: the value is app data (or the proof has not arrived, on a
-            // page with nowhere to embed it), and the user still pressed submit.
+            // page without the embed), and the user still pressed submit.
             if (!_eventTypes.has('submit')) {
                 dropSubmit(form, 'unproven');
                 return;
