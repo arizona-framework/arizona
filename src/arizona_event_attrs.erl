@@ -190,6 +190,7 @@ is returned as rendered.
     Render :: fun(() -> {Backend, iodata()}),
     Backend :: module().
 embed(Roots, Render) ->
+    Saved = {get(?ATTRS_KEY), get(?MODS_KEY)},
     ok = arm(),
     try
         {Backend, Doc} = Render(),
@@ -199,7 +200,7 @@ embed(Roots, Render) ->
             Names -> {Backend, Backend:static_document(Doc, Names)}
         end
     after
-        ok = disarm()
+        ok = restore(Saved)
     end.
 
 -doc """
@@ -278,11 +279,17 @@ observe_mod(Mod) ->
 %% Internal
 %% --------------------------------------------------------------------
 
-%% Drops what the collector held: `embed/2` arms it for its one render, and the
-%% calling process (a request process may serve several) must not keep recording.
-disarm() ->
+%% Puts the collector back as `embed/2` found it: a request process (which may
+%% serve several renders) must not keep recording, and a live process -- armed
+%% for its life, at init -- must keep both its arming and what it had not
+%% drained yet.
+restore({undefined, undefined}) ->
     _ = erase(?ATTRS_KEY),
     _ = erase(?MODS_KEY),
+    ok;
+restore({Names, Mods}) ->
+    _ = put(?ATTRS_KEY, Names),
+    _ = put(?MODS_KEY, Mods),
     ok.
 
 walk(_Seen, [], Acc) ->

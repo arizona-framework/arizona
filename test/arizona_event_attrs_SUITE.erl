@@ -12,6 +12,8 @@
 -export([walk_cache_follows_hot_reload/1]).
 -export([walk_asks_for_a_missing_callee_once/1]).
 -export([walk_terminates_on_a_cycle/1]).
+-export([embed_keeps_a_live_collector/1]).
+-export([embed_leaves_an_unarmed_process_unarmed/1]).
 
 all() ->
     [
@@ -24,7 +26,9 @@ all() ->
         layout_command_warns_at_ssr,
         walk_cache_follows_hot_reload,
         walk_asks_for_a_missing_callee_once,
-        walk_terminates_on_a_cycle
+        walk_terminates_on_a_cycle,
+        embed_keeps_a_live_collector,
+        embed_leaves_an_unarmed_process_unarmed
     ].
 
 %% The walk follows both the transform-recorded dependency (arizona_walk_child)
@@ -189,3 +193,32 @@ collect_ensure_loaded(Mod, N) ->
     after 5000 ->
         exit(no_count_request)
     end.
+
+%% A live process (armed for its life at init) may render a page through
+%% `embed/2` -- `arizona_static:generate/2` or `arizona_http:render/3` from a
+%% handler. Its pending observations, and its armed collector, must survive.
+embed_keeps_a_live_collector(Config) when is_list(Config) ->
+    ok = arizona_event_attrs:arm(),
+    ok = arizona_event_attrs:observe_attr(~"az-close"),
+    ok = arizona_event_attrs:observe_mod(arizona_walk_child),
+    ?assertMatch(
+        {arizona_html, _},
+        arizona_event_attrs:embed([], fun() ->
+            ok = arizona_event_attrs:observe_attr(~"az-cut"),
+            {arizona_html, ~"<p></p>"}
+        end)
+    ),
+    ok = arizona_event_attrs:observe_attr(~"az-toggle"),
+    ?assertEqual(
+        {[~"az-close", ~"az-toggle"], [arizona_walk_child]},
+        arizona_event_attrs:drain()
+    ).
+
+%% A request process may serve several renders: it must not keep recording.
+embed_leaves_an_unarmed_process_unarmed(Config) when is_list(Config) ->
+    ?assertMatch(
+        {arizona_html, _},
+        arizona_event_attrs:embed([], fun() -> {arizona_html, ~"<p></p>"} end)
+    ),
+    ok = arizona_event_attrs:observe_attr(~"az-toggle"),
+    ?assertEqual({[], []}, arizona_event_attrs:drain()).
