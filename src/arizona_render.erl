@@ -1014,8 +1014,8 @@ render_ssr_choices(Backend, #{choices := Picks, esc := Esc, child := Child}) ->
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`
-%% -- renders structurally with its own escaping, an effect is refused, and
-%% anything else is escaped once. Escaping whatever came back as a binary instead
+%% -- renders structurally with its own escaping, an effect or a raw around a map is
+%% refused, and anything else is escaped once. Escaping whatever came back as a binary instead
 %% escaped a `?local` init a second time. A binary or an integer
 %% is escaped directly, the answer the classification is certain to give.
 render_ssr_esc_val(Backend, V) when is_binary(V) ->
@@ -1029,11 +1029,8 @@ render_ssr_esc_val(Backend, #{az_local := _, v := Init}) ->
 render_ssr_esc_val(Backend, V) when is_map(V) ->
     render_ssr_val(Backend, V);
 render_ssr_esc_val(Backend, V) ->
-    case arizona_template:mark_esc(V) of
-        {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
-        %% Only a helper's raw/1 around a map is left unmarked; live renders it whole.
-        Map -> render_ssr_val(Backend, Map)
-    end.
+    {arizona_esc, X} = arizona_template:mark_esc(V),
+    arizona_template:escape_marked(Backend, X).
 
 render_ssr_local_init(Backend, {arizona_raw, _} = Raw) -> render_ssr_val(Backend, Raw);
 render_ssr_local_init(Backend, Init) -> render_ssr_esc_val(Backend, Init).

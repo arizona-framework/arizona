@@ -114,6 +114,8 @@
     runtime_local_content_diffs_like_render/1,
     runtime_local_content_keeps_diffing/1,
     runtime_local_template_init_renders/1,
+    helper_raw_template_refused/1,
+    helper_raw_template_refused_on_diff/1,
     wire_raw_in_list_item/1,
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
@@ -285,6 +287,8 @@ groups() ->
             runtime_local_content_diffs_like_render,
             runtime_local_content_keeps_diffing,
             runtime_local_template_init_renders,
+            helper_raw_template_refused,
+            helper_raw_template_refused_on_diff,
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
@@ -2095,6 +2099,40 @@ runtime_local_template_init_renders(Config) when is_list(Config) ->
         M:runtime_local_content(B), S1, V1, #{kind => true, v => true}
     ),
     ?assertMatch([[?OP_TEXT, ~"1S9L2GB-0", #{}]], Ops1).
+
+%% A helper's `raw/1` around a template is not text, so it is refused like a literal
+%% `?raw` around one: by name, at the slot's line, on SSR and the live render alike,
+%% under an az-nodiff root and in `?json`. The live render used to crash on the
+%% unevaluated template while SSR rendered it.
+helper_raw_template_refused(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, name => ~"<a>"},
+    [
+        begin
+            ?assertError(
+                {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+                arizona_render:render_to_iolist(M:Fun(B))
+            ),
+            ?assertError(
+                {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+                arizona_render:render(M:Fun(B), #{})
+            )
+        end
+     || Fun <- [helper_raw_template, helper_raw_template_nodiff, helper_raw_template_json]
+    ].
+
+%% The same refusal when the raw first appears in a diff cycle.
+helper_raw_template_refused_on_diff(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    {_, S0, V0} = arizona_render:render(
+        M:helper_raw_template(#{wrap => false, name => ~"a"}), #{}
+    ),
+    ?assertError(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        arizona_diff:diff(
+            M:helper_raw_template(#{wrap => true, name => ~"a"}), S0, V0, #{wrap => true}
+        )
+    ).
 
 %% The text/HTML distinction holds below the top level too: inside a plain-list item
 %% patch, a stream item patch and a same-statics branch, the `?get` value stays a bare

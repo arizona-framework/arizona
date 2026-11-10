@@ -37,6 +37,10 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([raw_text/1]).
 -export([helper_raw/1]).
 -export([runtime_local_content/1]).
+-export([helper_raw_template/1]).
+-export([helper_raw_template_nodiff/1]).
+-export([helper_raw_template_json/1]).
+-export([literal_raw_template/1]).
 -export([raw_in_list_item/1]).
 -export([raw_in_stream_item/1]).
 -export([raw_in_branch/1]).
@@ -401,6 +405,31 @@ local_or_text(text, V) -> V;
 local_or_text(local, V) -> arizona_template:local(k, V);
 local_or_text(raw_local, V) -> arizona_template:local(k, arizona_template:raw(V));
 local_or_text(template_local, V) -> arizona_template:local(k, ?html({b, [], [V]})).
+
+%% A helper's `raw/1` around a template rather than text, once `wrap` is true: `raw`
+%% opts a value out of escaping, and a template is not a value.
+-spec helper_raw_template(az:bindings()) -> az:template().
+helper_raw_template(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+-spec helper_raw_template_nodiff(az:bindings()) -> az:template().
+helper_raw_template_nodiff(Bindings) ->
+    ?html({'div', [{id, ~"x"}, 'az-nodiff'], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+-spec helper_raw_template_json(az:bindings()) -> az:template().
+helper_raw_template_json(Bindings) ->
+    ?json({'Column', [], [maybe_raw_json(?get(wrap), ?get(name))]}).
+
+maybe_raw_template(true, Name) -> arizona_template:raw(?html({b, [], [Name]}));
+maybe_raw_template(false, Name) -> Name.
+
+maybe_raw_json(true, Name) -> arizona_template:raw(?json({'Text', [], [Name]}));
+maybe_raw_json(false, Name) -> Name.
+
+%% The same refusal for a `?raw` literal at the template site.
+-spec literal_raw_template(az:bindings()) -> az:template().
+literal_raw_template(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [?raw(?html({b, [], [?get(name)]}))]}).
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

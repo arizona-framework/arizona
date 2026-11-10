@@ -858,7 +858,9 @@ the documented rule forbids ("the parse transform only recognizes the opt-out
 when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
-across the live diff).
+across the live diff). A map inside the raw -- a template, a descriptor, a `?local`
+-- is not text, so it raises `{bad_template_value, Map}`, as a literal `?raw` around
+one does at output.
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -868,7 +870,7 @@ mark_esc(V) when is_map(V) ->
     V;
 mark_esc(V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> mark_esc(V);
+        {raw, V} -> mark_raw_esc(V);
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> {arizona_esc, V0}
     end.
@@ -879,6 +881,12 @@ mark_esc(V0) ->
 %% init spliced, a template one rendered, any other escaped -- so it keeps diffing.
 mark_local_init({arizona_raw, _} = Raw) -> Raw;
 mark_local_init(Init) -> mark_esc(Init).
+%% A map unwrapped from a raw was never evaluated, so passing it through as a nested
+%% template would reach the live render with its dynamics still unevaluated.
+mark_raw_esc(V) when is_map(V) ->
+    erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]);
+mark_raw_esc(V) ->
+    mark_esc(V).
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
