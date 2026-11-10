@@ -43,6 +43,9 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([literal_raw_template/1]).
 -export([literal_raw_attr/1]).
 -export([helper_raw_attr/1]).
+-export([interp_raw_attr/1]).
+-export([helper_raw_attr_json/1]).
+-export([literal_raw_attr_json/1]).
 -export([raw_in_list_item/1]).
 -export([raw_in_stream_item/1]).
 -export([raw_in_branch/1]).
@@ -445,6 +448,25 @@ literal_raw_attr(Bindings) ->
 -spec helper_raw_attr(az:bindings()) -> az:template().
 helper_raw_attr(Bindings) ->
     ?html({'div', [{id, ~"x"}, {title, maybe_raw_template(?get(wrap), ?get(name))}], []}).
+
+%% A literal `?raw` part of an interpolated attribute value.
+-spec interp_raw_attr(az:bindings()) -> az:template().
+interp_raw_attr(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}, {title, [~"t-", ?raw(text_or_template(?get(wrap), ?get(name)))]}], []}
+    ).
+
+%% A `?json` prop, from a helper and from a literal `?raw`.
+-spec helper_raw_attr_json(az:bindings()) -> az:template().
+helper_raw_attr_json(Bindings) ->
+    ?json({'Text', [{label, maybe_raw_json(?get(wrap), ?get(name))}], []}).
+
+-spec literal_raw_attr_json(az:bindings()) -> az:template().
+literal_raw_attr_json(Bindings) ->
+    ?json({'Text', [{label, ?raw(text_or_json(?get(wrap), ?get(name)))}], []}).
+
+text_or_json(true, Name) -> ?json({'Text', [], [Name]});
+text_or_json(false, Name) -> Name.
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

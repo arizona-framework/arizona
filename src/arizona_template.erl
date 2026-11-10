@@ -671,8 +671,8 @@ format_error({raw_template, V}) ->
     lists:flatten(
         io_lib:format(
             "raw/1 around ~0tp: raw opts text out of escaping, and a template, component "
-            "or ?local is markup, not text: drop the raw in content; an attribute value "
-            "must be text",
+            "or ?local is not text. In content, drop the raw: a template is markup "
+            "already. An attribute value must be text",
             [V]
         )
     );
@@ -759,12 +759,14 @@ client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boun
 The `?json` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
 with no defined meaning; using it in a `?json`/`?terminal` template is unsupported.
 
-`Value` is text. A template or other map held directly by the raw, in content or an
-attribute value, raises `{raw_template, Map}` where its slot is evaluated, so it is
-located on every path: a template is markup, not text, so drop the raw in content,
-and an attribute value must be text. One nested deeper (in a list, or in a raw
-inside the raw) is not looked for, and may raise only at output, as
-`bad_template_value`, where only SSR still knows the slot's location.
+`Value` is text. A template, component or `?local` held directly by the raw -- in
+content, a whole or interpolated attribute value, or a `?json` prop -- raises
+`{raw_template, Map}` where its slot is evaluated, located on every path. In
+content, drop the raw (a template is markup already); an attribute value must be
+text. A helper's raw around such a raw in content is unwrapped and refused the
+same way. A map the slot evaluation does not see -- in a list inside the raw, or in
+a raw inside a literal `?raw` -- raises `bad_template_value` at output, located on
+SSR only.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -918,9 +920,9 @@ raw_to_bin(V) -> to_bin(V).
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
 %% `?local` -- held directly by a `raw/1`, which opts text out of escaping. Raised
-%% where the slot is evaluated, so it carries the slot's location. A map nested
-%% deeper (in a list, in a raw in the raw) is not walked for, which would cost every
-%% raw value; output may refuse it as `bad_template_value`, unlocated on the live
+%% where the slot is evaluated, so it carries the slot's location. A map in a list in
+%% the raw, or in a raw inside a literal `?raw`, is not walked for, which would cost
+%% every raw value; output refuses it as `bad_template_value`, unlocated on the live
 %% render.
 -doc false.
 -spec raw_not_text(Value) -> no_return() when

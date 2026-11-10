@@ -2131,8 +2131,8 @@ helper_raw_template_refused_on_diff(Config) when is_list(Config) ->
     end).
 
 %% A literal `?raw` around a template is refused at the slot's line on SSR, the live
-%% render and the diff alike, not only where SSR locates it -- in content and in an
-%% attribute value, written literally or returned by a helper.
+%% render and the diff alike, not only where SSR locates it -- in content, in a whole
+%% or interpolated attribute value and in a `?json` prop, literal or from a helper.
 literal_raw_template_refused(Config) when is_list(Config) ->
     M = arizona_conditional_freeze,
     B = #{wrap => true, name => ~"<a>"},
@@ -2147,7 +2147,14 @@ literal_raw_template_refused(Config) when is_list(Config) ->
                 arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
             end)
         end
-     || Fun <- [literal_raw_template, literal_raw_attr, helper_raw_attr]
+     || Fun <- [
+            literal_raw_template,
+            literal_raw_attr,
+            helper_raw_attr,
+            interp_raw_attr,
+            helper_raw_attr_json,
+            literal_raw_attr_json
+        ]
     ].
 
 %% Runs `Fun`, which must raise `{raw_template, Template}` located in module `M`,
@@ -2159,8 +2166,8 @@ assert_raw_template_error(M, Fun) ->
         error:Reason:ST ->
             ?assertMatch({arizona_loc, {M, _}, {raw_template, #{s := _}}}, Reason),
             Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
-            ?assertNotEqual(nomatch, binary:match(Msg, ~"drop the raw in content")),
-            ?assertNotEqual(nomatch, binary:match(Msg, ~"an attribute value must be text")),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"In content, drop the raw")),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"An attribute value must be text")),
             ok
     end.
 
