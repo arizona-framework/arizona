@@ -8622,6 +8622,64 @@ describe('fetch + az-form-reset via the submit listener', () => {
         mock.restore();
     });
 
+    // The form can itself be the view root (an `?html({form, ...})` view). The
+    // response effects still target that view, but must not take the form as
+    // their trigger, or the push_event payload carries every field.
+    it('relays a response push_event without the fields of a form that is the view root', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="v" az-view><input name="secret" value="x" />' +
+            '<button type="submit">Go</button></form>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#v'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual(['v', 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // A form in no view (layout chrome) falls back to the root view; its fields
+    // must not ride along either.
+    it('relays a response push_event without the fields of a form outside any view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="f"><input name="secret" value="x" /></form><div id="v" az-view></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual([null, 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
     it('defers the reset when the fetch is wrapped in transition(...) (E2)', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
