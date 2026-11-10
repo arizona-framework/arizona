@@ -14,6 +14,9 @@
 -export([walk_terminates_on_a_cycle/1]).
 -export([embed_keeps_a_live_collector/1]).
 -export([embed_leaves_an_unarmed_process_unarmed/1]).
+-export([page_memo_follows_a_reload_below_its_roots/1]).
+-export([page_memo_follows_a_forget/1]).
+-export([page_memo_walks_only_observed_modules_outside_it/1]).
 
 all() ->
     [
@@ -28,7 +31,10 @@ all() ->
         walk_asks_for_a_missing_callee_once,
         walk_terminates_on_a_cycle,
         embed_keeps_a_live_collector,
-        embed_leaves_an_unarmed_process_unarmed
+        embed_leaves_an_unarmed_process_unarmed,
+        page_memo_follows_a_reload_below_its_roots,
+        page_memo_follows_a_forget,
+        page_memo_walks_only_observed_modules_outside_it
     ].
 
 %% The walk follows both the transform-recorded dependency (arizona_walk_child)
@@ -222,3 +228,70 @@ embed_leaves_an_unarmed_process_unarmed(Config) when is_list(Config) ->
     ),
     ok = arizona_event_attrs:observe_attr(~"az-toggle"),
     ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+%% A page's walk is memoized per root list, and the memo must not outlive the
+%% code it read: a reload of a module two edges below the root, with no
+%% `forget/1`, is seen on the very next page.
+page_memo_follows_a_reload_below_its_roots(Config) when is_list(Config) ->
+    Root = arizona_event_attrs_memo_root,
+    Leaf = arizona_event_attrs_memo_leaf,
+    ok = load_edges_module(Root, [], [arizona_event_attrs_memo_mid]),
+    ok = load_edges_module(arizona_event_attrs_memo_mid, [], [Leaf]),
+    ok = load_edges_module(Leaf, [~"az-copy"], []),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ok = load_edges_module(Leaf, [~"az-paste"], []),
+    ?assertEqual([~"az-paste"], embedded_names([Root])),
+    ok = load_edges_module(Leaf, [~"az-copy"], []),
+    ?assertEqual([~"az-copy"], embedded_names([Root])).
+
+%% An edit to only a hand-written attribute keeps the code's MD5, so only the dev
+%% reloader's `forget/1` reveals it -- to the page memo as to the module's entry.
+page_memo_follows_a_forget(Config) when is_list(Config) ->
+    Root = arizona_event_attrs_forget_root,
+    Leaf = arizona_event_attrs_forget_leaf,
+    ok = load_edges_module(Root, [], [Leaf]),
+    ok = load_attrs_module(Leaf, [~"az-copy"]),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ok = load_attrs_module(Leaf, [~"az-paste"]),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ok = arizona_event_attrs:forget(Leaf),
+    ?assertEqual([~"az-paste"], embedded_names([Root])).
+
+%% A module the render instantiated is walked on top of the memo, once; one the
+%% memo already covers adds nothing.
+page_memo_walks_only_observed_modules_outside_it(Config) when is_list(Config) ->
+    Memo = arizona_event_attrs:reach([arizona_walk_root], []),
+    ?assertMatch(
+        {[~"az-contextmenu", ~"az-cut", ~"az-wheel"], #{
+            arizona_walk_root := true, arizona_walk_child := true, arizona_walk_extra := true
+        }},
+        Memo
+    ),
+    ?assertEqual(Memo, arizona_event_attrs:reach([arizona_walk_root], [arizona_walk_child])),
+    Other = arizona_event_attrs_observed_only,
+    ok = load_edges_module(Other, [~"az-copy"], [arizona_walk_child]),
+    {Names, Walked} = arizona_event_attrs:reach([arizona_walk_root], [Other]),
+    ?assertEqual([~"az-contextmenu", ~"az-copy", ~"az-cut", ~"az-wheel"], Names),
+    ?assert(is_map_key(Other, Walked)).
+
+embedded_names(Roots) ->
+    {arizona_html, Doc} = arizona_event_attrs:embed(Roots, fun() ->
+        {arizona_html, ~"<p></p>"}
+    end),
+    case re:run(Doc, ~"id=\"arizona-attrs\">(.*?)</script>", [{capture, all_but_first, binary}]) of
+        {match, [Json]} -> json:decode(Json);
+        nomatch -> []
+    end.
+
+%% A module whose only difference between versions is its `-arizona_az_attrs`:
+%% the code, and so its MD5, stays the same.
+load_attrs_module(Mod, Names) ->
+    Forms = [
+        parse_form(io_lib:format("-module(~w).", [Mod])),
+        parse_form(io_lib:format("-arizona_az_attrs(~w).", [Names]))
+    ],
+    {ok, Mod, Bin} = compile:forms(Forms, []),
+    true = code:soft_purge(Mod),
+    {module, Mod} = code:load_binary(Mod, "", Bin),
+    ok.

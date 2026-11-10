@@ -67,6 +67,15 @@ A module that fails to load is cached as absent, so a dangling edge does not
 cost a code-server round trip on every connect; that entry is ignored once
 the module is loaded by any other means (a deploy, the dev reloader).
 
+A page's whole walk is memoized on top (`reach/2`, per root list), since every
+GET of a page and every connect to it walks the same roots: the memo keeps each
+covered module's stamp, and a hit re-checks them (`module_loaded` and the MD5,
+a few reductions per module against a dozen for walking it) rather than trusting
+a memo keyed by roots alone -- that is the stale-after-hot-reload hole again, on
+any load path that does not call `forget/1` (`rebar3 shell`, a release
+upgrade). `forget/1` retires every memo at once by bumping a generation, since
+an attribute-only edit leaves the stamps as they were.
+
 The per-socket dedup the socket keeps on
 top of it (`az_walked`/`az_sent`) is a narrower memo with a narrower window:
 a hot reload that adds a FOLDED command attribute (a literal builder call
@@ -108,6 +117,7 @@ Known limits, all loud or documented rather than silent:
 -export([observe_attr/1]).
 -export([observe_callback/1]).
 -export([observe_mod/1]).
+-export([reach/2]).
 
 -export_type([observed/0]).
 
@@ -118,6 +128,8 @@ Known limits, all loud or documented rather than silent:
 -define(ATTRS_KEY, '$arizona_observed_attrs').
 -define(MODS_KEY, '$arizona_observed_mods').
 -define(CACHE_KEY(Mod), {?MODULE, Mod}).
+-define(REACH_KEY(Roots), {?MODULE, reach, Roots}).
+-define(GEN_KEY, {?MODULE, generation}).
 
 -doc """
 Every compile-time-proven `az-*` attribute reachable from `Roots`, themselves
@@ -126,7 +138,33 @@ included.
 -spec all(Roots) -> [binary()] when
     Roots :: [module()].
 all(Roots) ->
-    lists:usort(walk(#{}, Roots, [])).
+    {_Walked, _Stamps, Names} = walk_roots(Roots),
+    Names.
+
+-doc """
+What a page proves at compile time: `{Names, Walked}`, the `az-*` names
+reachable from its walk `Roots` (its handler and layout modules) and from the
+`Observed` modules its render instantiated, and every module the walk covered.
+The walk from `Roots` is memoized per root list -- a page is served again and
+again -- so only an observed module outside it is walked. The memo is
+stamped like the per-module entries it is built from: a code change to any
+module it covered (each one's `module_loaded` and MD5, checked on every hit)
+or a `forget/1` rebuilds it.
+""".
+-spec reach(Roots, Observed) -> {Names, Walked} when
+    Roots :: [module()],
+    Observed :: [module()],
+    Names :: [binary()],
+    Walked :: #{module() => true}.
+reach(Roots, Observed) ->
+    {Names0, Walked0} = reach(Roots),
+    case [Mod || Mod <- Observed, not is_map_key(Mod, Walked0)] of
+        [] ->
+            {Names0, Walked0};
+        Extra ->
+            {Walked, _Stamps, Names} = walk(Walked0, Extra, [], []),
+            {lists:umerge(Names0, lists:usort(Names)), Walked}
+    end.
 
 %% Drops `Mod`'s walk cache entry, so the next walk re-reads it. Called by the
 %% dev reloader after loading a module: the MD5 stamp covers code, not
@@ -136,6 +174,9 @@ all(Roots) ->
 -spec forget(Mod) -> ok when
     Mod :: module().
 forget(Mod) ->
+    %% A page memo (`reach/2`) holding `Mod` is stamped with the same MD5, so it
+    %% is retired by generation rather than found and erased one by one.
+    ok = persistent_term:put(?GEN_KEY, persistent_term:get(?GEN_KEY, 0) + 1),
     case persistent_term:erase(?CACHE_KEY(Mod)) of
         true -> ok;
         false -> ok
@@ -195,7 +236,8 @@ embed(Roots, Render) ->
     try
         {Backend, Doc} = Render(),
         {Rendered, Mods} = drain(),
-        case lists:usort(Rendered ++ all(Roots ++ Mods)) of
+        {Compiled, _Walked} = reach(Roots, Mods),
+        case lists:umerge(Rendered, Compiled) of
             [] -> {Backend, Doc};
             Names -> {Backend, Backend:static_document(Doc, Names)}
         end
@@ -292,25 +334,67 @@ restore({Names, Mods}) ->
     _ = put(?MODS_KEY, Mods),
     ok.
 
-walk(_Seen, [], Acc) ->
-    Acc;
-walk(Seen, [Mod | Rest], Acc) when is_map_key(Mod, Seen) ->
-    walk(Seen, Rest, Acc);
-walk(Seen, [Mod | Rest], Acc) ->
-    {Names, Deps} = module_edges(Mod),
-    walk(Seen#{Mod => true}, Deps ++ Rest, Names ++ Acc).
+%% The memoized walk from `Roots`. The generation is read before walking, so a
+%% `forget/1` racing the walk leaves a memo that is already stale.
+reach(Roots) ->
+    Gen = persistent_term:get(?GEN_KEY, 0),
+    case persistent_term:get(?REACH_KEY(Roots), undefined) of
+        {Gen, Stamps, Names, Walked} ->
+            case stamps_hold_safe(Stamps) of
+                true -> {Names, Walked};
+                false -> memo_reach(Gen, Roots)
+            end;
+        _MissOrStale ->
+            memo_reach(Gen, Roots)
+    end.
 
-%% `{Names, Deps}` of a module, through the MD5-stamped cache (see the
-%% moduledoc). A handler for a route nobody has visited is typically not loaded
-%% yet, so an unloaded module is loaded once; one that cannot be is cached as
-%% `absent` so the code server is not asked again on every connect.
+memo_reach(Gen, Roots) ->
+    {Walked, Stamps, Names} = walk_roots(Roots),
+    ok = persistent_term:put(?REACH_KEY(Roots), {Gen, Stamps, Names, Walked}),
+    {Names, Walked}.
+
+%% A module purged between its `module_loaded` check and its MD5 read is a
+%% stale stamp, not a crash.
+stamps_hold_safe(Stamps) ->
+    try
+        stamps_hold(Stamps)
+    catch
+        error:undef -> false
+    end.
+
+%% Each module still the code the memo read: the same MD5, or still not loaded
+%% where it could not be.
+stamps_hold([]) ->
+    true;
+stamps_hold([{Mod, absent} | Rest]) ->
+    not erlang:module_loaded(Mod) andalso stamps_hold(Rest);
+stamps_hold([{Mod, MD5} | Rest]) ->
+    erlang:module_loaded(Mod) andalso Mod:module_info(md5) =:= MD5 andalso stamps_hold(Rest).
+
+walk_roots(Roots) ->
+    {Walked, Stamps, Names} = walk(#{}, Roots, [], []),
+    {Walked, Stamps, lists:usort(Names)}.
+
+walk(Seen, [], Stamps, Acc) ->
+    {Seen, Stamps, Acc};
+walk(Seen, [Mod | Rest], Stamps, Acc) when is_map_key(Mod, Seen) ->
+    walk(Seen, Rest, Stamps, Acc);
+walk(Seen, [Mod | Rest], Stamps, Acc) ->
+    {Stamp, Names, Deps} = module_edges(Mod),
+    walk(Seen#{Mod => true}, Deps ++ Rest, [{Mod, Stamp} | Stamps], Names ++ Acc).
+
+%% `{Stamp, Names, Deps}` of a module, through the MD5-stamped cache (see the
+%% moduledoc); `Stamp` is the MD5 the edges were read under, or `absent`. A
+%% handler for a route nobody has visited is typically not loaded yet, so an
+%% unloaded module is loaded once; one that cannot be is cached as `absent` so
+%% the code server is not asked again on every connect.
 module_edges(Mod) ->
     case erlang:module_loaded(Mod) of
         true ->
             loaded_edges(Mod);
         false ->
             case persistent_term:get(?CACHE_KEY(Mod), undefined) of
-                absent -> {[], []};
+                absent -> {absent, [], []};
                 _NotLoadedYet -> load_edges(Mod)
             end
     end.
@@ -321,7 +405,7 @@ load_edges(Mod) ->
             loaded_edges(Mod);
         {error, _NotFound} ->
             ok = persistent_term:put(?CACHE_KEY(Mod), absent),
-            {[], []}
+            {absent, [], []}
     end.
 
 loaded_edges(Mod) ->
@@ -329,17 +413,17 @@ loaded_edges(Mod) ->
         MD5 = Mod:module_info(md5),
         case persistent_term:get(?CACHE_KEY(Mod), undefined) of
             {MD5, Names, Deps} ->
-                {Names, Deps};
+                {MD5, Names, Deps};
             _MissOrStale ->
                 Attrs = Mod:module_info(attributes),
                 Names = proplists:append_values(arizona_az_attrs, Attrs),
                 Deps = proplists:append_values(arizona_az_deps, Attrs),
                 ok = persistent_term:put(?CACHE_KEY(Mod), {MD5, Names, Deps}),
-                {Names, Deps}
+                {MD5, Names, Deps}
         end
     catch
         error:undef ->
             %% Purged between the `module_loaded` check and a read, and could not
             %% be loaded again.
-            {[], []}
+            {absent, [], []}
     end.
