@@ -198,17 +198,24 @@ do_render(H, ArzReq, Bindings, Opts) ->
             {error, 500, ErrorType, ErrorBody, ArzReq}
     end.
 
+%% The page carries the `az-*` names proven for it (`arizona_event_attrs:embed/2`):
+%% the socket's connect frame delivers them a round trip after the open, and a
+%% click or an HTTP-form submit in between runs only under a proven name.
+%%
 %% The page is served as UTF-8, and a binary value is emitted as the bytes it
 %% holds -- checking each one was measured too costly for every render. In dev
 %% mode the page renders with every value checked instead (arizona_utf8:
 %% render_view/2, same output, one mount), so a bad one is raised at its template
 %% line into the catch above and reaches the dev error page. Production pays the
 %% one dev-flag read.
-render_view(H, RenderOpts) ->
-    case reload_url() of
-        undefined -> arizona_render:render_view(H, RenderOpts);
-        _Dev -> arizona_utf8:render_view(H, RenderOpts)
-    end.
+render_view(H, #{layouts := Layouts} = RenderOpts) ->
+    Roots = [H | [Mod || {Mod, _Fun} <:- Layouts]],
+    arizona_event_attrs:embed(Roots, fun() ->
+        case reload_url() of
+            undefined -> arizona_render:render_view(H, RenderOpts);
+            _Dev -> arizona_utf8:render_view(H, RenderOpts)
+        end
+    end).
 
 %% The crash detail (class, reason, stack with file:line) is a development aid --
 %% serving it in production leaks internals to any visitor who can trigger a

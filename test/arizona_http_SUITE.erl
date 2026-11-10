@@ -11,6 +11,8 @@
 -export([render_answers_the_targets_content_type/1]).
 -export([render_refuses_a_cross_target_layout/1]).
 -export([renderers_name_their_content_type/1]).
+-export([render_embeds_the_proven_attrs/1]).
+-export([render_leaves_the_collector_disarmed/1]).
 -export([error_page_prod_serves_plain_text_500/1]).
 -export([error_page_dev_without_page_serves_plain_text/1]).
 -export([error_page_dev_renders_the_configured_page/1]).
@@ -38,6 +40,8 @@ groups() ->
             render_answers_the_targets_content_type,
             render_refuses_a_cross_target_layout,
             renderers_name_their_content_type,
+            render_embeds_the_proven_attrs,
+            render_leaves_the_collector_disarmed,
             format_error_names_a_unicode_page
         ]},
         %% Sequential: these toggle the global `arizona_reload_url` persistent_term
@@ -116,6 +120,36 @@ render_threads_cookie(Config) when is_list(Config) ->
         [{~"theme", ~"dark", #{path => ~"/"}}],
         arizona_req:resp_cookies(ReqOut)
     ).
+
+%% A live page carries the names its client may run commands under, known before
+%% the socket opens: the compiler's (a counter's `az-click`) and the render's (a
+%% command built at runtime, `az-dblclick`), as a static page does.
+render_embeds_the_proven_attrs(Config) when is_list(Config) ->
+    ?assertEqual([~"az-click"], embedded_attrs(render_in_layout(arizona_counter))),
+    ?assertEqual([~"az-dblclick"], embedded_attrs(render_in_layout(arizona_static_runtime_cmd))),
+    ?assertEqual(nomatch, binary:match(render_in_layout(arizona_static_page), ~"arizona-attrs")).
+
+%% A request process may serve several requests: the collector is armed for one
+%% page's render only.
+render_leaves_the_collector_disarmed(Config) when is_list(Config) ->
+    _Page = render_in_layout(arizona_counter),
+    ok = arizona_event_attrs:observe_attr(~"az-later"),
+    ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+render_in_layout(Handler) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    {ok, 200, _Type, Body, _Req} = arizona_http:render(Handler, Req, #{
+        layouts => [{arizona_layout, render}]
+    }),
+    iolist_to_binary(Body).
+
+embedded_attrs(Page) ->
+    {match, [Json]} = re:run(
+        Page,
+        ~"<script type=\"application/json\" id=\"arizona-attrs\">(.*?)</script>",
+        [{capture, all_but_first, binary}]
+    ),
+    json:decode(Json).
 
 %% The page is served under the media type of its render target: a `?json` view
 %% is a JSON document, an HTML view (bare or in a layout) an HTML one.

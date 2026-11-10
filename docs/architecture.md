@@ -2037,6 +2037,14 @@ native request in an `arizona_req:request()`, runs any route middlewares, and ca
 `arizona_render:render_view/2` (`render_view_to_iolist/2` paired with the document's media
 type). The transport handler translates the returned result into its native reply shape.
 
+The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
+render target's `static_document/2`: an `?html` page gets `<script type="application/json"
+id="arizona-attrs">` before its last `</body>`), the same set the socket's connect frame
+delivers. The client runs a command only under a proven name, and that frame lands a round trip
+after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
+between would find no proof. A document with nowhere to embed (a fragment, a `?json` page) waits
+for the connect frame.
+
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
   - `{halt, Request}` -- middleware halted; the transport decodes the stashed redirect
@@ -2093,7 +2101,7 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   `<script>` lives in the layout: a pure-static page loads `arizona-static.min.js` and calls
   `start()` instead of `connect('/ws')`, and browser-side commands (`?local`, toggles, dialogs,
   PiP) run with no server. Each page with event attributes is handed their proven names -- what
-  the socket's connect frame carries on a live page -- through its target's
+  an HTTP-rendered live page embeds the same way -- through its target's
   `static_document/2` renderer callback: HTML embeds them as
   `<script type="application/json" id="arizona-attrs">` before its last `</body>`, and
   `start()` delegates exactly those.

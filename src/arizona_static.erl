@@ -235,21 +235,10 @@ generate_one(Handler, Filename, Opts) when is_atom(Handler), is_map(Opts) ->
 
 %% The page, carrying the `az-*` attribute names proven to hold commands, for the
 %% static client (`arizona-static.js`'s `start()`) to delegate: the names a live
-%% page receives on its socket's connect frame. Both proofs count -- what the
-%% compiler saw in the handler, its layouts and the modules they name, and what
-%% rendering evaluated to a command -- so the collector is armed for this render
-%% only. How the page carries them is its render target's (`static_document/2`).
+%% page receives on its socket's connect frame (`arizona_event_attrs:embed/2`).
 render(Handler, RenderOpts) ->
-    ok = arizona_event_attrs:arm(),
-    try
-        {Backend, Doc} = arizona_render:render_view(Handler, RenderOpts),
-        {Rendered, Mods} = arizona_event_attrs:drain(),
-        Layouts = [Mod || {Mod, _Fun} <:- maps:get(layouts, RenderOpts, [])],
-        Compiled = arizona_event_attrs:all([Handler | Layouts] ++ Mods),
-        case lists:usort(Rendered ++ Compiled) of
-            [] -> Doc;
-            Names -> Backend:static_document(Doc, Names)
-        end
-    after
-        ok = arizona_event_attrs:disarm()
-    end.
+    Layouts = [Mod || {Mod, _Fun} <:- maps:get(layouts, RenderOpts, [])],
+    {_Backend, Doc} = arizona_event_attrs:embed([Handler | Layouts], fun() ->
+        arizona_render:render_view(Handler, RenderOpts)
+    end),
+    Doc.

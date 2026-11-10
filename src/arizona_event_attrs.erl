@@ -34,9 +34,16 @@ two proofs, one per moment the question is answerable:
    against what it already sent, and ships the delta on that same frame, so a
    name arrives with the first frame that can render the markup declaring it.
 
-The collector is process-dictionary state, armed only inside a live process:
-the request-free SSR paths (HTTP render, static generation) never arm it, so
-observation there is a no-op.
+The page itself carries the same set (`embed/2`): an HTTP render or a static
+generation arms the collector for that one render, walks the page's roots plus
+what it observed, and hands the names to the render target's
+`static_document/2`, which embeds them in the document. A live page's client
+therefore knows its proofs before the socket opens -- the connect frame lands a
+round trip after the open, and a click or an HTTP-form submit in between must
+find its proof -- and a static page's client has no socket to ask at all.
+
+The collector is process-dictionary state, armed inside a live process and for
+the length of one `embed/2` render; anywhere else observation is a no-op.
 
 The walk follows every literal callee a module records, so it loads any of
 them not loaded yet -- running that module's `-on_load`, as its first call
@@ -69,11 +76,14 @@ watcher's reload forces anyway.
 
 Known limits, all loud or documented rather than silent:
 
-- A command that reaches a LAYOUT attribute opaquely can never be delivered
-  (layouts render once, at SSR; no frame re-renders one) -- the render warns
-  (`observe_attr/1`'s unarmed branch). A `?stateless` with a runtime-bound
-  module inside a layout is the same hole one level up; `?stateful` in a
-  layout is already a render-time error.
+- A command that reaches a LAYOUT attribute opaquely reaches the client only
+  through the document `embed/2` builds (layouts render once, at SSR; no frame
+  re-renders one): a document with nowhere to embed (an `?html` fragment with
+  no `</body>`, a `?json` document) loses it, as does a layout rendered
+  through any other path -- that render warns (`observe_attr/1`'s unarmed
+  branch). A `?stateless` with a runtime-bound module inside a layout is the
+  same case one level up; `?stateful` in a layout is already a render-time
+  error.
 - A non-transport caller of `arizona_live:handle_event/4` (or `patch/2`)
   receives that reply's drained observations and they die with it: unlike
   ops, which the stale-snapshot mechanism re-emits on the next root diff, an
@@ -92,8 +102,8 @@ Known limits, all loud or documented rather than silent:
 
 -export([all/1]).
 -export([arm/0]).
--export([disarm/0]).
 -export([drain/0]).
+-export([embed/2]).
 -export([forget/1]).
 -export([observe_attr/1]).
 -export([observe_callback/1]).
@@ -142,16 +152,6 @@ arm() ->
     ok.
 
 -doc """
-Disarms the render-time collector in the calling process, dropping what it held:
-a render that armed it only for itself leaves the process as it found it.
-""".
--spec disarm() -> ok.
-disarm() ->
-    _ = erase(?ATTRS_KEY),
-    _ = erase(?MODS_KEY),
-    ok.
-
--doc """
 The observations collected since the last drain, clearing the collector.
 `{[], []}` in an unarmed process.
 """.
@@ -178,6 +178,31 @@ drain() ->
     end.
 
 -doc """
+Runs `Render`, a request-free render of a page whose compile-time walk roots are
+`Roots` (its handler and layout modules), with the collector armed, and hands
+the document the `az-*` names proven for it -- what the walk finds from the
+roots and the modules the render instantiated, plus what the render evaluated to
+a command -- through its render target's `static_document/2`. A page with none
+is returned as rendered.
+""".
+-spec embed(Roots, Render) -> {Backend, iodata()} when
+    Roots :: [module()],
+    Render :: fun(() -> {Backend, iodata()}),
+    Backend :: module().
+embed(Roots, Render) ->
+    ok = arm(),
+    try
+        {Backend, Doc} = Render(),
+        {Rendered, Mods} = drain(),
+        case lists:usort(Rendered ++ all(Roots ++ Mods)) of
+            [] -> {Backend, Doc};
+            Names -> {Backend, Backend:static_document(Doc, Names)}
+        end
+    after
+        ok = disarm()
+    end.
+
+-doc """
 Records that a dynamic `az-*` attribute rendered a command value -- the typed
 proof compile time cannot see for an opaque expression. Any other name is
 ignored, so callers can hand over every dynamic attribute name unfiltered.
@@ -195,12 +220,12 @@ observe_attr(<<"az-", _/binary>> = Name) ->
 observe_attr(_Name) ->
     ok.
 
-%% An unarmed observation is normally fine: the request-path SSR render is
+%% An unarmed observation is normally fine: a page render outside `embed/2` is
 %% re-run by the connect mount, which observes into a live socket. The one
 %% place that does not hold is a LAYOUT render -- layouts render once, at SSR,
-%% in a peerless process, and no frame ever re-renders one -- so a command
-%% proven only there can never reach the client and its event is permanently
-%% dead. Loud beats invisible.
+%% and no frame ever re-renders one -- so a command proven only there, by a
+%% render that embeds nothing, never reaches the client and its event is
+%% permanently dead. Loud beats invisible.
 unprovable_in_layout(Name) ->
     case arizona_render:current_layout() of
         undefined ->
@@ -252,6 +277,13 @@ observe_mod(Mod) ->
 %% --------------------------------------------------------------------
 %% Internal
 %% --------------------------------------------------------------------
+
+%% Drops what the collector held: `embed/2` arms it for its one render, and the
+%% calling process (a request process may serve several) must not keep recording.
+disarm() ->
+    _ = erase(?ATTRS_KEY),
+    _ = erase(?MODS_KEY),
+    ok.
 
 walk(_Seen, [], Acc) ->
     Acc;
