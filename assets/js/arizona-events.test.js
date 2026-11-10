@@ -206,7 +206,7 @@ describe('open event delegation', () => {
         // handed to the triage is whatever the caller wrote. addEventListener types
         // are case-sensitive, so an unlowered `az-Close` binds a dead `Close` while
         // the DOM holds `az-close` -- the attribute lands and its event never fires.
-        mod.applyEffects([[7, '#dlg', 'az-Close', '[0,"closed"]']]);
+        mod.applyEffects([[7, '#dlg', 'az-Close', [0, 'closed']]]);
         fire(document.getElementById('dlg'), 'close', false);
 
         expect(w.sent()).toEqual([['v', 'closed', {}]]);
@@ -228,7 +228,7 @@ describe('open event delegation', () => {
 
         // ...and via a set_attr effect, which never reaches the worker at all:
         // the command that wrote it was itself proven, so it proves the name.
-        mod.applyEffects([[7, '#dlg', 'az-cancel', '[0,"cancelled"]']]);
+        mod.applyEffects([[7, '#dlg', 'az-cancel', [0, 'cancelled']]]);
         fire(document.getElementById('dlg'), 'cancel', false);
         expect(w.sent()).toEqual([
             ['v', 'closed', {}],

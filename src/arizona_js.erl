@@ -216,12 +216,24 @@ remove_class(Sel, Cls) -> {arizona_effect, [?EFFECT_REMOVE_CLASS, Sel, Cls]}.
     Class :: binary().
 toggle_class(Sel, Cls) -> {arizona_effect, [?EFFECT_TOGGLE_CLASS, Sel, Cls]}.
 
--doc "Sets an attribute on all elements matching the selector.".
+-doc """
+Sets an attribute on all elements matching the selector.
+
+Under an `az-*` name the value may be a command (or a command list, flattened
+like any other): it is written as the array an event attribute holds, and that is
+what proves the name to the client, so `set_attr(~"#x", ~"az-select",
+arizona_js:push_event(~"pick"))` makes `select` run there. A binary under an
+`az-*` name is data, as in a template, and proves nothing: on a page that does not
+otherwise use the name, `set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing.
+""".
 -spec set_attr(Selector, Attr, Value) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary(),
-    Value :: binary().
-set_attr(Sel, Attr, Val) -> {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]}.
+    Value :: binary() | arizona_effect:cmd() | arizona_effect:cmds().
+set_attr(Sel, Attr, Val) when is_binary(Val) ->
+    {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]};
+set_attr(Sel, <<"az-", _/binary>> = Attr, Cmds) ->
+    {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Cmds)]}.
 
 -doc "Removes an attribute from all elements matching the selector.".
 -spec remove_attr(Selector, Attr) -> arizona_effect:cmd() when
@@ -244,13 +256,26 @@ Toggles an attribute between two values on all elements matching the selector: s
 `ValueB` when the current value is `ValueA`, otherwise sets `ValueA` (so any
 other current value resolves to `ValueA`). Useful for one-button toggles like a
 password field's `type` between `password` and `text`.
+
+Under an `az-*` name both values may be commands, as in `set_attr/3`, which
+proves the name; binaries there are data and prove nothing, and so does the
+presence toggle of `toggle_attr/2`.
 """.
 -spec toggle_attr(Selector, Attr, ValueA, ValueB) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary(),
-    ValueA :: binary(),
-    ValueB :: binary().
-toggle_attr(Sel, Attr, A, B) -> {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr, A, B]}.
+    ValueA :: binary() | arizona_effect:cmd() | arizona_effect:cmds(),
+    ValueB :: binary() | arizona_effect:cmd() | arizona_effect:cmds().
+toggle_attr(Sel, Attr, A, B) when is_binary(A), is_binary(B) ->
+    {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr, A, B]};
+toggle_attr(Sel, <<"az-", _/binary>> = Attr, A, B) when not is_binary(A), not is_binary(B) ->
+    {arizona_effect, [
+        ?EFFECT_TOGGLE_ATTR,
+        Sel,
+        Attr,
+        arizona_effect:nest(deferred, A),
+        arizona_effect:nest(deferred, B)
+    ]}.
 
 -doc "Dispatches a custom DOM event with a payload.".
 -spec dispatch_event(Name, Payload) -> arizona_effect:cmd() when

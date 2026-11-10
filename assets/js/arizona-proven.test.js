@@ -200,9 +200,49 @@ describe('an unproven az-* value is data on a live page', () => {
         w = mockWorker(mod);
         w.open();
         w.names(['az-click']);
-        mod.applyEffects([[7, '#i', 'az-select', '[0,"picked"]']]);
+        mod.applyEffects([[7, '#i', 'az-select', [0, 'picked']]]);
         document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
         expect(w.sent()).toEqual([['v', 'picked', { value: '' }]]);
+    });
+
+    // `arizona_js:set_attr/3` ships a command as an array, so a string under an
+    // `az-*` name is data -- `set_attr(Sel, ~"az-select", ~"[1,2,3]")` -- and
+    // proving its name would run every same-named data value on the page.
+    it('does not prove a name a set_attr effect writes a string under', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><input id="i">` + `<input id="d" az-select='[0,"evil"]'></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        mod.applyEffects([[7, '#i', 'az-select', '[0,"picked"]']]);
+        expect(document.getElementById('i')?.getAttribute('az-select')).toBe('[0,"picked"]');
+        document.getElementById('i')?.dispatchEvent(new Event('select', { bubbles: true }));
+        document.getElementById('d')?.dispatchEvent(new Event('select', { bubbles: true }));
+        expect(w.sent()).toEqual([]);
+    });
+
+    it('proves a name a toggle_attr effect toggles between commands, not strings', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><input id="i"><input id="j"></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        mod.applyEffects([[21, '#j', 'az-focusin', '[0,"a"]', '[0,"b"]']]);
+        document.getElementById('j')?.dispatchEvent(new Event('focusin', { bubbles: true }));
+        mod.applyEffects([[21, '#j', 'az-focusout']]);
+        document.getElementById('j')?.setAttribute('az-focusout', '[0,"c"]');
+        document.getElementById('j')?.dispatchEvent(new Event('focusout', { bubbles: true }));
+        expect(w.sent()).toEqual([]);
+        mod.applyEffects([[21, '#i', 'az-select', [0, 'a'], [0, 'b']]]);
+        const el = document.getElementById('i');
+        el?.dispatchEvent(new Event('select', { bubbles: true }));
+        mod.applyEffects([[21, '#i', 'az-select', [0, 'a'], [0, 'b']]]);
+        el?.dispatchEvent(new Event('select', { bubbles: true }));
+        expect(w.sent()).toEqual([
+            ['v', 'a', { value: '' }],
+            ['v', 'b', { value: '' }],
+        ]);
     });
 
     // Element ids can come from user input, and an earlier element with the

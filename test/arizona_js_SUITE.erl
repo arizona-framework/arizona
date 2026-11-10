@@ -11,9 +11,15 @@
 -export([fetch_empty_on_error_list/1]).
 -export([transition_empty_cmd_list/1]).
 -export([on_key_empty_cmd_list/1]).
+-export([set_attr_writes_a_command_as_an_array/1]).
+-export([set_attr_writes_a_command_list_as_an_array/1]).
+-export([set_attr_keeps_a_binary_value_a_string/1]).
+-export([set_attr_refuses_a_command_under_another_name/1]).
+-export([toggle_attr_toggles_between_commands/1]).
+-export([toggle_attr_refuses_a_command_and_a_string/1]).
 
 all() ->
-    [{group, fetch_on_error}, {group, empty_cmd_lists}].
+    [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
 
 groups() ->
     [
@@ -26,6 +32,14 @@ groups() ->
             fetch_empty_on_error_list,
             transition_empty_cmd_list,
             on_key_empty_cmd_list
+        ]},
+        {az_attr_commands, [parallel], [
+            set_attr_writes_a_command_as_an_array,
+            set_attr_writes_a_command_list_as_an_array,
+            set_attr_keeps_a_binary_value_a_string,
+            set_attr_refuses_a_command_under_another_name,
+            toggle_attr_toggles_between_commands,
+            toggle_attr_refuses_a_command_and_a_string
         ]}
     ].
 
@@ -112,3 +126,67 @@ on_key_empty_cmd_list(Config) when is_list(Config) ->
     Cmd = arizona_js:on_key(enter, []),
     ?assertMatch([?EFFECT_ON_KEY, _Key, []], arizona_effect:json_value(Cmd)),
     ?assert(is_binary(arizona_effect:encode(Cmd))).
+
+%% --------------------------------------------------------------------
+%% Commands written under an az-* name
+%% --------------------------------------------------------------------
+
+%% The client proves an `az-*` name a `set_attr` writes only when the value is a
+%% command, which it tells from data by type: an array on the wire, never a
+%% string. So a command value is encoded as the array an event attribute holds.
+set_attr_writes_a_command_as_an_array(Config) when is_list(Config) ->
+    Cmd = arizona_js:set_attr(~"#x", ~"az-select", arizona_js:push_event(~"picked")),
+    ?assertEqual(
+        [?EFFECT_SET_ATTR, ~"#x", ~"az-select", [?EFFECT_PUSH_EVENT, ~"picked"]],
+        arizona_effect:json_value(Cmd)
+    ),
+    ?assertEqual(
+        ~"[7,\"#x\",\"az-select\",[0,\"picked\"]]",
+        arizona_effect:encode_json(Cmd)
+    ).
+
+set_attr_writes_a_command_list_as_an_array(Config) when is_list(Config) ->
+    Cmd = arizona_js:set_attr(~"#x", ~"az-click", [
+        arizona_js:push_event(~"a"), [], [arizona_js:hide(~"#m")]
+    ]),
+    ?assertEqual(
+        [?EFFECT_SET_ATTR, ~"#x", ~"az-click", [[?EFFECT_PUSH_EVENT, ~"a"], [?EFFECT_HIDE, ~"#m"]]],
+        arizona_effect:json_value(Cmd)
+    ),
+    ?assert(is_binary(arizona_effect:encode(Cmd))).
+
+%% A binary under an az-* name stays a string: data, which proves nothing.
+set_attr_keeps_a_binary_value_a_string(Config) when is_list(Config) ->
+    ?assertEqual(
+        [?EFFECT_SET_ATTR, ~"#x", ~"az-select", ~"[1,2,3]"],
+        arizona_effect:json_value(arizona_js:set_attr(~"#x", ~"az-select", ~"[1,2,3]"))
+    ).
+
+%% Only an `az-*` attribute runs a command; anywhere else its JSON is just text.
+set_attr_refuses_a_command_under_another_name(Config) when is_list(Config) ->
+    ?assertError(
+        function_clause, arizona_js:set_attr(~"#x", ~"title", arizona_js:push_event(~"a"))
+    ).
+
+toggle_attr_toggles_between_commands(Config) when is_list(Config) ->
+    Cmd = arizona_js:toggle_attr(
+        ~"#x", ~"az-click", arizona_js:push_event(~"open"), arizona_js:push_event(~"close")
+    ),
+    ?assertEqual(
+        [
+            ?EFFECT_TOGGLE_ATTR,
+            ~"#x",
+            ~"az-click",
+            [?EFFECT_PUSH_EVENT, ~"open"],
+            [?EFFECT_PUSH_EVENT, ~"close"]
+        ],
+        arizona_effect:json_value(Cmd)
+    ).
+
+%% A command and a string would leave the client unable to say whether the
+%% name it writes carries commands.
+toggle_attr_refuses_a_command_and_a_string(Config) when is_list(Config) ->
+    ?assertError(
+        function_clause,
+        arizona_js:toggle_attr(~"#x", ~"az-click", arizona_js:push_event(~"a"), ~"[0,\"b\"]")
+    ).

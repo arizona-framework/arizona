@@ -296,17 +296,20 @@ export function noteAzAttrs(names) {
 
 /**
  * Delegate one `az-*` attribute NAME. The single place the directive/event triage
- * lives, so the server's set and a `set_attr` effect cannot drift apart.
+ * lives, so the server's set and a `set_attr` effect cannot drift apart. With
+ * `cmds` false the write carried data, which proves no event, so only a directive
+ * is noted (`az-prevent-default` decides `passive`, and runs nothing).
  * @param {string} name
+ * @param {boolean} [cmds]
  */
-export function noteAzAttr(name) {
+export function noteAzAttr(name, cmds = true) {
     if (!name.startsWith('az-')) return;
     // Attribute names are ASCII-lowercased by the HTML parser, and
     // `addEventListener` types are case-sensitive, so an unlowered `az-Close`
     // would bind a dead `Close` while the DOM stores `az-close`.
     const type = name.slice(3).toLowerCase();
     if (type === 'prevent-default') declarePreventDefault();
-    else if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) {
+    else if (cmds && !_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) {
         _eventTypes.add(type);
         if (!DEDICATED.has(type))
             for (const [doc, rec] of _eventDocs) handleEvent(doc, type, rec.signal);

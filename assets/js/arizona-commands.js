@@ -500,33 +500,38 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             });
             break;
         case JS_SET_ATTR:
-            // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name
+            // A runtime `arizona_js:set_attr(sel, "az-toggle", Cmd)` writes a name
             // no template contains, and this command was itself proven (it ran from
-            // a proven name or a handler), so it proves the name. No other write
-            // does: a diff op's string value and a `?local` value are app data, and
-            // the server proves a command a diff ships on that frame. Before the
-            // write: a custom element's attributeChangedCallback may synchronously
-            // dispatch the very event the attribute names.
-            noteAzAttr(cmd[2]);
+            // a proven name or a handler), so it proves the name -- when the value
+            // is a command, which the server ships as an array. A string is data,
+            // as are a diff op's string value and a `?local` value, and the server
+            // proves a command a diff ships on that frame. Before the write: a
+            // custom element's attributeChangedCallback may synchronously dispatch
+            // the very event the attribute names.
+            noteAzAttr(cmd[2], Array.isArray(cmd[3]));
             withQueryAll(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
             break;
         case JS_REMOVE_ATTR:
             withQueryAll(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
             break;
-        case JS_TOGGLE_ATTR:
-            noteAzAttr(cmd[2]);
+        case JS_TOGGLE_ATTR: {
             // 3 args: presence toggle (remove if present, else set bare). 5 args:
             // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
-            // Each match is toggled on its own current state.
+            // Each match is toggled on its own current state. Like set_attr, it
+            // proves the name only when it writes commands: a bare value is data.
+            const cmds = Array.isArray(cmd[3]);
+            noteAzAttr(cmd[2], cmds);
+            const a = cmds ? JSON.stringify(cmd[3]) : cmd[3];
             withQueryAll(cmd[1], (t) => {
                 if (cmd.length === 3) {
                     if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
                     else applySetAttrOp(t, cmd[2], '');
                 } else {
-                    applySetAttrOp(t, cmd[2], t.getAttribute(cmd[2]) === cmd[3] ? cmd[4] : cmd[3]);
+                    applySetAttrOp(t, cmd[2], t.getAttribute(cmd[2]) === a ? cmd[4] : cmd[3]);
                 }
             });
             break;
+        }
         case JS_DISPATCH_EVENT:
             // Every hosting document, like the selector effects: a popped-out
             // (PiP) view is a first-class Arizona document (it gets the same
