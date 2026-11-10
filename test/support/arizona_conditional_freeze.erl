@@ -426,10 +426,14 @@ maybe_raw_template(false, Name) -> Name.
 maybe_raw_json(true, Name) -> arizona_template:raw(?json({'Text', [], [Name]}));
 maybe_raw_json(false, Name) -> Name.
 
-%% The same refusal for a `?raw` literal at the template site.
+%% The same refusal for a `?raw` literal at the template site, around a template
+%% once `wrap` is true.
 -spec literal_raw_template(az:bindings()) -> az:template().
 literal_raw_template(Bindings) ->
-    ?html({'div', [{id, ~"x"}], [?raw(?html({b, [], [?get(name)]}))]}).
+    ?html({'div', [{id, ~"x"}], [?raw(text_or_template(?get(wrap), ?get(name)))]}).
+
+text_or_template(true, Name) -> ?html({b, [], [Name]});
+text_or_template(false, Name) -> Name.
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

@@ -727,6 +727,8 @@ eval_val(#{az_local := _, v := V} = Local) when is_map(V) ->
 eval_val(#{az_local := _, v := V} = Local) ->
     ok = refuse_effect(V),
     Local;
+eval_val({arizona_raw, V}) when is_map(V) ->
+    arizona_template:raw_not_text(V);
 eval_val({arizona_raw, V} = Raw) ->
     ok = refuse_effect(V),
     Raw;
@@ -734,8 +736,9 @@ eval_val(Val) ->
     Val.
 
 %% A content `?local` init and a `raw/1` value skip `mark_esc/1`, so a command in
-%% one would otherwise be refused only at output (`arizona_template:to_bin/1`),
-%% where the slot's location is gone. Refused here, inside the located evaluation.
+%% one, or a map in a raw, would otherwise be refused only at output
+%% (`arizona_template:to_bin/1`), where the slot's location is gone. Refused here,
+%% inside the located evaluation.
 refuse_effect(V) ->
     case arizona_template:classify_trusted(V) of
         {effect, Cmd} -> arizona_template:effect_in_content(Cmd);
@@ -882,6 +885,8 @@ eval_val_v(#{az_local := _, v := V} = Local, Views0) when is_map(V) ->
 eval_val_v(#{az_local := _, v := V} = Local, Views) ->
     ok = refuse_effect(V),
     {Local, Views};
+eval_val_v({arizona_raw, V}, _Views) when is_map(V) ->
+    arizona_template:raw_not_text(V);
 eval_val_v({arizona_raw, V} = Raw, Views) ->
     ok = refuse_effect(V),
     {Raw, Views};

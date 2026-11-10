@@ -116,6 +116,7 @@
     runtime_local_template_init_renders/1,
     helper_raw_template_refused/1,
     helper_raw_template_refused_on_diff/1,
+    literal_raw_template_refused/1,
     wire_raw_in_list_item/1,
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
@@ -289,6 +290,7 @@ groups() ->
             runtime_local_template_init_renders,
             helper_raw_template_refused,
             helper_raw_template_refused_on_diff,
+            literal_raw_template_refused,
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
@@ -2132,6 +2134,27 @@ helper_raw_template_refused_on_diff(Config) when is_list(Config) ->
         arizona_diff:diff(
             M:helper_raw_template(#{wrap => true, name => ~"a"}), S0, V0, #{wrap => true}
         )
+    ).
+
+%% A literal `?raw` around a template is refused at the slot's line on SSR, the live
+%% render and the diff alike, not only where SSR locates it.
+literal_raw_template_refused(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, name => ~"<a>"},
+    ?assertError(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        arizona_render:render_to_iolist(M:literal_raw_template(B))
+    ),
+    ?assertError(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        arizona_render:render(M:literal_raw_template(B), #{})
+    ),
+    {_, S0, V0} = arizona_render:render(
+        M:literal_raw_template(#{wrap => false, name => ~"a"}), #{}
+    ),
+    ?assertError(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        arizona_diff:diff(M:literal_raw_template(B), S0, V0, #{wrap => true})
     ).
 
 %% The text/HTML distinction holds below the top level too: inside a plain-list item

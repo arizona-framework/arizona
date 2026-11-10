@@ -74,6 +74,7 @@ render(Bindings) ->
 -export([escape_marked/2]).
 -export([mark_esc/1]).
 -export([effect_in_content/1]).
+-export([raw_not_text/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
@@ -884,9 +885,18 @@ mark_local_init(Init) -> mark_esc(Init).
 %% A map unwrapped from a raw was never evaluated, so passing it through as a nested
 %% template would reach the live render with its dynamics still unevaluated.
 mark_raw_esc(V) when is_map(V) ->
-    erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]);
+    raw_not_text(V);
 mark_raw_esc(V) ->
     mark_esc(V).
+
+%% Internal: raises `{bad_template_value, Map}` for a map -- a template, descriptor
+%% or `?local` -- inside a `raw/1`, which opts text out of escaping. Raised where the
+%% slot is evaluated, so the error carries its location; at output it would not.
+-doc false.
+-spec raw_not_text(Value) -> no_return() when
+    Value :: map().
+raw_not_text(V) ->
+    erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]).
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
