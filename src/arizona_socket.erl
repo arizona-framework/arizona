@@ -1201,15 +1201,14 @@ az_roots(Handler, Layouts) ->
 
 %% Connect-time seeding, run once per socket: everything is new, so the delta
 %% bookkeeping note_az/3 does per frame (filter against walked, dedup against
-%% sent, the pending round trip) would only compare against empty sets. Take
-%% the page's memoized walk plus the mount's observations, seed both sets whole
-%% (every module the walk covered, so a later frame never walks one again), and
-%% hand the names straight to the connect frame the caller builds.
+%% sent, the pending round trip) would only compare against empty sets. Walk
+%% the roots plus the mount's observations, seed both sets whole, and hand the
+%% names straight to the connect frame the caller builds.
 az_connect(Roots, {ObsNames, ObsMods}, Socket) ->
-    {Compiled, Walked} = arizona_event_attrs:reach(Roots, ObsMods),
-    Names = lists:umerge(ObsNames, Compiled),
+    Mods = Roots ++ ObsMods,
+    Names = lists:usort(arizona_event_attrs:all(Mods) ++ ObsNames),
     {Names, Socket#socket{
-        az_walked = Walked,
+        az_walked = maps:from_keys(Mods, true),
         az_sent = maps:from_keys(Names, true)
     }}.
 
