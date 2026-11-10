@@ -1237,8 +1237,10 @@ format_error(az_view_not_allowed) ->
     "arizona_stateful render/1 and must not be set manually";
 %% The authored-attribute errors live in their own function, like the ?each family
 %% below, to keep format_error/1 under the cyclomatic limit.
-format_error({Kind, Name}) when Kind =:= reserved_attr; Kind =:= duplicate_attr ->
-    format_attr_error(Kind, Name);
+format_error({Kind, Detail}) when
+    Kind =:= reserved_attr; Kind =:= duplicate_attr; Kind =:= ssr_inert_attr
+->
+    format_attr_error(Kind, Detail);
 format_error({invalid_child, ValueStr}) ->
     lists:flatten(
         io_lib:format(
@@ -1396,7 +1398,17 @@ format_attr_error(duplicate_attr, Name) ->
             "one list value, e.g. {class, [~~\"btn \", ?get(kind)]}",
             [Name]
         )
+    );
+format_attr_error(ssr_inert_attr, {Tag, Name, Hint}) ->
+    lists:flatten(
+        io_lib:format(
+            "the ~ts attribute is not allowed on a ~ts element in this render target. ~ts",
+            [Name, tag_text(Tag), Hint]
+        )
     ).
+
+tag_text(Tag) when is_atom(Tag) -> atom_to_binary(Tag);
+tag_text(Tag) when is_binary(Tag) -> Tag.
 
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
@@ -4764,7 +4776,7 @@ is_literal_tag(_Evaluated) -> false.
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     Backend = State0#state.backend,
-    ok = reject_framework_attrs(Backend, Attrs0, Line),
+    ok = reject_framework_attrs(Backend, Tag, Attrs0, Line),
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_nodiff(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
@@ -6671,14 +6683,16 @@ directive_opts(Name) ->
 directive_opts_1(~"az-nodiff") -> {ok, #{diff => false}};
 directive_opts_1(_Other) -> false.
 
-%% Attribute names the template author may not write (or write twice), checked on the element's
+%% Attribute names the template author may not write (or write twice, or the backend finds
+%% inert on this tag), checked on the element's
 %% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
 %% never mistaken for an authored one.
-reject_framework_attrs(Backend, Attrs, Line) ->
+reject_framework_attrs(Backend, Tag, Attrs, Line) ->
     ok = reject_nested_directives(Attrs, Line),
     ok = reject_nodiff_value(Attrs, Line),
     ok = reject_reserved_attrs(Attrs, Line),
-    reject_duplicate_attrs(Backend, Attrs, Line).
+    ok = reject_duplicate_attrs(Backend, Attrs, Line),
+    reject_ssr_inert_attrs(Backend, Tag, Attrs, Line).
 
 %% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
 %% token the client keeps the element by), so an authored one -- any value,
@@ -6765,6 +6779,26 @@ reject_reserved_attrs(Attrs, Line) ->
         [] -> ok;
         [Name | _] -> parse_error({reserved_attr, Name}, Line)
     end.
+
+%% An attribute the backend's client reads only after first render, so the
+%% SSR output and every later update disagree (`arizona_renderer:ssr_inert_attr/2`).
+%% A static `false` renders nothing, so it is not checked.
+reject_ssr_inert_attrs(Backend, Tag, Attrs, Line) ->
+    Inert = [
+        {Name, Hint}
+     || Attr <- Attrs,
+        not is_static_false_attr(Attr),
+        Name <- [attr_name(fun Backend:name/1, Attr)],
+        Name =/= undefined,
+        {inert, Hint} <- [Backend:ssr_inert_attr(Tag, Name)]
+    ],
+    case Inert of
+        [] -> ok;
+        [{Name, Hint} | _] -> parse_error({ssr_inert_attr, {Tag, Name, Hint}}, Line)
+    end.
+
+is_static_false_attr({tuple, _, [_NameAST, {atom, _, false}]}) -> true;
+is_static_false_attr(_Attr) -> false.
 
 %% Two attributes of one name are both emitted, and which one takes effect depends on
 %% the target (the HTML parser keeps the first, a JSON object the last) and on which

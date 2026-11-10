@@ -54,6 +54,7 @@ the wire value. On the wire itself a value stays raw
 -export([supports_nodiff_keep/0]).
 -export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
+-export([ssr_inert_attr/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -187,6 +188,10 @@ keyed_item_ops() -> true.
 
 -spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [].
 implied_attrs(_Tag, _Names) -> [].
+
+%% A native client applies every prop as rendered, so none is inert.
+-spec ssr_inert_attr(arizona_renderer:tag(), binary()) -> ok.
+ssr_inert_attr(_Tag, _Name) -> ok.
 
 boolean_attrs() -> value.
 
