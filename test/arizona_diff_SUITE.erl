@@ -134,6 +134,7 @@
     wire_raw_attr_tagged/1,
     raw_interp_attr_ssr/1,
     wire_raw_interp_attr_tagged/1,
+    helper_raw_attr_escaped/1,
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
@@ -318,7 +319,8 @@ groups() ->
             wire_raw_in_branch,
             wire_raw_attr_tagged,
             raw_interp_attr_ssr,
-            wire_raw_interp_attr_tagged
+            wire_raw_interp_attr_tagged,
+            helper_raw_attr_escaped
         ]},
         {markerless_slots, [parallel], [
             markerless_stream_item_update_no_dangling_op,
@@ -2458,6 +2460,7 @@ literal_raw_template_refused(Config) when is_list(Config) ->
             literal_raw_attr,
             helper_raw_attr,
             interp_raw_attr,
+            helper_raw_template_interp_attr,
             helper_raw_attr_json,
             literal_raw_attr_json
         ]
@@ -2608,6 +2611,38 @@ wire_raw_interp_attr_tagged(Config) when is_list(Config) ->
             ]
         ],
         Ops
+    ).
+
+%% A helper's `raw/1` in an attribute value is escaped like a plain value, on SSR,
+%% the live render and the diff: only a literal `?raw` is trusted markup. Spliced, it
+%% let helper-wrapped data close the attribute and inject markup.
+helper_raw_attr_escaped(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B0 = #{h => ~"\"><i>"},
+    B1 = #{h => ~"\"><s>"},
+    Whole = ~"title=\"&quot;&gt;&lt;i&gt;\"",
+    Interp = ~"title=\"<b>&quot;&gt;&lt;i&gt;\"",
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            iolist_to_binary(arizona_render:render_to_iolist(M:helper_raw_attr_value(B0))), Whole
+        )
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            iolist_to_binary(arizona_render:render_to_iolist(M:helper_raw_interp_attr(B0))), Interp
+        )
+    ),
+    {HTML0, S0, V0} = arizona_render:render(M:helper_raw_attr_value(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML0), Whole)),
+    {Ops0, _, _} = arizona_diff:diff(M:helper_raw_attr_value(B1), S0, V0, #{h => true}),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"title", ~"\"><s>"]], Ops0),
+    {HTML1, S1, V1} = arizona_render:render(M:helper_raw_interp_attr(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML1), Interp)),
+    {Ops1, _, _} = arizona_diff:diff(M:helper_raw_interp_attr(B1), S1, V1, #{h => true}),
+    ?assertMatch(
+        [[?OP_SET_ATTR, _, ~"title", #{~"raw" := ~"<b>&quot;&gt;&lt;s&gt;"}]], Ops1
     ).
 
 raw_items() ->

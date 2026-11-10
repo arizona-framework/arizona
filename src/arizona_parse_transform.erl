@@ -5134,21 +5134,25 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
             flush(State1, DynAST)
     end.
 
-%% An interpolated value holding a literal `?raw` part (`[~"/a?", ?raw(Q)]`) is
-%% attribute markup as a whole, so it becomes one raw value with every other part
-%% escaped: `arizona_template:raw_attr/2` assembles it. Left a plain list, the raw
-%% tuple inside it is not text and the value cannot render. Only a literal `?raw`
-%% counts, the rule the opt-out follows everywhere else.
+%% A value holding a literal `?raw`, whole (`?raw(H)`) or as a part
+%% (`[~"/a?", ?raw(Q)]`), is attribute markup, assembled by
+%% `arizona_template:raw_attr/2` with every other part tagged for escaping. That
+%% marks the literal opt-out at compile time, as a content slot's `{esc, Fun}` does,
+%% so the renderers escape a raw any other attribute value returns at runtime (a
+%% helper's) without testing the plain values. Only a literal `?raw` counts, the rule
+%% the opt-out follows everywhere else.
 raw_interp_attr_ast(Backend, ValueAST) ->
     Parts =
         case is_list_ast(ValueAST) of
             true -> attr_value_parts(ValueAST);
-            false -> []
+            false -> [ValueAST]
         end,
     case lists:any(fun is_raw_call/1, Parts) of
         true ->
             L = line(ValueAST),
-            PartsAST = lists:foldr(fun(P, Acc) -> {cons, L, P, Acc} end, {nil, L}, Parts),
+            PartsAST = lists:foldr(
+                fun(P, Acc) -> {cons, L, raw_attr_part_ast(P), Acc} end, {nil, L}, Parts
+            ),
             {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, raw_attr}}, [
                 {atom, L, Backend}, PartsAST
             ]};
@@ -5793,6 +5797,19 @@ assert_raw_text_opt_out(Child) ->
     case is_raw_call(Child) of
         true -> ok;
         false -> parse_error(dynamic_in_raw_text, anno(Child))
+    end.
+
+%% A literal `?raw` part is spliced; any other part is marked for escaping
+%% (`arizona_template:mark_attr_part/1`), a raw it returns included.
+raw_attr_part_ast(Part) ->
+    case is_raw_call(Part) of
+        true ->
+            Part;
+        false ->
+            L = line(Part),
+            {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, mark_attr_part}}, [
+                Part
+            ]}
     end.
 
 is_raw_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [_Value]}) ->

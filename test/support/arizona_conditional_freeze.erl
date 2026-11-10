@@ -79,6 +79,9 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([raw_in_branch/1]).
 -export([raw_attr/1]).
 -export([raw_interp_attr/1]).
+-export([helper_raw_attr_value/1]).
+-export([helper_raw_interp_attr/1]).
+-export([helper_raw_template_interp_attr/1]).
 -export([attr_name_swap/1]).
 -export([event_attr_name_swap/1]).
 -export([json_attr_name_swap/1]).
@@ -714,6 +717,22 @@ raw_attr(Bindings) ->
 -spec raw_interp_attr(az:bindings()) -> az:template().
 raw_interp_attr(Bindings) ->
     ?html({a, [{href, [~"/a?q=\"<&", ?raw(?get(h)), ~"&z=", ?get(v)]}], []}).
+
+%% A helper's `raw/1` in a whole attribute value, and in an interpolated one beside a
+%% literal `?raw` part. Only a literal `?raw` opts out of escaping, so the helper's
+%% value is escaped like any other.
+-spec helper_raw_attr_value(az:bindings()) -> az:template().
+helper_raw_attr_value(Bindings) ->
+    ?html({span, [{title, wrap_raw(?get(h))}], []}).
+
+%% A helper's raw around a template beside a literal `?raw` part, once `wrap` is true.
+-spec helper_raw_template_interp_attr(az:bindings()) -> az:template().
+helper_raw_template_interp_attr(Bindings) ->
+    ?html({span, [{title, [?raw(~"<b>"), maybe_raw_template(?get(wrap), ?get(name))]}], []}).
+
+-spec helper_raw_interp_attr(az:bindings()) -> az:template().
+helper_raw_interp_attr(Bindings) ->
+    ?html({span, [{title, [?raw(~"<b>"), wrap_raw(?get(h))]}], []}).
 
 %% Two branches whose only difference is the NAME of a dynamic attribute: switching
 %% `mode` must replace the branch, not patch the shared value under the new name and

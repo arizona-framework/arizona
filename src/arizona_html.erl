@@ -1395,8 +1395,12 @@ render_attr(Name, true) ->
     attr_bool(Name, true);
 render_attr(Name, Value) ->
     case arizona_template:classify_trusted(Value) of
+        {markup, Bin} ->
+            attr_unescaped(Name, Bin);
+        %% A literal `?raw` arrives as markup, so a raw here is a helper's: escaped,
+        %% as content escapes one, or it could close the attribute.
         {raw, V} ->
-            attr_unescaped(Name, arizona_template:raw_to_bin(V));
+            attr(Name, arizona_template:raw_to_bin(V));
         {effect, Cmd} ->
             %% A live render already observed this name where it evaluated the
             %% value (arizona_eval). The request-free SSR walk evaluates inline
