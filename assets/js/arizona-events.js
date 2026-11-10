@@ -319,7 +319,11 @@ const ATTRS_ID = 'arizona-attrs';
  * @returns {string[]}
  */
 export function embeddedAttrs() {
-    const el = document.getElementById(ATTRS_ID);
+    // Not `getElementById`: an id can come from user input, and any earlier element
+    // carrying this one would win. Escaped content cannot create a script element,
+    // and the server writes its embed after the page, so the last match is it.
+    const els = document.querySelectorAll(`script[type="application/json"]#${ATTRS_ID}`);
+    const el = els[els.length - 1];
     if (!el) return [];
     try {
         const names = JSON.parse(el.textContent || '[]');

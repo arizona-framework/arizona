@@ -181,6 +181,24 @@ describe('an unproven az-* value is data on a live page', () => {
         expect(w.sent()).toEqual([['v', 'picked', { value: '' }]]);
     });
 
+    // Element ids can come from user input, and an earlier element with the
+    // embed's id would win `getElementById`. Escaped content cannot create a
+    // script element, and the server's embed comes after the page.
+    it('reads only the last JSON script element as the embedded set', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><p id="arizona-attrs">["az-click"]</p>` +
+            `<button id="b" az-click='[0,"evil"]'>x</button>` +
+            `<script type="application/json" id="arizona-attrs">["az-click"]</script>` +
+            `<button id="d" az-dblclick='[0,"ok"]'>y</button></div>` +
+            `<script type="application/json" id="arizona-attrs">["az-dblclick"]</script>`;
+        w = mockWorker(mod);
+        w.open();
+        document.getElementById('b')?.click();
+        document.getElementById('d')?.dispatchEvent(new Event('dblclick', { bubbles: true }));
+        expect(w.sent()).toEqual([['v', 'ok', {}]]);
+    });
+
     it('does not run an unproven az-submit, before or after the socket opens', async () => {
         const mod = await fresh();
         document.body.innerHTML =
@@ -252,6 +270,19 @@ describe('an unproven az-* value is data on a live page', () => {
 });
 
 describe('an unproven az-* value is data on a static page', () => {
+    it('reads only the last JSON script element as the embedded set', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona-static.js');
+        document.body.innerHTML =
+            `<p id="arizona-attrs">["az-click"]</p><div id="v" az-view>` +
+            `<button id="b" type="button" az-click='[22,"${EVIL}",{}]'>x</button></div>` +
+            `<script type="application/json" id="arizona-attrs">["az-dblclick"]</script>`;
+        const stop = mod.start();
+        document.getElementById('b')?.click();
+        stop();
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
     it('does not run az-click the page did not embed', async () => {
         vi.resetModules();
         const mod = await import('./arizona-static.js');
