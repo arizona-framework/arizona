@@ -132,6 +132,11 @@ routes() ->
             bindings => #{title => <<"Events">>},
             layouts => Layouts
         }},
+        %% Static values under az-* names no template proves: data, never run.
+        {live, <<"/unproven">>, arizona_unproven_data, #{
+            bindings => #{title => <<"Unproven">>},
+            layouts => Layouts
+        }},
         %% Render-time az-* delivery: opaque dynamic commands (observed at
         %% mount / on a later frame's branch render) and a runtime-bound
         %% ?stateful(?get(page), ...) child (module observed at instantiation).
