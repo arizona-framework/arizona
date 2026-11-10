@@ -313,6 +313,8 @@ A slot binds either element **content** or an **attribute value**; the descripto
 
 Every item of an `?each` shares the slot **key** (keys are compile-time literals), so a `set` hits all of them; `?local` cannot hold per-item independent client state.
 
+A `?local` under an `az-*` name must **start** as a command: only that initial value proves the name, at compile time. `{az_click, ?local(~"act", ~"")}` records nothing, and a later `set` never proves `click`, even with a command array -- the slot writes through `applySetAttrOp`, which records nothing, because a `?local` value is client-side data.
+
 ## Navigation scroll behavior
 
 - Push nav (`az-navigate` click, `arizona_js:navigate/1,2` without replace): saves outgoing scroll onto the current history entry via `replaceState`, `pushState`s the new URL, resets scroll to top (or `#hash` target) after OP_REPLACE. Opt out with `az-noscroll` on the link or `{noscroll: true}` on the effect.

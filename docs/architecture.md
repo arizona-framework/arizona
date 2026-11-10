@@ -1201,6 +1201,10 @@ Caveats (by design):
   updates all of them at once. `?local` therefore can't hold per-item independent client state
   in a list/stream -- use server state for that. (An item reorder/remove is also a wholesale
   re-render that resets that item's slot.)
+- **Under an `az-*` name it must start as a command.** Only the initial value proves the name,
+  at compile time: `{az_click, ?local(~"act", arizona_js:push_event(~"go"))}` proves `click`,
+  `{az_click, ?local(~"act", ~"")}` proves nothing, and no later `set` does, even of a command
+  array -- a `?local` value is client-side data.
 - **Forced reconnect resets it.** A non-1000 socket close fresh-mounts the view.
 - **Server never reads the value.** To use it server-side, read it client-side
   (`arizona.get`) and include it in a `push_event` payload -- auto-collection ignores `[az-local]`.

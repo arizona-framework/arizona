@@ -192,6 +192,12 @@ describe('an unproven az-* value is data on a live page', () => {
         document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(document.getElementById('i')?.getAttribute('az-select')).toBe(`[22,"${EVIL}",{}]`);
+        // An array too: unlike a set_attr effect's, a `?local` value is client data.
+        mod.set('v', 'k', [22, EVIL, {}]);
+        document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
+        document.getElementById('i')?.setAttribute('az-select', `[22,"${EVIL}",{}]`);
+        document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('still runs a command a set_attr effect writes under a new name', async () => {
