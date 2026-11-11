@@ -44,6 +44,7 @@ select keeps its value and the page marks the option it names.
 -export([multiple_component_dynamic/1]).
 -export([local_value_component/1]).
 -export([option_items/1]).
+-export([name_label/1]).
 
 -spec literal(az:bindings()) -> az:template().
 literal(Bindings) ->
@@ -328,3 +329,9 @@ local_value_component(Bindings) ->
             ?stateless(fun option_items/1, #{opts => ?get(opts)})
         ]}
     ).
+
+%% Called remotely from an option's text: its read sits in its own closure, where the
+%% caller's slot does not see it.
+-spec name_label(az:bindings()) -> az:template().
+name_label(Bindings) ->
+    ?html({i, [], [?get(name)]}).

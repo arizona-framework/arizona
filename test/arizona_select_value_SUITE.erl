@@ -48,6 +48,7 @@ and the select keeps its value for the client to apply after.
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
     runtime_text_option_valued_by_its_markup/1,
+    markup_text_tracks_what_its_slot_tracks/1,
     authored_selected_is_refused/1,
     shadowing_parameter_is_renamed/1,
     shadowing_hoisted_read_is_refused/1,
@@ -93,6 +94,7 @@ groups() ->
             runtime_text_option_diffs,
             runtime_text_option_in_each_row,
             runtime_text_option_valued_by_its_markup,
+            markup_text_tracks_what_its_slot_tracks,
             opaque_diff_ships_the_value,
             opaque_each_keeps_its_item_diff
         ]},
@@ -846,6 +848,24 @@ runtime_text_option_valued_by_its_markup(Config) when is_list(Config) ->
         Mod:render(B1#{v => ~"Pick Z&!"}), Snap1, V1, #{v => true}
     ),
     ?assertEqual([{set, ~"selected"}], attr_ops(Ops2), Ops2).
+
+%% The `selected` of an option valued by a markup child tracks what the child's slot
+%% tracks, and no more: a read inside the markup's own closures (a remote helper's) is
+%% not the slot's, so a change to it moves neither the text nor the selection.
+markup_text_tracks_what_its_slot_tracks(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod(
+            "sel_text_remote",
+            "{option, [], [arizona_select_value:name_label(Bindings)]}, {option, [], [~\"y\"]}"
+        )
+    ),
+    B0 = #{v => ~"Ann", name => ~"Ann"},
+    {Live, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertEqual(1, count_selected(iolist_to_binary(Live)), Live),
+    {Ops, _Snap1, _} = arizona_diff:diff(Mod:render(B0#{name => ~"Bob"}), Snap0, V0, #{
+        name => true
+    }),
+    ?assertEqual([], attr_ops(Ops), Ops).
 
 authored_selected_is_refused(Config) when is_list(Config) ->
     Conflict = fun

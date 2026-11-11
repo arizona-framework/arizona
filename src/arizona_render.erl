@@ -788,16 +788,23 @@ What `Value`, a content value holding markup (a template, a component), renders 
 in the SSR form, for its text to be read: the value of a choice valued by its text
 (`arizona_template:choice_text/2`), on the SSR, live and diff paths alike. A
 `?stateful` in it raises `stateful_in_text`: reading its text would mount it a second
-time, outside the view tree.
+time, outside the view tree. The reads its own closures make are not recorded on
+the caller's dependency scope, as the slot rendering the same value records none of
+them, so the two re-run on the same changes.
 """.
 -spec render_markup(Backend, Value) -> iodata() when
     Backend :: module(),
     Value :: term().
 render_markup(Backend, Value) ->
     Outer = erlang:put(?IN_TEXT, true),
+    Deps = erlang:erase('$arizona_deps'),
     try
         render_dyn(Backend, render_ssr_val(Backend, Value))
     after
+        case Deps of
+            undefined -> undefined;
+            _Scope -> erlang:put('$arizona_deps', Deps)
+        end,
         case Outer of
             undefined -> erlang:erase(?IN_TEXT);
             true -> true
