@@ -519,11 +519,12 @@ on_key(Key, Cmds) ->
 -doc """
 Sets a client-owned slot (`?local`) to `Value` in the **closest view** of the
 triggering element, updating every slot with `Key` locally with no server
-round-trip. Use inside web event attributes like `az-click`.
+round-trip. Use inside web event attributes like `az-click`. A list is the picks of a
+`multiple` select's `value`.
 """.
 -spec set(Key, Value) -> arizona_effect:cmd() when
     Key :: binary() | atom(),
-    Value :: binary() | boolean() | number().
+    Value :: binary() | boolean() | number() | [binary() | number()].
 set(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value]}.
 
 -doc """
@@ -532,7 +533,7 @@ Like `set/2` but targets the slot in the view identified by `ViewId`.
 -spec set(ViewId, Key, Value) -> arizona_effect:cmd() when
     ViewId :: binary(),
     Key :: binary() | atom(),
-    Value :: binary() | boolean() | number().
+    Value :: binary() | boolean() | number() | [binary() | number()].
 set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, ViewId]}.
 
 -doc """
@@ -540,7 +541,7 @@ Like `set/2` but updates the slot in **every** view on the page (document-wide).
 """.
 -spec set_all(Key, Value) -> arizona_effect:cmd() when
     Key :: binary() | atom(),
-    Value :: binary() | boolean() | number().
+    Value :: binary() | boolean() | number() | [binary() | number()].
 set_all(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, true]}.
 
 -doc """

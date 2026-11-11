@@ -4844,7 +4844,11 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_nodiff(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
-    Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line),
+    %% The descriptor reads the locals as written: a chooser's value is rewritten
+    %% to one whole local (kept_value/4) whose affixes the client still needs.
+    Attrs = maybe_inject_local_descriptor(
+        Backend, AuthoredAttrs, Attrs1, Children, RawKind, Line
+    ),
     State1 = State0#state{root = false, nodiff_mark = none},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
     %% the ELEMENT's own az (see compile_element_children/7), so it needs one too --
@@ -5211,17 +5215,16 @@ compile_interp_local_attr(Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, S
 %% iolist would otherwise be emitted as a byte, not its decimal digits.
 local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
-    InitBinAST =
-        {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, to_bin}}, [
-            local_init(LocalCall)
-        ]},
-    VAST = ast_list([ast_binary(Prefix), InitBinAST, ast_binary(Suffix)]),
+    VAST = ast_list([ast_binary(Prefix), to_bin_ast(local_init(LocalCall)), ast_binary(Suffix)]),
     {map, 0, LocalCall, [
         {map_field_assoc, 0, {atom, 0, target}, TargetAST},
         {map_field_assoc, 0, {atom, 0, v}, VAST}
     ]}.
 
 local_init({call, _, _, [_KeyAST, InitAST]}) -> InitAST.
+
+to_bin_ast(AST) ->
+    {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, to_bin}}, [AST]}.
 
 %% `?local` expands to `arizona_template:local/2`; `az:local/2` is the facade.
 %% Recognize both so the macro and a direct facade call both work in templates.
@@ -5284,9 +5287,9 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
 %% for the attribute context (the client reads it via getAttribute, which decodes
 %% the entities back). No separate escape here -- that would double-escape.
-maybe_inject_local_descriptor(Backend, Attrs, Children, RawKind, Line) ->
-    AttrLocals = collect_attr_locals(Backend, Attrs, Line),
-    AttrAffixes = collect_attr_affixes(Backend, Attrs, Line),
+maybe_inject_local_descriptor(Backend, LocalAttrs, Attrs, Children, RawKind, Line) ->
+    AttrLocals = collect_attr_locals(Backend, LocalAttrs, Line),
+    AttrAffixes = collect_attr_affixes(Backend, LocalAttrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
     case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
         false ->
@@ -7139,14 +7142,10 @@ chooser_sel(Backend, Tag, Attrs) ->
                         value => compared_value(Backend, Value),
                         multiple => multiple_value(Backend, MultipleName, Rest),
                         choice => Choice,
-                        fold => false
+                        fold => false,
+                        local => has_local(Value)
                     },
-                    %% A `?local` value is the client's to change (it writes the
-                    %% `.value` property), so it stays; the page loads on its initial.
-                    case has_local(Value) of
-                        true -> {Sel, Attrs};
-                        false -> {Sel, Rest}
-                    end;
+                    {Sel, Rest};
                 error ->
                     none
             end;
@@ -7165,7 +7164,7 @@ chooser_value(_Bare) -> ast_binary(<<>>).
 %% `?local` stands for its initial, which renders as text.
 compared_value(Backend, Value) ->
     case has_local(Value) of
-        true -> local_inits(Value);
+        true -> local_inits(Backend, Value);
         false -> compared_parts(Backend, Value, is_list_ast(Value))
     end.
 
@@ -7199,13 +7198,29 @@ markup_ast(Backend, Raw) ->
         {atom, L, Backend}, {cons, L, Raw, {nil, L}}
     ]}.
 
-%% A `?local`, whole or interpolated, stands for its initial value.
-local_inits({cons, L, Head, Tail}) ->
-    {cons, L, local_inits(Head), local_inits(Tail)};
-local_inits(Value) ->
-    case is_local_marker(Value) of
-        true -> local_init(Value);
-        false -> Value
+%% A `?local` stands for its initial value: a whole one for its init, an
+%% interpolated one for the one text it renders, its static parts included.
+local_inits(Backend, Value) ->
+    case attr_local_spec(Value, anno(Value)) of
+        none -> Value;
+        {whole, LocalCall} -> local_init(LocalCall);
+        {interp, LocalCall, Prefix, Suffix} -> local_text_ast(Backend, LocalCall, Prefix, Suffix)
+    end.
+
+%% The text an interpolated local's attribute holds (local_attr_interp_expr_ast/4):
+%% folded for a literal init, so the choices still fold at compile time, else
+%% `arizona_template:attr_text(Backend, [Prefix, arizona_template:to_bin(Init), Suffix])`.
+local_text_ast(Backend, LocalCall, Prefix, Suffix) ->
+    L = anno(LocalCall),
+    Init = local_init(LocalCall),
+    case literal_text(Init) of
+        {ok, Text} ->
+            ast_binary(<<Prefix/binary, Text/binary, Suffix/binary>>);
+        error ->
+            {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, attr_text}}, [
+                {atom, L, Backend},
+                ast_list([ast_binary(Prefix), to_bin_ast(Init), ast_binary(Suffix)])
+            ]}
     end.
 
 has_local({cons, _, Head, Tail}) -> has_local(Head) orelse has_local(Tail);
@@ -7558,12 +7573,13 @@ callback_scope(_FunArg, Inline) ->
     Inline.
 
 %% Where a chooser compiles: drop its value, mark every choice under it. A child
-%% the compiler cannot see into keeps the value on the chooser instead (kept_value/4).
+%% the compiler cannot see into keeps the value on the chooser instead (kept_value/4),
+%% and so does a `?local` value, the client's to change.
 choose(Backend, Tag, Attrs, Children) ->
     case chooser_sel(Backend, Tag, Attrs) of
-        {Sel, Rest} ->
+        {#{local := Local} = Sel, Rest} ->
             Chosen = [choice_child(C, Sel#{fold := true}, final) || C <- Children],
-            case holds_choices(Chosen) of
+            case Local orelse holds_choices(Chosen) of
                 false -> {Rest, Chosen};
                 true -> {kept_value(Backend, Tag, Attrs, Sel), Chosen}
             end;
@@ -7574,7 +7590,10 @@ choose(Backend, Tag, Attrs, Children) ->
 %% A chooser holding a choice the compiler cannot mark keeps its value, rendered by
 %% arizona_template:chooser_value/3, for the client to apply to what a live update
 %% renders (the SSR render marks the page's, arizona_template:choices/3). A `?local`
-%% value stays the client's, its initial rendered the same way.
+%% value stays the client's, its initial rendered the same way: one local whose init
+%% is the value it stands for (local_inits/2), so under `multiple` an interpolated
+%% one is one pick of the array. Its key and affixes reach the client through the
+%% descriptor, built from the attributes as written (compile_element/5).
 kept_value(Backend, Tag, Attrs, Sel) ->
     {chooser, #{value := ValueName}} = selection_role(Backend, Tag),
     {ok, Kept, _Rest} = take_attr(Backend, ValueName, Attrs),
@@ -7587,27 +7606,16 @@ kept_value(Backend, Tag, Attrs, Sel) ->
     ].
 
 kept_value_attr({tuple, L, [Name, Value]}, #{value := Compared} = Sel) ->
-    case has_local(Value) of
-        true -> {tuple, L, [Name, kept_local_ast(Value, Sel)]};
-        false -> {tuple, L, [Name, chooser_value_call(Compared, Sel, anno(Value))]}
+    case attr_local_spec(Value, L) of
+        none ->
+            {tuple, L, [Name, chooser_value_call(Compared, Sel, anno(Value))]};
+        Spec ->
+            {call, CL, Local, [Key, _Init]} = local_call(Spec),
+            {tuple, L, [Name, {call, CL, Local, [Key, chooser_value_call(Compared, Sel, CL)]}]}
     end;
 kept_value_attr(Bare, Sel) ->
     L = anno(Bare),
     {tuple, L, [Bare, chooser_value_call(ast_binary(<<>>), Sel, L)]}.
-
-%% A `?local` stays the client's: only its initial and the static parts beside it
-%% render as the value.
-kept_local_ast({cons, L, Head, Tail}, Sel) ->
-    {cons, L, kept_local_ast(Head, Sel), kept_local_ast(Tail, Sel)};
-kept_local_ast({call, L, Local, [Key, Init]} = Value, Sel) ->
-    case is_local_marker(Value) of
-        true -> {call, L, Local, [Key, chooser_value_call(Init, Sel, L)]};
-        false -> chooser_value_call(Value, Sel, L)
-    end;
-kept_local_ast({nil, _} = Nil, _Sel) ->
-    Nil;
-kept_local_ast(Value, Sel) ->
-    chooser_value_call(Value, Sel, anno(Value)).
 
 chooser_value_call(Value, #{backend := Backend, multiple := Multiple}, L) ->
     {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, chooser_value}}, [

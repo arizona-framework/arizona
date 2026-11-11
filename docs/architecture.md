@@ -1093,6 +1093,15 @@ slot it reconstructs the marker `az` from the element's runtime `az` + the slot 
 composed initial value is baked into the bind-map's `v` (`[Prefix, to_bin(Init), Suffix]`), so
 SSR render and diff-skip reuse the whole-value attribute path unchanged.
 
+A `?local` `value` on a `<select>` is the one place the rendered attribute is not the local's
+text as written: the transform rewrites it to one whole local whose init is
+`arizona_template:chooser_value/3` of the value it stands for (the init, or an interpolated
+local's composed text), so under `multiple` it renders the JSON array of picks like any kept
+select value, and an interpolated local is one pick. The descriptor is built from the
+attributes as written, so the client still has the affixes; its writer gives a multiple
+select's value the same JSON form (a list is the picks, anything else one), and `get` reads
+the selected values as a list.
+
 Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
 op `?EFFECT_SET_LOCAL`):
 

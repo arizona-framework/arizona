@@ -1,8 +1,9 @@
 -module(arizona_select_value_page).
 -moduledoc """
 A live page whose selects take their choice from a `value`: written literally, from a
-list `?each`, from a stream `?each`, `multiple`, from a component, and from a child
-view (`arizona_select_value_child`). Buttons move the choice and add an option to the
+list `?each`, from a stream `?each`, `multiple`, from a component, from a child
+view (`arizona_select_value_child`), and from a `?local` under `multiple`, whole and
+interpolated. Buttons move the choice and add an option to the
 child, so the e2e can check the page loads on the chosen option and every update
 follows.
 """.
@@ -76,6 +77,22 @@ render(Bindings) ->
                 ?stateful(arizona_select_value_child, #{
                     id => ~"select-value-child", opts => ?get(child_opts)
                 })
+            ]},
+            {button, [{class, ~"set-many"}, {az_click, arizona_js:set(many, [~"c", ~"ac"])}], [
+                ~"set many"
+            ]},
+            {button, [{class, ~"set-tail"}, {az_click, arizona_js:set(tail, ~"")}], [
+                ~"set tail"
+            ]},
+            {select, [{class, ~"local-many"}, multiple, {value, ?local(many, [~"a", ~"c"])}], [
+                {option, [], [~"a"]},
+                {option, [], [~"c"]},
+                {option, [], [~"ac"]}
+            ]},
+            {select, [{class, ~"local-tail"}, multiple, {value, [~"a", ?local(tail, ~"c")]}], [
+                {option, [], [~"a"]},
+                {option, [], [~"c"]},
+                {option, [], [~"ac"]}
             ]}
         ]}
     ).

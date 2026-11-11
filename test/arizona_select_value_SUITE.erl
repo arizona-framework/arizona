@@ -61,7 +61,10 @@ and the select keeps its value for the client to apply after.
     helper_raw_value_compares_as_its_text/1,
     raw_option_value_reads_as_the_page_holds_it/1,
     raw_select_value_reads_as_the_page_holds_it/1,
-    interpolated_raw_value_reads_as_one_text/1
+    interpolated_raw_value_reads_as_one_text/1,
+    interpolated_local_value_compiles/1,
+    local_value_names_what_the_page_selects/1,
+    multiple_local_value_is_a_json_array/1
 ]).
 
 all() ->
@@ -91,7 +94,9 @@ groups() ->
             opaque_live_render_is_left_to_the_client,
             mark_choices_reads_the_fragment,
             authored_selected_follows_the_value,
-            fragment_reads_as_the_parser_preprocesses
+            fragment_reads_as_the_parser_preprocesses,
+            local_value_names_what_the_page_selects,
+            multiple_local_value_is_a_json_array
         ]},
         {diff, [parallel], [
             diff_moves_selected_to_the_new_option,
@@ -121,7 +126,8 @@ groups() ->
             helper_raw_value_compares_as_its_text,
             raw_option_value_reads_as_the_page_holds_it,
             raw_select_value_reads_as_the_page_holds_it,
-            interpolated_raw_value_reads_as_one_text
+            interpolated_raw_value_reads_as_one_text,
+            interpolated_local_value_compiles
         ]}
     ].
 
@@ -246,8 +252,11 @@ static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     ),
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each and stream ?each on `b`; the multiple select on its two;
-    %% the component and the child view on `b`.
-    ?assertEqual([~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b"], selected_values(HTML)).
+    %% the component and the child view on `b`; the `?local` multiple selects on their
+    %% initials.
+    ?assertEqual(
+        [~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b", ~"a", ~"c", ~"ac"], selected_values(HTML)
+    ).
 
 nodiff_select_marks_the_chosen_option(Config) when is_list(Config) ->
     HTML = ssr(nodiff, ~"b"),
@@ -357,8 +366,10 @@ opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     ),
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each, stream ?each, the multiple select, then the component
-    %% and the child view.
-    ?assertEqual([~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c"], selected_values(HTML), HTML).
+    %% and the child view, and the `?local` multiple selects.
+    ?assertEqual(
+        [~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c", ~"a", ~"c", ~"ac"], selected_values(HTML), HTML
+    ).
 
 %% A live render, outside a page or inside a live process alike, leaves the options a
 %% component renders to the client: the select carries its value, and nothing is left
@@ -1291,9 +1302,136 @@ interpolated_raw_value_reads_as_one_text(Config) when is_list(Config) ->
     ),
     ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"a&amp;b\""), HTML).
 
+%% A `?local` interpolated with static text is one text, the statics client-side
+%% affixes: a select holding an option the transform cannot see keeps them literal.
+interpolated_local_value_compiles(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Multiple, Value}) ->
+            M = compile_module(
+                raw_src(
+                    Mod,
+                    [Multiple, "{value, [~\"a\", arizona_template:local(k, ~\"c\")]}"],
+                    local_options(opaque)
+                )
+            ),
+            HTML = ssr_picked([~"ac"], M, #{}),
+            ?assertEqual(Value, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [~"a", ~""]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [{"sel_interp_local", "", ~"ac"}, {"sel_interp_local_m", "multiple, ", ~"[\"ac\"]"}]
+    ).
+
+%% Whatever the shape of a `?local` value -- whole or interpolated, a select whose
+%% options are all marked in the template or one holding an option only the SSR
+%% render marks -- the value the select carries names exactly the options the page
+%% selects, so the client applying it at load moves nothing.
+local_value_names_what_the_page_selects(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Multiple, Value, Options, Picked}}) ->
+            Mod = "sel_local_" ++ integer_to_list(N),
+            M = compile_module(raw_src(Mod, [Multiple, "{value, ", Value, "}"], Options)),
+            HTML = ssr_picked(Picked, M, #{x => ~"c", xs => [~"a", ~"c"]}),
+            ?assertEqual(Picked, value_picks(HTML), {Mod, HTML})
+        end,
+        lists:enumerate(
+            [
+                {"", W, local_options(Kind), Picked}
+             || Kind <- [literal, opaque],
+                {W, Picked} <- [
+                    {"arizona_template:local(k, ~\"ac\")", [~"ac"]},
+                    {"[~\"a\", arizona_template:local(k, ~\"c\")]", [~"ac"]},
+                    {"[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]", [
+                        ~"ac"
+                    ]}
+                ]
+            ] ++
+                [
+                    {"multiple, ", W, local_options(Kind), Picked}
+                 || Kind <- [literal, opaque],
+                    {W, Picked} <- [
+                        {"arizona_template:local(k, [~\"a\", ~\"c\"])", [~"a", ~"c"]},
+                        {"arizona_template:local(k, ~\"ac\")", [~"ac"]},
+                        {"[~\"a\", arizona_template:local(k, ~\"c\")]", [~"ac"]},
+                        {"[arizona_template:local(k, ~\"a\"), ~\"c\"]", [~"ac"]},
+                        {"arizona_template:local(k, arizona_template:get(xs, Bindings))", [
+                            ~"a", ~"c"
+                        ]},
+                        {"[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]", [
+                            ~"ac"
+                        ]}
+                    ]
+                ]
+        )
+    ).
+
+%% Under `multiple` the value is the JSON array of the texts it picks on every path:
+%% a whole `?local` holds the list of picks (or one pick), and an interpolated one
+%% is one pick, its static parts included.
+multiple_local_value_is_a_json_array(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Value, Kind, Json}}) ->
+            Mod = "sel_local_json_" ++ integer_to_list(N),
+            M = compile_module(
+                raw_src(Mod, ["multiple, {value, ", Value, "}"], local_options(Kind))
+            ),
+            HTML = ssr_html(M, #{}),
+            ?assertEqual(Json, select_value(HTML), {Mod, HTML})
+        end,
+        lists:enumerate([
+            {V, Kind, Json}
+         || Kind <- [literal, opaque],
+            {V, Json} <- [
+                {"arizona_template:local(k, [~\"a\", ~\"c\"])", ~"[\"a\",\"c\"]"},
+                {"arizona_template:local(k, ~\"a&b\")", ~"[\"a&b\"]"},
+                {"[~\"a\", arizona_template:local(k, ~\"c\")]", ~"[\"ac\"]"}
+            ]
+        ])
+    ).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+%% Options named `a`, `c` and `ac`: written literally, or the last two in raw markup
+%% the transform cannot see into.
+local_options(literal) ->
+    "{option, [], [~\"a\"]}, {option, [], [~\"c\"]}, {option, [], [~\"ac\"]}";
+local_options(opaque) ->
+    "{option, [], [~\"a\"]}, "
+    "arizona_template:raw(~\"<option>c</option><option>ac</option>\")".
+
+%% The text the page's select holds as its `value`, the HTML parser's reading.
+select_value(HTML) ->
+    case re:run(HTML, ~"<select[^>]* value=\"([^\"]*)\"", [{capture, all_but_first, binary}]) of
+        {match, [V]} -> unescape_attr(V);
+        nomatch -> none
+    end.
+
+%% The options a select's `value` names, read as the client reads it: under
+%% `multiple` a JSON array of texts, else one text.
+value_picks(HTML) ->
+    V = select_value(HTML),
+    case re:run(HTML, ~"<select[^>]* multiple[ >]") of
+        {match, _} -> json:decode(V);
+        nomatch -> [V]
+    end.
+
+local_descriptor(HTML) ->
+    {match, [D]} = re:run(
+        HTML, ~"<select[^>]* az-local=\"([^\"]*)\"", [{capture, all_but_first, binary}]
+    ),
+    json:decode(unescape_attr(D)).
+
+unescape_attr(V) ->
+    lists:foldl(
+        fun({From, To}, Acc) -> binary:replace(Acc, From, To, [global]) end,
+        V,
+        [{~"&quot;", ~"\""}, {~"&lt;", ~"<"}, {~"&gt;", ~">"}, {~"&amp;", ~"&"}]
+    ).
 
 shapes() ->
     [

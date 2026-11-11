@@ -126,7 +126,12 @@ keeping a raw value keeps that decoded text. A raw a helper returns renders esca
 as its text, references and all. Under `multiple` each part of a literal list holding a `?raw` is
 its own pick, compared alone.
 `multiple` counts as present whatever it holds but `false`, as the attribute renders. A `?local`
-value stays on the select for the client to move, and the page loads on its initial. An `?each`
+value stays on the select for the client to move, and the page loads on its initial. A whole
+`?local` holds the value; an interpolated one (`[~"user-", ?local(id, ~"1")]`) is one text, its
+static parts the client-side affixes, so under `multiple` it is **one** pick, not a list of its
+parts -- a list of picks is a whole `?local` holding the list (`?local(k, [~"a", ~"c"])`). Under
+`multiple` the select's `value` is the JSON array of the texts it picks on every path: the SSR
+attribute, a `?local`'s initial, and the client's `set` (a list is the picks, anything else one). An `?each`
 callback parameter shadowing a name the value reads is renamed; a hoisted value whose definition
 reads such a name is `hoisted_var_captured`, as any hoisted read there. The one refusal is an option
 that also writes `selected` (`select_value`, `option_selected`): the value already decides it. The
