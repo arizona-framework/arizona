@@ -669,6 +669,19 @@ describe('applyOps -- a select that kept its value', () => {
     // Options sharing a value: the last one the value names is the one selected, as
     // the parser picks the last `selected` option (the `.value` setter would pick the
     // first).
+    // An update that inserts an option sharing the value before the selected one: the
+    // last of them stays selected, as a reload of the same markup would show.
+    it('keeps the last of options sharing the value when an earlier one arrives', () => {
+        setupView(
+            'v',
+            '<select value="x"><optgroup az="0"><!--az:0--><!--/az--></optgroup>' +
+                '<option value="a">a</option><option value="x" selected>x2</option></select>',
+        );
+        applyOps([[OP.TEXT, 'v:0', '<option value="x">x0</option>', true]]);
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        expect(sel.options[sel.selectedIndex].text).toBe('x2');
+    });
+
     it('selects the last of options sharing the value', () => {
         setupView(
             'v',

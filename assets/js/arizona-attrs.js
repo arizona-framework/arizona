@@ -108,11 +108,24 @@ function isChooserValue(el, name) {
 export function applyChooser(sel, force) {
     const raw = sel.getAttribute('value');
     const picks = raw === null ? [] : chooserPicks(sel, raw);
+    /** @type {HTMLOptionElement|null} */
+    let last = null;
+    let wrote = false;
     for (const o of sel.options) {
         const on = picks.includes(o.value);
-        if (o.defaultSelected !== on) o.defaultSelected = on;
+        if (on) last = o;
+        if (o.defaultSelected !== on) {
+            o.defaultSelected = on;
+            wrote = true;
+        }
         if (force && o.selected !== on) o.selected = on;
     }
+    // Marking an option selects it, so one sharing the value that arrives before the
+    // selected one would take over; the parser selects the last. A selection on another
+    // option (the user's) is left alone.
+    const now = sel.options[sel.selectedIndex];
+    if (wrote && last && !sel.multiple && now && now !== last && picks.includes(now.value))
+        last.selected = true;
 }
 
 /**
