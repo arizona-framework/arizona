@@ -102,12 +102,13 @@ dynamic `{multiple, ?get(m)}`) the value is a list of values. Options written li
 inlined local helper (`?MODULE:` qualified too) or a hoisted variable are all reached; an option
 without a `value` is valued by its text, whitespace stripped and collapsed: static text folds at
 compile time, and text holding a value (`{option, [], [?get(label)]}`, an `?each` item) compares
-`arizona_template:option_text/1` of its children, an ordinary tracked attribute too (a template
-among them has no text to compare: `option_text_markup`, give the option a `value`). When every
+`arizona_template:choice_text/2` of its children, an ordinary tracked attribute too; a value there
+that renders markup (a template, a `?stateless` component) adds the text it shows, tags left out, as
+the option's `text` reads it, and a `?stateful` there is `stateful_in_text`. When every
 option is reached the select emits no `value`. An option the transform cannot see -- from a
 `?stateless`/`?stateful` component, a remote or non-inlined helper, a runtime value, or
 `?raw`/static markup (an option's static text holding a tag included; a character reference in it is
-decoded at compile time through the backend's `static_text/1`, so such an option stays static) --
+decoded at compile time through the backend's `markup_text/1`, so such an option stays static) --
 still works. Each such child is wrapped (`arizona_template:choices/3`): the SSR render renders it in
 place and the backend marks `selected`, in that child's output alone, the options the value names
 (`arizona_renderer:mark_choices/2`; for HTML a tokenizer pass that skips attribute values, comments,

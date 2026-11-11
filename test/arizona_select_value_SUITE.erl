@@ -47,7 +47,7 @@ and the select keeps its value for the client to apply after.
     option_with_runtime_text_compiles/1,
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
-    runtime_text_option_refuses_markup/1,
+    runtime_text_option_valued_by_its_markup/1,
     authored_selected_is_refused/1,
     shadowing_parameter_is_renamed/1,
     shadowing_hoisted_read_is_refused/1,
@@ -92,6 +92,7 @@ groups() ->
             stream_item_update_keeps_selection,
             runtime_text_option_diffs,
             runtime_text_option_in_each_row,
+            runtime_text_option_valued_by_its_markup,
             opaque_diff_ships_the_value,
             opaque_each_keeps_its_item_diff
         ]},
@@ -99,7 +100,6 @@ groups() ->
             opaque_child_compiles,
             opaque_child_is_marked_in_its_own_slot,
             option_with_runtime_text_compiles,
-            runtime_text_option_refuses_markup,
             authored_selected_is_refused,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
@@ -796,17 +796,56 @@ option_with_runtime_text_compiles(Config) when is_list(Config) ->
     {Live, _Snap, _Views} = arizona_render:render(Mod:render(B), #{}),
     ?assertEqual(1, count_selected(iolist_to_binary(Live))).
 
-%% An option's text is text: a template there has no value the server can compare,
-%% so the render says to give the option a value attribute.
-runtime_text_option_refuses_markup(Config) when is_list(Config) ->
+%% A child of a runtime-text option that renders markup values the option by the
+%% text that markup shows, tags left out, character references decoded and
+%% whitespace collapsed, as the browser reads it: still an ordinary `selected`, so the
+%% SSR, the live render and a diff agree, and the select keeps no value.
+runtime_text_option_valued_by_its_markup(Config) when is_list(Config) ->
     Mod = compile_module(
-        select_src_mod("sel_text_markup", "{option, [], [arizona_template:get(label, Bindings)]}")
+        "-module(sel_text_markup). -export([render/1, label/1, card/1]). "
+        "render(Bindings) -> arizona_template:target(arizona_html, {select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [], [~\"Pick \", arizona_template:get(label, Bindings)]}, "
+        "{option, [], [~\"y\"]}]}). "
+        "label(T) -> arizona_template:target(arizona_html, "
+        "{b, [{title, ~\"no\"}], [~\" \", T, ~\"&amp;!\"]}). "
+        "card(Bindings) -> arizona_template:target(arizona_html, "
+        "{i, [], [arizona_template:get(t, Bindings)]}). "
     ),
-    Label = arizona_select_value:option_items(#{opts => [~"a"]}),
+    Label = Mod:label(~"A<B"),
+    B0 = #{v => ~"Pick A<B&!", label => Label},
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    ?assertMatch({match, _}, re:run(SSR, ~"<option[^>]* selected>Pick "), SSR),
+    ?assertEqual(1, count_selected(SSR), SSR),
+    ?assertEqual(nomatch, re:run(SSR, ~"<select[^>]* value[ =>]"), SSR),
+    Miss = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0#{v => ~"A<B&!"}))),
+    ?assertEqual(0, count_selected(Miss), Miss),
+    %% A component renders markup too.
+    Card = arizona_template:stateless(fun Mod:card/1, #{t => ~"C&D"}),
+    CardHTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{v => ~"Pick C&D", label => Card}))
+    ),
+    ?assertEqual(1, count_selected(CardHTML), CardHTML),
+    %% A live view's text would mean mounting it again, outside the view tree.
+    Child = arizona_template:stateful(arizona_select_value_child, #{id => ~"c", opts => [~"a"]}),
     ?assertError(
-        {arizona_loc, _, {option_text_markup, _}},
-        arizona_render:render_to_iolist(Mod:render(#{v => ~"a", label => Label}))
-    ).
+        {arizona_loc, _, {stateful_in_text, arizona_select_value_child}},
+        arizona_render:render_to_iolist(Mod:render(#{v => ~"a", label => Child}))
+    ),
+    #{general := Message} = arizona_render:format_error(
+        {stateful_in_text, arizona_select_value_child}, []
+    ),
+    ?assertNotEqual(nomatch, string:find(Message, "arizona_select_value_child"), Message),
+    {Live, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(Live), ~"<option[^>]* selected>Pick "), Live),
+    ?assertEqual(1, count_selected(iolist_to_binary(Live))),
+    B1 = B0#{label => Mod:label(~"Z")},
+    {Ops1, Snap1, V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, #{label => true}),
+    ?assertEqual([{remove, ~"selected"}], attr_ops(Ops1), Ops1),
+    {Ops2, _Snap2, _} = arizona_diff:diff(
+        Mod:render(B1#{v => ~"Pick Z&!"}), Snap1, V1, #{v => true}
+    ),
+    ?assertEqual([{set, ~"selected"}], attr_ops(Ops2), Ops2).
 
 authored_selected_is_refused(Config) when is_list(Config) ->
     Conflict = fun
@@ -916,8 +955,9 @@ values_compare_as_the_parser_reads_them(Config) when is_list(Config) ->
     ),
     ?assertEqual([~"a\nb"], arizona_template:picks(~"a\r\nb", false)),
     %% A NUL in text is dropped by the tree builder, on every path that reads text.
-    ?assertEqual({ok, ~"ab"}, arizona_html:static_text(<<"a", 0, "b">>)),
-    ?assertEqual(~"ab", arizona_template:option_text([<<"a", 0>>, ~"b"])).
+    ?assertEqual({text, ~"ab"}, arizona_html:markup_text(<<"a", 0, "b">>)),
+    ?assertEqual({markup, ~"ab"}, arizona_html:markup_text(<<"<b>a", 0, "</b>b">>)),
+    ?assertEqual(~"ab", arizona_template:choice_text(arizona_html, [<<"a", 0>>, ~"b"])).
 
 %% --------------------------------------------------------------------
 %% Helpers

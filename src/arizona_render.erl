@@ -55,6 +55,9 @@ op-code targets.
 %% Set while a layout layer renders (see render_layout/3).
 -define(IN_LAYOUT, '$arizona_in_layout').
 
+%% Set while a value renders for its text to be read (see render_markup/2).
+-define(IN_TEXT, '$arizona_in_text').
+
 %% Set whenever a fingerprint wire payload is built in this process (see
 %% note_fp_payload/0 / drain_fp_note/0).
 -define(FP_NOTE, '$arizona_fp_payload').
@@ -77,6 +80,7 @@ op-code targets.
 -export([render_view/2]).
 -export([render_view/3]).
 -export([current_layout/0]).
+-export([render_markup/2]).
 -export([resolve_id/1]).
 -export([zip/2]).
 -export([zip_item/2]).
@@ -609,6 +613,16 @@ format_error({multi_root_layout, Mod, Fun, Backend}, _ST) ->
             [Mod, Fun, macro_of(Backend), macro_of(Backend), macro_of(Backend)]
         )
     };
+format_error({stateful_in_text, Handler}, _ST) ->
+    #{
+        general => io_lib:format(
+            "?stateful(~s, ...) renders in the text of a choice valued by its text, so "
+            "reading that text would mount the component a second time, outside the "
+            "live view tree, subscribing and arming its timers twice. Give the choice "
+            "its value as an attribute, or render the text with ?stateless.",
+            [Handler]
+        )
+    };
 format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
     #{
         general => io_lib:format(
@@ -769,6 +783,27 @@ render_layout(Mod, Fun, Tmpl) ->
         erlang:erase(?IN_LAYOUT)
     end.
 
+-doc """
+What `Value`, a content value holding markup (a template, a component), renders as
+in the SSR form, for its text to be read: the value of a choice valued by its text
+(`arizona_template:choice_text/2`), on the SSR, live and diff paths alike. A
+`?stateful` in it raises `stateful_in_text`: reading its text would mount it a second
+time, outside the view tree.
+""".
+-spec render_markup(Backend, Value) -> iodata() when
+    Backend :: module(),
+    Value :: term().
+render_markup(Backend, Value) ->
+    Outer = erlang:put(?IN_TEXT, true),
+    try
+        render_dyn(Backend, render_ssr_val(Backend, Value))
+    after
+        case Outer of
+            undefined -> erlang:erase(?IN_TEXT);
+            true -> true
+        end
+    end.
+
 %% A layout renders once at SSR, outside any live process, so nothing it renders
 %% is registered in the live `views` map. The `az-view` marker is baked into a
 %% stateful module's compiled statics, so it cannot be stripped here -- and the
@@ -783,6 +818,20 @@ refuse_stateful_in_layout(H) ->
             erlang:error(
                 {stateful_in_layout, Mod, Fun, H}, none, [{error_info, #{module => ?MODULE}}]
             )
+    end.
+
+refuse_stateful(H) ->
+    ok = refuse_stateful_in_layout(H),
+    refuse_stateful_in_text(H).
+
+%% A live process already mounts the component where the slot renders it, and mount/1
+%% runs connected there, so a second mount would subscribe and arm timers twice.
+refuse_stateful_in_text(H) ->
+    case erlang:get(?IN_TEXT) of
+        undefined ->
+            ok;
+        true ->
+            erlang:error({stateful_in_text, H}, none, [{error_info, #{module => ?MODULE}}])
     end.
 
 %% Triple walker -- like zip/3 but consumes `[{Az, V, Deps}]` directly
@@ -894,7 +943,7 @@ render_ssr_val(Backend, #{
          || K := V <- Source
         ])};
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
-    ok = refuse_stateful_in_layout(H),
+    ok = refuse_stateful(H),
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
     %% Enforce restricted keys (e.g. `id`) at SSR too -- the live child-mount path
     %% (arizona_eval:fresh_mount_stateful) already does, so a handler that rewrites

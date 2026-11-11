@@ -7496,9 +7496,9 @@ rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
 
 %% A choice without a value is valued by its text, as the browser values an option:
 %% whitespace stripped and collapsed. Static text is folded here; text holding a
-%% value is computed where the attribute renders (arizona_template:option_text/1),
-%% so it tracks and diffs like any attribute. Markup in it has no text the compiler
-%% can see (`error`, an opaque child).
+%% value is computed where the attribute renders (arizona_template:choice_text/2),
+%% so it tracks and diffs like any attribute, markup a value renders included. Markup
+%% written in it has no text the compiler can see (`error`, an opaque child).
 choice_value(Backend, ValueName, Attrs, Rest) ->
     case take_attr(Backend, ValueName, Attrs) of
         {ok, {tuple, _, [_Name, {atom, _, false}]}, _Others} ->
@@ -7528,7 +7528,7 @@ choice_text(Backend, [Children]) ->
                 Texts when length(Texts) =:= length(Parts) ->
                     {ok, ast_binary(collapse_ws(iolist_to_binary(Texts)))};
                 _Computed ->
-                    {ok, option_text_call([part_ast(P) || P <- Parts], anno(Children))}
+                    {ok, choice_text_call(Backend, [part_ast(P) || P <- Parts], anno(Children))}
             end
     end.
 
@@ -7541,11 +7541,11 @@ text_part(Backend, Item) ->
         false -> computed_text_part(Item)
     end.
 
-%% The backend reads its own markup (arizona_renderer:static_text/1): the text it
-%% shows, character references decoded, or `error` when it holds a tag.
+%% The backend reads its own markup (arizona_renderer:markup_text/1): the text it
+%% shows, character references decoded, unless it holds a tag.
 static_text_part(Backend, Markup) ->
-    case erlang:function_exported(Backend, static_text, 1) andalso Backend:static_text(Markup) of
-        {ok, Text} -> {text, Text};
+    case erlang:function_exported(Backend, markup_text, 1) andalso Backend:markup_text(Markup) of
+        {text, Text} -> {text, Text};
         _Markup -> markup
     end.
 
@@ -7565,8 +7565,10 @@ value_text_part(Item) ->
 part_ast({text, Text}) -> ast_binary(Text);
 part_ast({value, AST}) -> AST.
 
-option_text_call(Parts, L) ->
-    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, option_text}}, [ast_list(Parts)]}.
+choice_text_call(Backend, Parts, L) ->
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, choice_text}}, [
+        {atom, L, Backend}, ast_list(Parts)
+    ]}.
 
 collapse_ws(Text) ->
     Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),

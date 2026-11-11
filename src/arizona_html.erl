@@ -40,7 +40,7 @@ identical to the previous inlined emission.
 -export([implied_attrs/2]).
 -export([selection_role/1]).
 -export([mark_choices/2]).
--export([static_text/1]).
+-export([markup_text/1]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -396,14 +396,17 @@ selection_role(Tag) ->
             none
     end.
 
--spec static_text(binary()) -> {ok, binary()} | error.
-%% Static content is spliced as markup: its text is what the parser makes of it,
-%% references decoded, unless it opens a tag (or anything else `<` starts).
-static_text(Markup) ->
-    case binary:match(Markup, ~"<") of
-        %% The tree builder drops a NUL in text, as option text does (mark_option/5).
-        nomatch -> {ok, decode_refs(binary:replace(Markup, <<0>>, <<>>, [global]), text)};
-        _Tag -> error
+-spec markup_text(iodata()) -> {text | markup, binary()}.
+%% What markup in an option shows as its text (option_text/3): tags and comments left
+%% out, references decoded. Static content holding anything `<` starts is `markup`, as
+%% it can end the option and open others (mark_choices/2 reads those).
+markup_text(Markup) ->
+    Bin = iolist_to_binary(Markup),
+    %% The tree builder drops a NUL in text, as option text does (mark_option/5).
+    Text = binary:replace(option_text(Bin, 0, []), <<0>>, <<>>, [global]),
+    case binary:match(Bin, ~"<") of
+        nomatch -> {text, Text};
+        _Tag -> {markup, Text}
     end.
 
 -spec mark_choices(iodata(), [binary()]) -> iodata().

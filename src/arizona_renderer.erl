@@ -261,18 +261,24 @@ Optional, and required of a backend that implements `selection_role/1`.
 -callback mark_choices(Fragment :: iodata(), Picks :: [binary()]) -> iodata().
 
 -doc """
-The text static markup of this backend shows, read at compile time: a choice valued by
-its text (`selection_role/1`) whose text is a static binary, which is spliced as markup,
-is valued by what it shows. `error` when the markup holds anything but text (a tag),
-which the parse transform then leaves for `mark_choices/2`. For HTML: the text with its
-character references decoded as the parser decodes them.
+The text `Markup` of this backend shows as the text of a choice valued by its text
+(`selection_role/1`), and whether it holds markup syntax. Read at compile time for a
+static binary in such a choice, which is spliced as markup: `{text, Text}` folds to the
+choice's value, while `{markup, _}` (a tag) is left for `mark_choices/2`, since static
+markup can end the choice and open others. Read at render time for a value there that
+renders markup (a template, a component; `arizona_render:render_markup/2`), whose
+`Text` the choice's value takes either way (`arizona_template:choice_text/2`), so the
+comparison stays an ordinary attribute that renders, tracks and diffs. For HTML: what
+the option's `text` reads, tags and comments left out, character references decoded,
+up to what would end the option.
 
-Optional, beside `selection_role/1`; without it static text holding markup syntax is
-left for `mark_choices/2`.
+Optional, and required of a backend that implements `selection_role/1` for a choice
+whose text holds a value rendering markup; without it static text holding markup
+syntax is left for `mark_choices/2`.
 """.
--callback static_text(Markup :: binary()) -> {ok, binary()} | error.
+-callback markup_text(Markup :: iodata()) -> {text | markup, binary()}.
 
--optional_callbacks([selection_role/1, mark_choices/2, static_text/1]).
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/1]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for

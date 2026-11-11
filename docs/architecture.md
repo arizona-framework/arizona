@@ -276,10 +276,14 @@ item as it compiles (`compile_each_clause/11`). A template compiled before the c
 counts as reached only when every option element in its statics carries a `chosen/3` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
-stripped and collapsed): static text folds at compile time (read through the optional
-`c:arizona_renderer:static_text/1`, which decodes its character references), and text holding a
-value compares `arizona_template:option_text/1` of the children, so it tracks and diffs like the
-value case.
+stripped and collapsed). Both kinds of text are read through the backend's optional
+`c:arizona_renderer:markup_text/1` (for HTML what the option's `text` reads: tags and comments left
+out, character references decoded, up to what would end the option). Static text folds at compile
+time when it holds no markup syntax. Text holding a value compares `arizona_template:choice_text/2`
+of the children, so it tracks and diffs like the value case; a value there that renders markup (a
+template, a `?stateless` component) is rendered in the SSR form (`arizona_render:render_markup/2`)
+and adds the text it shows, on the SSR, live and diff paths alike. A `?stateful` there is
+`stateful_in_text`: reading its text would mount it a second time, outside the view tree.
 
 What the transform cannot reach -- a `?stateless`/`?stateful` component, a remote or non-inlined
 helper, a runtime value, `?raw` or static markup, an option valued by markup -- still renders under

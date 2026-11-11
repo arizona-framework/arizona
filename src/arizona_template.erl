@@ -55,7 +55,7 @@ render(Bindings) ->
 -export([track/1]).
 -export([chosen/3]).
 -export([chooser_value/2]).
--export([option_text/1]).
+-export([choice_text/2]).
 -export([choices/3]).
 -export([picks/2]).
 -export([attr_input/1]).
@@ -112,7 +112,7 @@ render(Bindings) ->
 -ignore_xref([chooser_value/2]).
 %% Emitted by the parse transform as the value of an option without one whose text
 %% holds a runtime value, under a valued select.
--ignore_xref([option_text/1]).
+-ignore_xref([choice_text/2]).
 %% Emitted by the parse transform around a child of a valued select it cannot see into.
 -ignore_xref([choices/3]).
 
@@ -523,34 +523,36 @@ choices(Picks, Esc, Child) ->
     #{choices => Picks, esc => Esc, child => Child}.
 
 -doc """
-The value of a choice valued by its text: the text its children render, ASCII
-whitespace stripped and collapsed, as the browser values an `<option>` without a
-`value` attribute. `Parts` are the children in order, literal text as binaries and
-the rest as the values their content slots render (escaped there, so the text is the
-value itself; a `raw/1` from a helper is escaped too).
+The value of a choice valued by its text (`c:arizona_renderer:selection_role/1`): the
+text its children render, ASCII whitespace stripped and collapsed. `Parts` are the
+children in order, literal text as binaries and the rest as the values their content
+slots render (escaped there, so the text is the value itself; a `raw/1` from a helper
+is escaped too). A value that renders markup (a template, a component) adds the text
+that markup shows, as `Backend` reads it (`c:arizona_renderer:markup_text/1`) from
+what it renders (`arizona_render:render_markup/2`).
 
-The parse transform calls it inside `chosen/3` for an option whose text holds a
-value, so the comparison renders, tracks and diffs like any attribute. A template or
-component among the children renders markup, which has no text the server can
-compare: that raises `option_text_markup`; give the option a `value` attribute.
+The parse transform calls it inside `chosen/3` for a choice whose text holds a value,
+so the comparison renders, tracks and diffs like any attribute.
 """.
--spec option_text(Parts) -> binary() when
+-spec choice_text(Backend, Parts) -> binary() when
+    Backend :: module(),
     Parts :: [term()].
-option_text(Parts) ->
-    %% The tree builder drops a NUL in text; splitting folds CR away.
-    Text = binary:replace(iolist_to_binary([option_text_part(P) || P <- Parts]), <<0>>, <<>>, [
-        global
-    ]),
+choice_text(Backend, Parts) ->
+    %% A NUL in text is dropped; splitting folds CR away.
+    Text = binary:replace(
+        iolist_to_binary([choice_text_part(Backend, P) || P <- Parts]), <<0>>, <<>>, [global]
+    ),
     Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
     iolist_to_binary(lists:join(~" ", Words)).
 
-option_text_part(Part) when is_binary(Part) ->
+choice_text_part(_Backend, Part) when is_binary(Part) ->
     Part;
-option_text_part(Part) when is_map(Part) ->
-    erlang:error({option_text_markup, Part}, [Part], [{error_info, #{module => ?MODULE}}]);
-option_text_part(Part) ->
+choice_text_part(Backend, Part) when is_map(Part) ->
+    {_Kind, Text} = Backend:markup_text(arizona_render:render_markup(Backend, Part)),
+    Text;
+choice_text_part(Backend, Part) ->
     case classify_trusted(Part) of
-        {raw, V} -> option_text_part(V);
+        {raw, V} -> choice_text_part(Backend, V);
         _Text -> to_bin(Part)
     end.
 
@@ -670,16 +672,6 @@ format_error({effect_in_content, V}) ->
             "runs a command there. Put the command itself in an event attribute's value "
             "(e.g. {az_click, Cmd}), or return it from a handler. To show a command as "
             "text, encode it explicitly: arizona_effect:encode_json(Cmd)",
-            [V]
-        )
-    );
-format_error({option_text_markup, V}) ->
-    lists:flatten(
-        io_lib:format(
-            "an <option> without a value attribute is valued by its text, and this child "
-            "renders markup (~0tp), whose text the server cannot compare against the "
-            "select's value. Give the option a value attribute, e.g. "
-            "{option, [{value, Id}], [Label]}",
             [V]
         )
     );
