@@ -17,6 +17,7 @@
 -export([set_attr_refuses_a_command_under_another_name/1]).
 -export([toggle_attr_toggles_between_commands/1]).
 -export([toggle_attr_refuses_a_command_and_a_string/1]).
+-export([toggle_attr_refuses_commands_under_another_name/1]).
 
 all() ->
     [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
@@ -39,7 +40,8 @@ groups() ->
             set_attr_keeps_a_binary_value_a_string,
             set_attr_refuses_a_command_under_another_name,
             toggle_attr_toggles_between_commands,
-            toggle_attr_refuses_a_command_and_a_string
+            toggle_attr_refuses_a_command_and_a_string,
+            toggle_attr_refuses_commands_under_another_name
         ]}
     ].
 
@@ -164,9 +166,11 @@ set_attr_keeps_a_binary_value_a_string(Config) when is_list(Config) ->
 
 %% Only an `az-*` attribute runs a command; anywhere else its JSON is just text.
 set_attr_refuses_a_command_under_another_name(Config) when is_list(Config) ->
-    ?assertError(
-        function_clause, arizona_js:set_attr(~"#x", ~"title", arizona_js:push_event(~"a"))
-    ).
+    Message = formatted_error(fun() ->
+        arizona_js:set_attr(~"#x", ~"title", arizona_js:push_event(~"a"))
+    end),
+    ?assertNotEqual(nomatch, string:find(Message, ~"a command value needs an az-* attribute")),
+    ?assertNotEqual(nomatch, string:find(Message, ~"title")).
 
 toggle_attr_toggles_between_commands(Config) when is_list(Config) ->
     Cmd = arizona_js:toggle_attr(
@@ -186,7 +190,47 @@ toggle_attr_toggles_between_commands(Config) when is_list(Config) ->
 %% A command and a string would leave the client unable to say whether the
 %% name it writes carries commands.
 toggle_attr_refuses_a_command_and_a_string(Config) when is_list(Config) ->
-    ?assertError(
-        function_clause,
-        arizona_js:toggle_attr(~"#x", ~"az-click", arizona_js:push_event(~"a"), ~"[0,\"b\"]")
+    Expected = ~"toggle_attr values must both be binaries or both commands",
+    ?assertNotEqual(
+        nomatch,
+        string:find(
+            formatted_error(fun() ->
+                arizona_js:toggle_attr(
+                    ~"#x", ~"az-click", arizona_js:push_event(~"a"), ~"[0,\"b\"]"
+                )
+            end),
+            Expected
+        )
+    ),
+    ?assertNotEqual(
+        nomatch,
+        string:find(
+            formatted_error(fun() ->
+                arizona_js:toggle_attr(~"#x", ~"title", ~"a", arizona_js:push_event(~"b"))
+            end),
+            Expected
+        )
     ).
+
+toggle_attr_refuses_commands_under_another_name(Config) when is_list(Config) ->
+    Message = formatted_error(fun() ->
+        arizona_js:toggle_attr(
+            ~"#x", ~"title", arizona_js:push_event(~"a"), arizona_js:push_event(~"b")
+        )
+    end),
+    ?assertNotEqual(nomatch, string:find(Message, ~"a command value needs an az-* attribute")),
+    ?assertNotEqual(nomatch, string:find(Message, ~"title")).
+
+%% --------------------------------------------------------------------
+%% Helpers
+%% --------------------------------------------------------------------
+
+%% The message `erl_error` renders for the error `Fun` raises, through the
+%% raise site's `error_info` annotation.
+formatted_error(Fun) ->
+    try Fun() of
+        Result -> error({no_error, Result})
+    catch
+        error:Reason:Stacktrace ->
+            unicode:characters_to_binary(erl_error:format_exception(error, Reason, Stacktrace))
+    end.

@@ -103,12 +103,14 @@ engine, which is authoritative for what a view shows.
 -export([exit_pip/1]).
 -export([transition/1]).
 -export([transition/2]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
 -ignore_xref([
+    format_error/2,
     push_event/1,
     push_event/2,
     toggle/1,
@@ -233,7 +235,9 @@ otherwise use the name, `set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing
 set_attr(Sel, Attr, Val) when is_binary(Val) ->
     {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]};
 set_attr(Sel, <<"az-", _/binary>> = Attr, Cmds) ->
-    {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Cmds)]}.
+    {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Cmds)]};
+set_attr(_Sel, Attr, Cmds) when is_binary(Attr), is_tuple(Cmds); is_binary(Attr), is_list(Cmds) ->
+    attr_error({command_needs_az_attr, set_attr, Attr}).
 
 -doc "Removes an attribute from all elements matching the selector.".
 -spec remove_attr(Selector, Attr) -> arizona_effect:cmd() when
@@ -275,7 +279,11 @@ toggle_attr(Sel, <<"az-", _/binary>> = Attr, A, B) when not is_binary(A), not is
         Attr,
         arizona_effect:nest(deferred, A),
         arizona_effect:nest(deferred, B)
-    ]}.
+    ]};
+toggle_attr(_Sel, Attr, A, B) when is_binary(Attr), is_binary(A) xor is_binary(B) ->
+    attr_error({mixed_toggle_values, Attr});
+toggle_attr(_Sel, Attr, A, B) when is_binary(Attr), not is_binary(A), not is_binary(B) ->
+    attr_error({command_needs_az_attr, toggle_attr, Attr}).
 
 -doc "Dispatches a custom DOM event with a payload.".
 -spec dispatch_event(Name, Payload) -> arizona_effect:cmd() when
@@ -620,9 +628,39 @@ CSS), letting one stylesheet pick a different animation per call.
 transition(Cmds, Opts) ->
     {arizona_effect, [?EFFECT_TRANSITION, Opts, arizona_effect:nest(now, Cmds)]}.
 
+-doc """
+Formats the errors this module raises with an `error_info` annotation. Picked up
+by `erl_error:format_exception/3`.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({command_needs_az_attr, Fun, Attr}, _Stacktrace) ->
+    #{
+        general => io_lib:format(
+            "~ts: a command value needs an az-* attribute name, got ~tp: only an az-* "
+            "attribute runs a command, anywhere else its JSON is just text",
+            [Fun, Attr]
+        )
+    };
+format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
+    #{
+        general => io_lib:format(
+            "toggle_attr values must both be binaries or both commands (attribute ~tp): "
+            "the client could not tell whether the name it writes carries commands",
+            [Attr]
+        )
+    }.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+-spec attr_error(Reason) -> no_return() when
+    Reason :: term().
+attr_error(Reason) ->
+    erlang:error(Reason, none, [{error_info, #{module => ?MODULE}}]).
 
 encode_key(Key) when is_atom(Key) -> [Key];
 encode_key(Keys) when is_list(Keys) -> Keys;
