@@ -4052,14 +4052,17 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'note')).toBe(null);
     });
 
-    // An input whose `value` is not live (a hidden one reflects the attribute) reads
-    // the attribute as before.
+    // A `value` that is not live (a hidden input's reflects the attribute, an `<li>`'s
+    // coerces it) reads the attribute as before.
     it('reads the attribute of an interpolated value that is not live', () => {
         setupView(
             'v',
-            `<input type="hidden" az="0" az-local='{"a":{"value":"id"},"ap":{"value":["u-",""]}}' value="u-1" />`,
+            `<input type="hidden" az="0" az-local='{"a":{"value":"id"},"ap":{"value":["u-",""]}}' value="u-1" />` +
+                `<ol><li az="1" az-local='{"a":{"value":"n"},"ap":{"value":["",""]}}' value="7x"></li></ol>`,
         );
         expect(get('v', 'id')).toBe('1');
+        // `<li>`'s `value` property is a number, coerced from the attribute.
+        expect(get('v', 'n')).toBe('7x');
     });
 
     it('null or undefined interpolates as empty, never the text "null"', () => {
