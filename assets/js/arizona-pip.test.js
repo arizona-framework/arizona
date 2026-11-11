@@ -653,9 +653,9 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // cleanup
     });
 
-    it('tears down the view a replace re-rendered when a navigate orphans its window', async () => {
-        // A resync replace re-rendered the popped-out view in its window, so the
-        // element there is not the one moved out: the teardown must reach it.
+    it('tears down the view a resync moved into the window when a navigate orphans it', async () => {
+        // The resync re-rendered the popped-out child, so the element in the window
+        // is not the one moved out: the navigate's teardown must reach it.
         document.body.innerHTML =
             '<div id="root" az-view az="0">' +
             '<div id="v" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
@@ -669,9 +669,10 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         const pip = makePipWindow();
         stubPip(pip);
         await requestPip('v');
-        applyOps([
-            [OP.REPLACE, 'v', '<div id="v" az-view az="0"><i az-hook="H" data-n="new"></i></div>'],
-        ]);
+        const resync =
+            '<div id="root" az-view az="0">' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="new"></i></div></div>';
+        applyOps([[OP.REPLACE, 'root', resync]], true);
 
         applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="0">x</div>']]);
 
