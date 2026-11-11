@@ -4,7 +4,7 @@
 
 %% A parent whose re-render swaps the wrapper around a stateful child, so the
 %% child's slot is rendered wholesale: a popped-out child's inline placeholder goes
-%% with it and the child renders inline again.
+%% with it and the fresh child, rendered inline, moves into the window.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->

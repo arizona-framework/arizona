@@ -442,8 +442,9 @@ export function applyOps(ops, resync = false) {
     // A popped-out (PiP) view's placeholder can go with any subtree this batch
     // replaced, re-rendered or removed, an item patch's nested re-render
     // included, and a navigate can re-key a popped-out root: bring the windows in
-    // line once, after every op.
-    reconcilePipWindows();
+    // line once, after every op. A resync is not a navigate -- it re-renders the
+    // same views.
+    reconcilePipWindows(didReplace && !resync);
     // A select the server left its value on holds options it could not mark: any it
     // rendered or changed in this batch take the value now, as SSR marked the page's.
     // noteChoices fills it, so it is not the `null` set above.

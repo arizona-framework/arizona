@@ -16,8 +16,9 @@ export const _viewDocs = new Map();
 // The PiP window and inline placeholder per popped-out view, keyed by the id of
 // the view the window shows, so each op batch can bring the window in line with
 // what it did (`reconcilePipWindows`). An entry is mutable: a navigate inside
-// the window re-keys it. Entries live and die with `_viewDocs` (set in
-// requestPip, removed by the window's pagehide handler).
+// the window re-keys it, a re-render inline moves a fresh placeholder in. Entries
+// live and die with `_viewDocs` (set in requestPip, removed by the window's
+// pagehide handler).
 /** @typedef {{id: string, win: Window, placeholder: Comment}} PipEntry */
 /** @type {Map<string, PipEntry>} */
 export const _pipWindows = new Map();
@@ -52,11 +53,16 @@ function viewsIn(doc) {
  * Bring each popped-out (PiP) window in line with the op batch just applied:
  * - A replace in the window under a new id (a navigate of a popped-out root)
  *   re-keys it, so `exit_pip`/`request_pip` from the new page name it.
- * - A placeholder the batch took (a navigate swapped the page, a parent
- *   re-render or removal took it) means the floating view shows dead server
- *   state, so the window closes; its pagehide handler discards the stale view.
+ * - A placeholder the batch took with a re-render that renders the view again
+ *   (a reconnect's resync, a parent's wholesale re-render) leaves the fresh
+ *   element inline: it moves into the window in place of the stale one and
+ *   leaves a new placeholder, as a pop-out does.
+ * - Otherwise the view is gone (removed, or the page navigated: a new page's
+ *   views are new, whatever their ids), so the window closes; its pagehide
+ *   handler discards the stale view.
+ * @param {boolean} navigated -- the batch replaced the page (a navigate)
  */
-export function reconcilePipWindows() {
+export function reconcilePipWindows(navigated) {
     if (_pipWindows.size === 0) return;
     for (const entry of [..._pipWindows.values()]) {
         const doc = entry.win.document;
@@ -69,6 +75,17 @@ export function reconcilePipWindows() {
             entry.id = id;
             _viewDocs.set(id, doc);
             _pipWindows.set(id, entry);
+            continue;
+        }
+        const fresh = navigated ? null : document.getElementById(entry.id);
+        if (fresh) {
+            for (const e of viewsIn(doc)) {
+                destroyHooks(e);
+                e.remove();
+            }
+            entry.placeholder = document.createComment(`az-pip:${entry.id}`);
+            fresh.before(entry.placeholder);
+            doc.body.append(fresh);
             continue;
         }
         try {

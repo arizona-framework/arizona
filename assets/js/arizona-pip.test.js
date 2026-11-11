@@ -682,10 +682,87 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         delete hooks.H;
     });
 
-    it('closes the window when a re-render brings the popped-out view back inline', async () => {
+    it('keeps a popped-out child in its window across a reconnect', async () => {
+        // The resync re-renders the whole root, child included, inline: the fresh
+        // child moves into the window and leaves a placeholder, as a pop-out does.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><p>a</p>' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = {
+            destroyed() {
+                destroyed(this.el.dataset.n);
+            },
+        };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        const resync =
+            '<div id="root" az-view az="0"><p>b</p>' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="new"></i></div></div>';
+        applyOps([[OP.REPLACE, 'root', resync]], true);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed.mock.calls).toEqual([['old']]);
+        expect(pip.document.querySelectorAll('#v')).toHaveLength(1);
+        expect(pip.document.querySelector('#v i')?.dataset.n).toBe('new');
+        expect(document.getElementById('v')).toBeNull();
+        expect(resolveEl('v')?.ownerDocument).toBe(pip.document);
+
+        // Closing brings it back where the fresh render put it.
+        pip.fire('pagehide');
+        expect(document.querySelector('#root > p + #v i')?.dataset.n).toBe('new');
+        expect(destroyed.mock.calls).toEqual([['old']]);
+
+        delete hooks.H;
+    });
+
+    it('closes the window when the resync no longer renders the popped-out child', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="v" az-view az="0" az-hook="H"></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([[OP.REPLACE, 'root', '<div id="root" az-view az="0">gone</div>']], true);
+
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('v')).toBeNull();
+        expect(destroyed).toHaveBeenCalledOnce();
+
+        delete hooks.H;
+    });
+
+    it('closes the window when a navigate renders a view under the same id', async () => {
+        // A navigate mounts a new page: its views are new, whatever their ids.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="v" az-view az="0">old</div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([
+            [
+                OP.REPLACE,
+                'root',
+                '<div id="p2" az-view az="0"><div id="v" az-view az="0">new</div></div>',
+            ],
+        ]);
+
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('v')?.textContent).toBe('new');
+        expect(pip.document.getElementById('v')).toBeNull();
+    });
+
+    it('keeps the window when a parent re-render renders the popped-out view again', async () => {
         // A parent's wholesale re-render wipes the placeholder and renders the
-        // child view inline again: the floating copy is stale and must close, or
-        // it stays open beside the live one.
+        // child view inline again: the fresh copy moves into the window, so the
+        // window shows the live view and the page keeps a placeholder.
         document.body.innerHTML =
             '<div id="root" az-view az="0">' +
             '<div id="player" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
@@ -709,10 +786,14 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             ],
         ]);
 
-        expect(pip.closed).toBe(true);
+        expect(pip.closed).toBe(false);
         expect(destroyed.mock.calls).toEqual([['old']]);
-        expect(document.querySelector('#player i')?.dataset.n).toBe('new');
-        expect(resolveEl('player')?.ownerDocument).toBe(document);
+        expect(pip.document.querySelector('#player i')?.dataset.n).toBe('new');
+        expect(document.getElementById('player')).toBeNull();
+        expect(resolveEl('player')?.ownerDocument).toBe(pip.document);
+
+        pip.fire('pagehide');
+        expect(document.querySelector('#root > #player i')?.dataset.n).toBe('new');
 
         delete hooks.H;
     });
@@ -740,7 +821,7 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         delete hooks.H;
     });
 
-    it('closes the window when an item patch re-renders the placeholder away', async () => {
+    it('keeps the window when an item patch renders the popped-out view again', async () => {
         // The re-render is nested in a stream item's ops, not a top-level op.
         document.body.innerHTML =
             '<div id="root" az-view az="0"><ul az="1">' +
@@ -758,8 +839,10 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             ],
         ]);
 
-        expect(pip.closed).toBe(true);
-        expect(document.getElementById('player')?.textContent).toBe('new');
-        expect(resolveEl('player')?.ownerDocument).toBe(document);
+        expect(pip.closed).toBe(false);
+        expect(pip.document.getElementById('player')?.textContent).toBe('new');
+        expect(document.getElementById('player')).toBeNull();
+        pip.fire('pagehide');
+        expect(document.querySelector('li[az-key="a"] > #player')?.textContent).toBe('new');
     });
 });
