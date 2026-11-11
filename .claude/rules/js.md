@@ -104,8 +104,13 @@ document, which the HTML parser moves into the body as its last element), exactl
 after the page, so a read then could find only an element the page content holds, and proofs only
 add. The client takes the **last** `script[type="application/json"]` with that id: an id can come
 from user input, so an earlier element sharing it would otherwise win, and escaped content cannot
-create a script element (a CSP-less `?raw` injection can, which is why the server embeds even an
-empty set). It is not required to be the body's last element: a deferred or module script may
+create a script element. Embedding even an empty set guards only against an element injected
+ahead of the real embed in the normal flow; it does **not** stop a forged set. `?raw` is trusted
+markup, and an app that splices untrusted markup through it can forge the proven set: an injected
+embed followed by an unclosed `<!--` (or an unclosed `xmp`/`iframe`/`noembed`) swallows the real
+embed, leaving the forged one the last match. Under a strict CSP, where the injected markup cannot
+run a script of its own, that is what turns its `az-*` data into commands, since the allowed client
+script (a head module, a deferred `connect()`) reads it. It is not required to be the body's last element: a deferred or module script may
 append to the body before `DOMContentLoaded`. A page without the embed (a `?json` document, a page
 rendered another way) has no proofs until the connect frame, and runs nothing before it.
 There is **no bootstrap set**: delegating common types (`click`, `change`, ...) ahead of any proof

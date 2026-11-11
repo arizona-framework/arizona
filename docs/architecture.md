@@ -2047,12 +2047,16 @@ type). The transport handler translates the returned result into its native repl
 The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
 render target's `static_document/2`: an `?html` page gets `<script type="application/json"
 id="arizona-attrs">` appended after the document, which the HTML parser moves into the body as
-its last element, even when the set is empty, so the client's last match is never an element
-the page content holds), the same set the socket's connect frame
+its last element, even when the set is empty, so an element injected ahead of it in the normal
+flow is never the client's last match), the same set the socket's connect frame
 delivers. The client runs a command only under a proven name, and that frame lands a round trip
 after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
 between would find no proof. Appending rather than splicing means the page is neither flattened
-nor searched: no case or data-island text can misplace the embed. A `?json` page has nowhere to
+nor searched: no case or data-island text can misplace the embed. It does not stop a forged
+set: `?raw` is trusted markup, and untrusted markup spliced through it can inject its own embed
+followed by an unclosed `<!--` (or an unclosed `xmp`/`iframe`/`noembed`), which swallows the real
+one, so the forged set is the last match. Under a strict CSP that blocks the injected markup's own
+scripts, the allowed client then runs its `az-*` data as commands. A `?json` page has nowhere to
 embed and waits for the connect frame.
 
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
