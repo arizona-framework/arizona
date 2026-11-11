@@ -53,11 +53,12 @@ render(Bindings) ->
 -export([get_lazy/3]).
 -export([with/2]).
 -export([track/1]).
--export([chosen/3]).
--export([chooser_value/2]).
+-export([chosen/4]).
+-export([chooser_value/3]).
 -export([choice_text/2]).
 -export([choices/3]).
--export([picks/2]).
+-export([picks/3]).
+-export([attr_text/2]).
 -export([attr_input/1]).
 -export([target/2]).
 -export([stateful/2]).
@@ -115,10 +116,10 @@ render(Bindings) ->
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
 %% Emitted by the parse transform as the `selected` of an option under a valued select.
--ignore_xref([chosen/3]).
+-ignore_xref([chosen/4]).
 %% Emitted by the parse transform as the `value` a select keeps when it holds an option
 %% the transform cannot mark.
--ignore_xref([chooser_value/2]).
+-ignore_xref([chooser_value/3]).
 %% Emitted by the parse transform as the value of an option without one whose text
 %% holds a runtime value, under a valued select.
 -ignore_xref([choice_text/2]).
@@ -424,44 +425,89 @@ each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
 
 -doc """
 Whether a choice whose value is `Choice` is picked by a chooser whose value is
-`Value`: the two render as the same attribute text. `Multiple` is the chooser's
-`multiple` attribute, present whatever it holds but `false` (as the attribute renders):
-present, a list `Value` holds the picked values, each compared the same way (any other
-value is one pick); absent, a list is chardata, one text. A `false` value picks
-nothing, as it renders no attribute.
+`Value`: the two hold the same text once `Backend` renders and its parser reads them
+(`attr_text/2`). `Multiple` is the chooser's `multiple` attribute, present whatever it
+holds but `false` (as the attribute renders): present, a list `Value` holds the picked
+values, each compared the same way (any other value is one pick); absent, a list is
+chardata, one text. A `false` value picks nothing, as it renders no attribute.
 
 The parse transform calls it for every choice under a chooser that carries a value
 (`c:arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
 `<select>` with a `value`.
 """.
--spec chosen(Choice, Value, Multiple) -> boolean() when
+-spec chosen(Backend, Choice, Value, Multiple) -> boolean() when
+    Backend :: module(),
     Choice :: term(),
     Value :: term(),
     Multiple :: term().
-chosen(_Choice, false, _Multiple) ->
+chosen(_Backend, _Choice, false, _Multiple) ->
     false;
-chosen(Choice, Value, false) ->
-    same_text(Choice, Value);
-chosen(Choice, Values, _Multiple) when is_list(Values) ->
-    lists:any(fun(Value) -> same_text(Choice, Value) end, Values);
-chosen(Choice, Value, _Multiple) ->
-    same_text(Choice, Value).
+chosen(Backend, Choice, Value, false) ->
+    same_text(Backend, Choice, Value);
+chosen(Backend, Choice, Values, _Multiple) when is_list(Values) ->
+    lists:any(fun(Value) -> same_text(Backend, Choice, Value) end, Values);
+chosen(Backend, Choice, Value, _Multiple) ->
+    same_text(Backend, Choice, Value).
 
-same_text(Same, Same) ->
+same_text(_Backend, Same, Same) ->
     true;
-same_text(Choice, Value) ->
-    attr_text(Choice) =:= attr_text(Value).
+same_text(Backend, Choice, Value) ->
+    attr_text(Backend, Choice) =:= attr_text(Backend, Value).
 
-%% `true` renders a bare attribute, whose value is the empty string. The text is read
-%% as the parser reads an attribute value (attr_input/1), so a value compares on every
-%% path -- here, the backend's mark_choices/2, the client -- as the page holds it.
-attr_text(true) -> <<>>;
-attr_text(V) -> attr_input(to_bin(V)).
+-doc """
+The text attribute value `Value` holds once `Backend` renders it and its parser reads
+it, the form every path compares a choice and a chooser's value in (`chosen/4`,
+`picks/3`, the backend's `c:arizona_renderer:mark_choices/2`, the client). An escaped
+value holds its own text, preprocessed as the parser preprocesses input
+(`attr_input/1`); `true` renders a bare attribute, the empty string. A `raw/1` literal
+at the template site is markup, spliced verbatim, so it holds what the parser makes of
+it (`c:arizona_renderer:markup_text/2`, in `attribute`); so does a list holding one as
+a part, the parts assembled as the attribute renders them (`raw_attr/2`). The parse
+transform marks those (`{arizona_markup, Bin}`) where it hands a value to this
+comparison, as it does where the attribute renders; any other `raw/1` is a helper's,
+escaped where it renders, so it holds its text.
+""".
+-spec attr_text(Backend, Value) -> binary() when
+    Backend :: module(),
+    Value :: term().
+attr_text(_Backend, true) ->
+    <<>>;
+attr_text(Backend, {arizona_markup, Markup}) ->
+    markup_attr_text(Backend, Markup);
+attr_text(_Backend, {arizona_raw, V}) ->
+    attr_input(raw_to_bin(V));
+attr_text(Backend, [_ | _] = V) ->
+    case has_markup_part(V) of
+        true ->
+            markup_attr_text(Backend, <<<<(markup_part(Backend, P))/binary>> || P <- V>>);
+        false ->
+            attr_input(to_bin(V))
+    end;
+attr_text(_Backend, V) ->
+    attr_input(to_bin(V)).
+
+has_markup_part([{arizona_markup, _} | _]) -> true;
+has_markup_part([_ | Rest]) -> has_markup_part(Rest);
+has_markup_part(_End) -> false.
+
+%% A part of an interpolated value as raw_attr/2 assembles it: the transform marked
+%% every part but a literal `raw/1` for escaping (mark_attr_part/1).
+markup_part(_Backend, {arizona_markup, Markup}) -> Markup;
+markup_part(Backend, Part) -> escape_value(Backend, Part).
+
+markup_attr_text(Backend, Markup) ->
+    case erlang:function_exported(Backend, markup_text, 2) of
+        true ->
+            {text, Text} = Backend:markup_text(Markup, attribute),
+            Text;
+        false ->
+            attr_input(Markup)
+    end.
 
 -doc """
 `Text` as the HTML parser preprocesses an attribute value before anything reads it:
 newlines normalized (CR LF and CR to LF), NUL replaced with U+FFFD. A choice and a
-chooser's value compare in this form (`chosen/3`, `picks/2`), so the server, the
+chooser's value compare in this form (`chosen/4`, `picks/3`), so the server, the
 backend's `mark_choices/2` and the client agree on which option a value names.
 """.
 -spec attr_input(Text) -> Text when
@@ -479,38 +525,41 @@ attr_input(Text) ->
 
 -doc """
 The value a chooser keeps when it holds a choice the parse transform cannot mark (a
-component, a runtime value, raw markup): `Value` as its attribute text, and with
-`Multiple` present (anything but `false`, as for `chosen/3`) a list of picks (or one
-pick) as a JSON array of their texts. `false` renders no attribute, picking nothing.
-The client applies it to the options a live update renders; the page loads on the
-ones `choices/3` marked.
+component, a runtime value, raw markup): `Value` as the text it holds
+(`attr_text/2`), and with `Multiple` present (anything but `false`, as for
+`chosen/4`) a list of picks (or one pick) as a JSON array of their texts. `false`
+renders no attribute, picking nothing. It renders escaped, so the page holds the text
+the choices compare against. The client applies it to the options a live update
+renders; the page loads on the ones `choices/3` marked.
 """.
--spec chooser_value(Value, Multiple) -> binary() | false when
+-spec chooser_value(Backend, Value, Multiple) -> binary() | false when
+    Backend :: module(),
     Value :: term(),
     Multiple :: term().
-chooser_value(false, _Multiple) ->
+chooser_value(_Backend, false, _Multiple) ->
     false;
-chooser_value(Value, false) ->
-    attr_text(Value);
-chooser_value(Value, Multiple) ->
-    iolist_to_binary(json:encode(picks(Value, Multiple))).
+chooser_value(Backend, Value, false) ->
+    attr_text(Backend, Value);
+chooser_value(Backend, Value, Multiple) ->
+    iolist_to_binary(json:encode(picks(Backend, Value, Multiple))).
 
 -doc """
-The texts of the values a chooser's `Value` picks, compared as `chosen/3` compares
+The texts of the values a chooser's `Value` picks, compared as `chosen/4` compares
 them: none for `false`, each element of a list `Value` when `Multiple` is present
-(anything but `false`), else the one text `Value` renders as.
+(anything but `false`), else the one text `Value` holds.
 """.
--spec picks(Value, Multiple) -> [binary()] when
+-spec picks(Backend, Value, Multiple) -> [binary()] when
+    Backend :: module(),
     Value :: term(),
     Multiple :: term().
-picks(false, _Multiple) ->
+picks(_Backend, false, _Multiple) ->
     [];
-picks(Value, false) ->
-    [attr_text(Value)];
-picks(Values, _Multiple) when is_list(Values) ->
-    [attr_text(V) || V <- Values];
-picks(Value, _Multiple) ->
-    [attr_text(Value)].
+picks(Backend, Value, false) ->
+    [attr_text(Backend, Value)];
+picks(Backend, Values, _Multiple) when is_list(Values) ->
+    [attr_text(Backend, V) || V <- Values];
+picks(Backend, Value, _Multiple) ->
+    [attr_text(Backend, Value)].
 
 -doc """
 Wraps `Child`, a child of a chooser carrying a value that the parse transform could not
@@ -522,7 +571,7 @@ escapes (the slot's own rule, decided on `Child`). The SSR render renders `Child
 place and has the backend mark, in that output alone, the choices the value picks
 (`c:arizona_renderer:mark_choices/2`). A live render and every diff see `Child` itself,
 and `Picks` is never called there: the chooser keeps its value
-(`chooser_value/2`) and the client applies it.
+(`chooser_value/3`) and the client applies it.
 """.
 -spec choices(Picks, Esc, Child) -> choices() when
     Picks :: fun(() -> {term(), term()}),
@@ -537,10 +586,10 @@ text its children render, ASCII whitespace stripped and collapsed. `Parts` are t
 children in order, literal text as binaries and the rest as the values their content
 slots render (escaped there, so the text is the value itself; a `raw/1` from a helper
 is escaped too). A value that renders markup (a template, a component) adds the text
-that markup shows, as `Backend` reads it (`c:arizona_renderer:markup_text/1`) from
+that markup shows, as `Backend` reads it (`c:arizona_renderer:markup_text/2`) from
 what it renders (`arizona_render:render_markup/2`).
 
-The parse transform calls it inside `chosen/3` for a choice whose text holds a value,
+The parse transform calls it inside `chosen/4` for a choice whose text holds a value,
 so the comparison renders, tracks and diffs like any attribute.
 """.
 -spec choice_text(Backend, Parts) -> binary() when
@@ -557,7 +606,7 @@ choice_text(Backend, Parts) ->
 choice_text_part(_Backend, Part) when is_binary(Part) ->
     Part;
 choice_text_part(Backend, Part) when is_map(Part) ->
-    {_Kind, Text} = Backend:markup_text(arizona_render:render_markup(Backend, Part)),
+    {_Kind, Text} = Backend:markup_text(arizona_render:render_markup(Backend, Part), text),
     Text;
 choice_text_part(Backend, Part) ->
     case classify_trusted(Part) of

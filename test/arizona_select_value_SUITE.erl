@@ -57,7 +57,11 @@ and the select keeps its value for the client to apply after.
     static_value_selects_at_compile_time/1,
     static_text_with_references_folds/1,
     values_compare_as_the_parser_reads_them/1,
-    helper_raw_option_value_is_its_text/1
+    helper_raw_option_value_is_its_text/1,
+    helper_raw_value_compares_as_its_text/1,
+    raw_option_value_reads_as_the_page_holds_it/1,
+    raw_select_value_reads_as_the_page_holds_it/1,
+    interpolated_raw_value_reads_as_one_text/1
 ]).
 
 all() ->
@@ -113,7 +117,11 @@ groups() ->
             static_value_selects_at_compile_time,
             static_text_with_references_folds,
             values_compare_as_the_parser_reads_them,
-            helper_raw_option_value_is_its_text
+            helper_raw_option_value_is_its_text,
+            helper_raw_value_compares_as_its_text,
+            raw_option_value_reads_as_the_page_holds_it,
+            raw_select_value_reads_as_the_page_holds_it,
+            interpolated_raw_value_reads_as_one_text
         ]}
     ].
 
@@ -930,7 +938,7 @@ authored_selected_is_refused(Config) when is_list(Config) ->
     ).
 
 %% A choice whose text holds a value is valued by what it renders, read by the
-%% backend's markup_text/1: a backend naming the roles without it is refused where the
+%% backend's markup_text/2: a backend naming the roles without it is refused where the
 %% template compiles, not when a value first renders markup.
 choice_text_needs_markup_text(Config) when is_list(Config) ->
     Backend = sel_no_markup_text,
@@ -1064,14 +1072,15 @@ values_compare_as_the_parser_reads_them(Config) when is_list(Config) ->
     ?assertEqual(
         1, count_selected(iolist_to_binary(arizona_render:render_to_iolist(Static:render(#{}))))
     ),
-    ?assert(arizona_template:chosen(<<"a", 0>>, <<"a", 16#FFFD/utf8>>, false)),
+    ?assert(arizona_template:chosen(arizona_html, <<"a", 0>>, <<"a", 16#FFFD/utf8>>, false)),
     ?assertEqual(
-        ~"[\"a\\nb\",\"c\\nd\"]", arizona_template:chooser_value([~"a\r\nb", ~"c\rd"], true)
+        ~"[\"a\\nb\",\"c\\nd\"]",
+        arizona_template:chooser_value(arizona_html, [~"a\r\nb", ~"c\rd"], true)
     ),
-    ?assertEqual([~"a\nb"], arizona_template:picks(~"a\r\nb", false)),
+    ?assertEqual([~"a\nb"], arizona_template:picks(arizona_html, ~"a\r\nb", false)),
     %% A NUL in text is dropped by the tree builder, on every path that reads text.
-    ?assertEqual({text, ~"ab"}, arizona_html:markup_text(<<"a", 0, "b">>)),
-    ?assertEqual({markup, ~"ab"}, arizona_html:markup_text(<<"<b>a", 0, "</b>b">>)),
+    ?assertEqual({text, ~"ab"}, arizona_html:markup_text(<<"a", 0, "b">>, text)),
+    ?assertEqual({markup, ~"ab"}, arizona_html:markup_text(<<"<b>a", 0, "</b>b">>, text)),
     ?assertEqual(~"ab", arizona_template:choice_text(arizona_html, [<<"a", 0>>, ~"b"])).
 
 %% A raw a helper returns into an option's value is text, escaped where it renders, so
@@ -1092,6 +1101,195 @@ helper_raw_option_value_is_its_text(Config) when is_list(Config) ->
     ?assertEqual(0, count_selected(Decoded), Decoded),
     {Live, _Snap, _Views} = arizona_render:render(Mod:render(#{v => ~"a&amp;b"}), #{}),
     ?assertEqual(1, count_selected(iolist_to_binary(Live)), Live).
+
+%% A raw a helper returns is text wherever the value is compared, as it renders: an
+%% option or a select valued by one compares as the escaped text the page holds, on
+%% the SSR, live and diff paths, in a select that keeps its value for the client, and
+%% beside a literal `?raw` part, which is the only part spliced.
+helper_raw_value_compares_as_its_text(Config) when is_list(Config) ->
+    Opt = compile_module(
+        helper_raw_src(
+            "sel_helper_raw_opt",
+            "{value, arizona_template:get(v, Bindings)}",
+            "{option, [{value, h(~\"a&amp;b\")}], []}, {option, [], [~\"y\"]}"
+        )
+    ),
+    assert_picked([~"a&amp;amp;b"], Opt, #{v => ~"a&amp;b"}),
+    assert_picked([], Opt, #{v => ~"a&b"}),
+    {_HTML, Snap0, V0} = arizona_render:render(Opt:render(#{v => ~"y"}), #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        Opt:render(#{v => ~"a&amp;b"}), Snap0, V0, #{v => true}
+    ),
+    ?assertEqual([{remove, ~"selected"}, {set, ~"selected"}], lists:sort(attr_ops(Ops)), Ops),
+    {Decoded, _Snap2, _V2} = arizona_diff:diff(Opt:render(#{v => ~"a&b"}), Snap0, V0, #{v => true}),
+    ?assertEqual([{remove, ~"selected"}], attr_ops(Decoded), Decoded),
+    Sel = compile_module(
+        helper_raw_src(
+            "sel_helper_raw_sel",
+            "{value, h(arizona_template:get(r, Bindings))}",
+            "{option, [{value, ~\"a&b\"}], []}, {option, [{value, ~\"a&amp;b\"}], []}, "
+            "arizona_template:raw(arizona_template:get(o, Bindings))"
+        )
+    ),
+    B = #{r => ~"a&amp;b", o => ~"<option>a&amp;b</option><option>a&amp;amp;b</option>"},
+    HTML = ssr_picked([~"a&amp;amp;b", ~"a&amp;amp;b"], Sel, B),
+    ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"a&amp;amp;b\""), HTML),
+    {Live, Snap3, V3} = arizona_render:render(Sel:render(B), #{}),
+    ?assertMatch(
+        {match, _}, re:run(iolist_to_binary(Live), ~"<select[^>]* value=\"a&amp;amp;b\"")
+    ),
+    {SelOps, _Snap4, _V4} = arizona_diff:diff(
+        Sel:render(B#{r => ~"&lt;z&gt;"}), Snap3, V3, #{r => true}
+    ),
+    ?assertMatch(
+        [~"&lt;z&gt;"], [V || [?OP_SET_ATTR, _, ~"value", V] <- flatten_ops(SelOps)], SelOps
+    ),
+    Mixed = compile_module(
+        helper_raw_src(
+            "sel_helper_raw_mixed",
+            "{value, arizona_template:get(v, Bindings)}",
+            "{option, [{value, [h(~\"&amp;\"), arizona_template:raw(~\"b\")]}], []}, "
+            "{option, [], [~\"y\"]}"
+        )
+    ),
+    assert_picked([~"&amp;amp;b"], Mixed, #{v => ~"&amp;b"}),
+    assert_picked([], Mixed, #{v => ~"&b"}),
+    %% A helper's raw around a map is not text: the comparison refuses it as an
+    %% attribute value refuses one, though the select renders no value of its own.
+    MapRaw = compile_module(
+        helper_raw_src(
+            "sel_helper_raw_map",
+            "{value, h(arizona_template:get(m, Bindings))}",
+            "{option, [{value, ~\"a\"}], []}"
+        )
+    ),
+    M = #{s => [~"a"], d => []},
+    ?assertError(
+        {arizona_loc, _, {raw_template, M}}, ssr_html(MapRaw, #{m => M})
+    ),
+    ?assertError(
+        {arizona_loc, _, {raw_template, M}}, arizona_render:render(MapRaw:render(#{m => M}), #{})
+    ).
+
+%% A `?raw` attribute value is markup: the page holds it with its character references
+%% decoded, so an option valued `?raw(~"a&amp;b")` is the option `a&b` names, on the
+%% SSR, live and diff paths, and folded when both sides are literal.
+raw_option_value_reads_as_the_page_holds_it(Config) when is_list(Config) ->
+    Mod = compile_module(
+        raw_src(
+            "sel_raw_opt",
+            "{value, arizona_template:get(v, Bindings)}",
+            "{option, [{value, arizona_template:raw(~\"a&amp;b\")}], [~\"x\"]}, "
+            "{option, [], [~\"y\"]}"
+        )
+    ),
+    assert_picked([~"a&amp;b"], Mod, #{v => ~"a&b"}),
+    assert_picked([~"y"], Mod, #{v => ~"y"}),
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(#{v => ~"y"}), #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(#{v => ~"a&b"}), Snap0, V0, #{v => true}),
+    ?assertEqual([{remove, ~"selected"}, {set, ~"selected"}], lists:sort(attr_ops(Ops)), Ops),
+    Static = compile_module(
+        raw_src(
+            "sel_raw_opt_static",
+            "{value, ~\"a&b\"}",
+            "{option, [{value, arizona_template:raw(~\"a&amp;b\")}], []}, "
+            "{option, [{value, arizona_template:raw(~\"a&amp;amp;b\")}], []}"
+        )
+    ),
+    %% The values render as raw attributes; whether each is picked is static.
+    ?assertEqual(
+        [], [N || {_, {attr, ~"selected" = N, _}, _} <- maps:get(d, Static:render(#{}))]
+    ),
+    assert_picked([~"a&amp;b"], Static, #{}),
+    %% Read in attribute context: a legacy reference without `;` before an
+    %% alphanumeric is text, not a reference.
+    ?assertEqual(
+        {text, ~"&ampx & x\n"}, arizona_html:markup_text(~"&ampx &amp x\r\n", attribute)
+    ).
+
+%% The reverse: a select valued by markup picks the option whose value the page holds
+%% equal to it, whether the transform marks the options, the SSR render marks them in
+%% a child it cannot see into, or the select keeps its value for the client (as the
+%% text the page holds, escaped, and under `multiple` each pick read the same way).
+raw_select_value_reads_as_the_page_holds_it(Config) when is_list(Config) ->
+    Mod = compile_module(
+        raw_src(
+            "sel_raw_sel",
+            "{value, arizona_template:raw(arizona_template:get(r, Bindings))}",
+            "{option, [{value, ~\"a&b\"}], []}, {option, [], [~\"y\"]}"
+        )
+    ),
+    assert_picked([~"a&amp;b"], Mod, #{r => ~"a&amp;b"}),
+    Opaque = compile_module(
+        raw_src(
+            "sel_raw_sel_opaque",
+            "{value, arizona_template:raw(arizona_template:get(r, Bindings))}",
+            "{option, [{value, ~\"a&b\"}], []}, "
+            "arizona_template:raw(arizona_template:get(o, Bindings))"
+        )
+    ),
+    B = #{r => ~"a&amp;b", o => ~"<option>a&amp;b</option><option>z</option>"},
+    HTML = ssr_picked([~"a&amp;b", ~"a&amp;b"], Opaque, B),
+    ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"a&amp;b\""), HTML),
+    {Live, Snap0, V0} = arizona_render:render(Opaque:render(B), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(Live), ~"<select[^>]* value=\"a&amp;b\"")),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        Opaque:render(B#{r => ~"&lt;z&gt;"}), Snap0, V0, #{r => true}
+    ),
+    ?assertMatch([~"<z>"], [V || [?OP_SET_ATTR, _, ~"value", V] <- flatten_ops(Ops)], Ops),
+    Multiple = compile_module(
+        raw_src(
+            "sel_raw_multi",
+            "multiple, {value, [arizona_template:raw(~\"a&amp;b\"), "
+            "arizona_template:get(v, Bindings)]}",
+            "{option, [{value, ~\"a&b\"}], []}, {option, [], [~\"c\"]}, "
+            "arizona_template:raw(arizona_template:get(o, Bindings))"
+        )
+    ),
+    Multi = ssr_picked(
+        [~"a&amp;b", ~"c", ~"a&amp;b"], Multiple, #{v => ~"c", o => ~"<option>a&amp;b</option>"}
+    ),
+    ?assertNotEqual(nomatch, binary:match(Multi, ~"value=\"[&quot;a&amp;b&quot;,&quot;c&quot;]\"")),
+    %% What the transform hands the comparison for a literal `?raw` is its markup; a bare
+    %% raw is a helper's, which the page holds as its text.
+    ?assertEqual(
+        ~"[\"a&b\"]",
+        arizona_template:chooser_value(
+            arizona_html,
+            [arizona_template:raw_attr(arizona_html, [arizona_template:raw(~"a&amp;b")])],
+            true
+        )
+    ),
+    ?assertEqual(
+        ~"[\"a&amp;b\"]",
+        arizona_template:chooser_value(arizona_html, [arizona_template:raw(~"a&amp;b")], true)
+    ).
+
+%% An interpolated value with a literal `?raw` part is one markup text, the raw part
+%% verbatim and the rest escaped: compared as the page holds it, option or select.
+interpolated_raw_value_reads_as_one_text(Config) when is_list(Config) ->
+    Opt = compile_module(
+        raw_src(
+            "sel_raw_interp_opt",
+            "{value, arizona_template:get(v, Bindings)}",
+            "{option, [{value, [~\"a\", arizona_template:raw(~\"&amp;b\")]}], []}, "
+            "{option, [{value, [~\"&\", arizona_template:raw(~\"amp;\")]}], []}"
+        )
+    ),
+    assert_picked([~"a&amp;b"], Opt, #{v => ~"a&b"}),
+    assert_picked([~"&amp;amp;"], Opt, #{v => ~"&amp;"}),
+    Sel = compile_module(
+        raw_src(
+            "sel_raw_interp_sel",
+            "{value, [arizona_template:get(v, Bindings), arizona_template:raw(~\"&amp;b\")]}",
+            "{option, [{value, ~\"a&b\"}], []}, "
+            "arizona_template:raw(arizona_template:get(o, Bindings))"
+        )
+    ),
+    HTML = ssr_picked(
+        [~"a&amp;b", ~"a&amp;b"], Sel, #{v => ~"a", o => ~"<option>a&amp;b</option>"}
+    ),
+    ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"a&amp;b\""), HTML).
 
 %% --------------------------------------------------------------------
 %% Helpers
@@ -1214,6 +1412,38 @@ flatten_op([Code | _] = Op) when is_integer(Code) ->
     [Op];
 flatten_op(Ops) when is_list(Ops) ->
     flatten_ops(Ops).
+
+%% The values of the options `Mod` renders selected, at SSR and in a live render alike.
+assert_picked(Picked, Mod, Bindings) ->
+    HTML = ssr_html(Mod, Bindings),
+    ?assertEqual(Picked, selected_values(HTML), HTML),
+    {Live, _Snap, _Views} = arizona_render:render(Mod:render(Bindings), #{}),
+    ?assertEqual(Picked, selected_values(iolist_to_binary(Live)), Live).
+
+%% The values of the options the SSR page selects (a live render leaves the options of
+%% a child the transform cannot see into to the client); returns the page.
+ssr_picked(Picked, Mod, Bindings) ->
+    HTML = ssr_html(Mod, Bindings),
+    ?assertEqual(Picked, selected_values(HTML), HTML),
+    HTML.
+
+ssr_html(Mod, Bindings) ->
+    iolist_to_binary(arizona_render:render_to_iolist(Mod:render(Bindings))).
+
+raw_src(Mod, SelectAttrs, Children) ->
+    lists:flatten([
+        "-module(",
+        Mod,
+        "). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_html, {select, [",
+        SelectAttrs,
+        "], [",
+        Children,
+        "]}). "
+    ]).
+
+helper_raw_src(Mod, SelectAttrs, Children) ->
+    raw_src(Mod, SelectAttrs, Children) ++ "h(X) -> arizona_template:raw(X). ".
 
 select_src(Child) ->
     select_src_mod("sel_err", Child).

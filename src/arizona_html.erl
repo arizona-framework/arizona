@@ -40,7 +40,7 @@ identical to the previous inlined emission.
 -export([implied_attrs/2]).
 -export([selection_role/1]).
 -export([mark_choices/2]).
--export([markup_text/1]).
+-export([markup_text/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -396,11 +396,16 @@ selection_role(Tag) ->
             none
     end.
 
--spec markup_text(iodata()) -> {text | markup, binary()}.
+-spec markup_text(iodata(), text | attribute) -> {text | markup, binary()}.
 %% What markup in an option shows as its text (option_text/3): tags and comments left
 %% out, references decoded. Static content holding anything `<` starts is `markup`, as
 %% it can end the option and open others (mark_choices/2 reads those).
-markup_text(Markup) ->
+%%
+%% A raw attribute value is spliced verbatim between the quotes, so the page holds it
+%% as the parser reads an attribute value: preprocessed, then references decoded.
+markup_text(Markup, attribute) ->
+    {text, decode_refs(preprocess(iolist_to_binary(Markup)), attribute)};
+markup_text(Markup, text) ->
     Bin = iolist_to_binary(Markup),
     %% The tree builder drops a NUL in text, as option text does (mark_option/5).
     Text = binary:replace(option_text(Bin, 0, []), <<0>>, <<>>, [global]),
@@ -434,7 +439,7 @@ markup_text(Markup) ->
 %% static markup after the slot) is valued by the part inside it.
 mark_choices(Fragment, Picks) ->
     Bin = iolist_to_binary(Fragment),
-    %% Picks from arizona_template:picks/2 are read as attribute text already; one a
+    %% Picks from arizona_template:picks/3 are read as attribute text already; one a
     %% caller hands as written is read the same way here.
     Texts = [preprocess(P) || P <- Picks],
     Picked = fun(Text) -> lists:member(Text, Texts) end,

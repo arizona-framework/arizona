@@ -1443,7 +1443,7 @@ format_select_error({no_markup_text, Backend, Tag}) ->
             "an <~ts> without a value attribute is valued by its text, and a value in "
             "this one's text may render markup, whose text the render target ~ts cannot "
             "read: it names the selection roles (selection_role/1) but does not export "
-            "markup_text/1. Implement it, or give the option a value attribute",
+            "markup_text/2. Implement it, or give the option a value attribute",
             [Tag, Backend]
         )
     ).
@@ -7100,7 +7100,7 @@ extract_directives([Attr | Rest], Opts) ->
 %% every later update disagree. What the parser does read is `selected` on an
 %% option. So for a backend that declares the roles (arizona_renderer:selection_role/1)
 %% the chooser's `value` is not emitted at all, and every choice under it gets a
-%% `selected` attribute testing its own value against it (arizona_template:chosen/3):
+%% `selected` attribute testing its own value against it (arizona_template:chosen/4):
 %% an ordinary dynamic attribute, so it renders at SSR, tracks its reads and diffs
 %% to a SET_ATTR/REM_ATTR on the two options whose selection changed.
 %%
@@ -7136,7 +7136,7 @@ chooser_sel(Backend, Tag, Attrs) ->
                     Sel = #{
                         backend => Backend,
                         tag => Backend:name(Tag),
-                        value => local_inits(Value),
+                        value => compared_value(Backend, Value),
                         multiple => multiple_value(Backend, MultipleName, Rest),
                         choice => Choice,
                         fold => false
@@ -7156,6 +7156,48 @@ chooser_sel(Backend, Tag, Attrs) ->
 
 chooser_value({tuple, _, [_Name, Value]}) -> Value;
 chooser_value(_Bare) -> ast_binary(<<>>).
+
+%% A choice's or chooser's value as the comparison reads it: marked as the attribute
+%% renders it (raw_interp_attr_ast/2), so a literal `?raw`, whole or a part, compares as
+%% the markup it is and a raw any other part returns (a helper's) as the text it
+%% renders. Only the parts are marked, not assembled: under `multiple` each one is a
+%% pick, and arizona_template:attr_text/2 assembles them when it is one value. A
+%% `?local` stands for its initial, which renders as text.
+compared_value(Backend, Value) ->
+    case has_local(Value) of
+        true -> local_inits(Value);
+        false -> compared_parts(Backend, Value, is_list_ast(Value))
+    end.
+
+compared_parts(Backend, Value, true) ->
+    Parts = attr_value_parts(Value),
+    case lists:any(fun is_raw_call/1, Parts) of
+        true ->
+            L = line(Value),
+            lists:foldr(
+                fun(P, Acc) -> {cons, L, compared_part(Backend, P), Acc} end, {nil, L}, Parts
+            );
+        false ->
+            Value
+    end;
+compared_parts(Backend, Value, false) ->
+    case is_raw_call(Value) of
+        true -> markup_ast(Backend, Value);
+        false -> Value
+    end.
+
+compared_part(Backend, Part) ->
+    case is_raw_call(Part) of
+        true -> markup_ast(Backend, Part);
+        false -> raw_attr_part_ast(Part)
+    end.
+
+%% A literal `?raw` as the markup it renders: `{arizona_markup, Bin}`.
+markup_ast(Backend, Raw) ->
+    L = line(Raw),
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, raw_attr}}, [
+        {atom, L, Backend}, {cons, L, Raw, {nil, L}}
+    ]}.
 
 %% A `?local`, whole or interpolated, stands for its initial value.
 local_inits({cons, L, Head, Tail}) ->
@@ -7358,7 +7400,7 @@ choice_leaf({text, Text}, Child, Sel, final) ->
     end;
 choice_leaf({compiled, _Kind}, Child, Sel, final) ->
     %% Compiled before the chooser was seen: every choice it renders must already
-    %% test the value, which shows as one chosen/3 call per choice element (a choice
+    %% test the value, which shows as one chosen/4 call per choice element (a choice
     %% inside a child wrapped by choices/3 is that child's to mark).
     case count_choices(Child, Sel) =< count_chosen(Child) of
         true -> Child;
@@ -7530,41 +7572,46 @@ choose(Backend, Tag, Attrs, Children) ->
     end.
 
 %% A chooser holding a choice the compiler cannot mark keeps its value, rendered by
-%% arizona_template:chooser_value/2, for the client to apply to what a live update
+%% arizona_template:chooser_value/3, for the client to apply to what a live update
 %% renders (the SSR render marks the page's, arizona_template:choices/3). A `?local`
 %% value stays the client's, its initial rendered the same way.
-kept_value(Backend, Tag, Attrs, #{multiple := Multiple}) ->
+kept_value(Backend, Tag, Attrs, Sel) ->
     {chooser, #{value := ValueName}} = selection_role(Backend, Tag),
     {ok, Kept, _Rest} = take_attr(Backend, ValueName, Attrs),
     [
         case Attr of
-            Kept -> kept_value_attr(Attr, Multiple);
+            Kept -> kept_value_attr(Attr, Sel);
             _Other -> Attr
         end
      || Attr <- Attrs
     ].
 
-kept_value_attr({tuple, L, [Name, Value]}, Multiple) ->
-    {tuple, L, [Name, kept_value_ast(Value, Multiple)]};
-kept_value_attr(Bare, Multiple) ->
-    L = anno(Bare),
-    {tuple, L, [Bare, chooser_value_call(ast_binary(<<>>), Multiple, L)]}.
-
-kept_value_ast({cons, L, Head, Tail}, Multiple) ->
-    {cons, L, kept_value_ast(Head, Multiple), kept_value_ast(Tail, Multiple)};
-kept_value_ast({call, L, Local, [Key, Init]} = Value, Multiple) ->
-    case is_local_marker(Value) of
-        true -> {call, L, Local, [Key, chooser_value_call(Init, Multiple, L)]};
-        false -> chooser_value_call(Value, Multiple, L)
+kept_value_attr({tuple, L, [Name, Value]}, #{value := Compared} = Sel) ->
+    case has_local(Value) of
+        true -> {tuple, L, [Name, kept_local_ast(Value, Sel)]};
+        false -> {tuple, L, [Name, chooser_value_call(Compared, Sel, anno(Value))]}
     end;
-kept_value_ast({nil, _} = Nil, _Multiple) ->
-    Nil;
-kept_value_ast(Value, Multiple) ->
-    chooser_value_call(Value, Multiple, anno(Value)).
+kept_value_attr(Bare, Sel) ->
+    L = anno(Bare),
+    {tuple, L, [Bare, chooser_value_call(ast_binary(<<>>), Sel, L)]}.
 
-chooser_value_call(Value, Multiple, L) ->
+%% A `?local` stays the client's: only its initial and the static parts beside it
+%% render as the value.
+kept_local_ast({cons, L, Head, Tail}, Sel) ->
+    {cons, L, kept_local_ast(Head, Sel), kept_local_ast(Tail, Sel)};
+kept_local_ast({call, L, Local, [Key, Init]} = Value, Sel) ->
+    case is_local_marker(Value) of
+        true -> {call, L, Local, [Key, chooser_value_call(Init, Sel, L)]};
+        false -> chooser_value_call(Value, Sel, L)
+    end;
+kept_local_ast({nil, _} = Nil, _Sel) ->
+    Nil;
+kept_local_ast(Value, Sel) ->
+    chooser_value_call(Value, Sel, anno(Value)).
+
+chooser_value_call(Value, #{backend := Backend, multiple := Multiple}, L) ->
     {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, chooser_value}}, [
-        Value, Multiple
+        {atom, L, Backend}, Value, Multiple
     ]}.
 
 %% Where an `?each` item under a chooser compiles. Its root is the item element and
@@ -7606,7 +7653,7 @@ choice_value(Backend, ValueName, Attrs, Rest) ->
         {ok, {tuple, _, [_Name, {atom, _, false}]}, _Others} ->
             choice_text(Backend, Rest);
         {ok, {tuple, _, [_Name, Value]}, _Others} ->
-            {ok, local_inits(Value)};
+            {ok, compared_value(Backend, Value)};
         {ok, _Bare, _Others} ->
             {ok, ast_binary(<<>>)};
         error ->
@@ -7637,10 +7684,10 @@ choice_text(Backend, [Children]) ->
     end.
 
 %% A value in the text may render markup, whose text only the backend can read
-%% (arizona_renderer:markup_text/1): refused here rather than as `undef` the first time
+%% (arizona_renderer:markup_text/2): refused here rather than as `undef` the first time
 %% one does.
 needs_markup_text(Backend, L) ->
-    case erlang:function_exported(Backend, markup_text, 1) of
+    case erlang:function_exported(Backend, markup_text, 2) of
         true -> ok;
         false -> parse_error({select_value, {no_markup_text, Backend, Backend:name(option)}}, L)
     end.
@@ -7654,10 +7701,13 @@ text_part(Backend, Item) ->
         false -> computed_text_part(Item)
     end.
 
-%% The backend reads its own markup (arizona_renderer:markup_text/1): the text it
+%% The backend reads its own markup (arizona_renderer:markup_text/2): the text it
 %% shows, character references decoded, unless it holds a tag.
 static_text_part(Backend, Markup) ->
-    case erlang:function_exported(Backend, markup_text, 1) andalso Backend:markup_text(Markup) of
+    case
+        erlang:function_exported(Backend, markup_text, 2) andalso
+            Backend:markup_text(Markup, text)
+    of
         {text, Text} -> {text, Text};
         _Markup -> markup
     end.
@@ -7688,23 +7738,77 @@ collapse_ws(Text) ->
     iolist_to_binary(lists:join(~" ", Words)).
 
 %% Literal on both sides and one value: decided here, a static attribute.
-chosen_ast(Value, #{fold := true, multiple := {atom, _, false}} = Sel, L) ->
-    %% Compared as the parser reads both (arizona_template:attr_input/1), as chosen/3 does.
-    case {literal_text(Value), literal_text(maps:get(value, Sel))} of
+chosen_ast(Value, #{fold := true, multiple := {atom, _, false}, backend := Backend} = Sel, L) ->
+    %% Compared as the page holds both (arizona_template:attr_text/2), as chosen/4 does.
+    case {literal_attr_value(Backend, Value), literal_attr_value(Backend, maps:get(value, Sel))} of
         {{ok, Choice}, {ok, Chosen}} ->
-            {atom, L, arizona_template:attr_input(Choice) =:= arizona_template:attr_input(Chosen)};
+            {atom, L,
+                arizona_template:attr_text(Backend, Choice) =:=
+                    arizona_template:attr_text(Backend, Chosen)};
         _Dynamic ->
             chosen_call(Value, Sel, L)
     end;
 chosen_ast(Value, Sel, L) ->
     chosen_call(Value, Sel, L).
 
-chosen_call(Value, #{value := ChooserValue, multiple := Multiple}, L) ->
+%% A literal attribute value as the term it evaluates to: text, or the parts
+%% compared_value/2 marks, each literal (a literal `?raw` of text is markup the page reads).
+literal_attr_value(Backend, Value) ->
+    IsList = is_list_ast(Value),
+    Parts =
+        case IsList of
+            true -> attr_value_parts(Value);
+            false -> [Value]
+        end,
+    case lists:any(fun is_markup_ast/1, Parts) of
+        true ->
+            case {IsList, literal_parts(Backend, Parts, [])} of
+                {false, {ok, [Term]}} -> {ok, Term};
+                {true, {ok, Terms}} -> {ok, Terms};
+                {_IsList, error} -> error
+            end;
+        false ->
+            literal_text(Value)
+    end.
+
+literal_parts(_Backend, [], Acc) ->
+    {ok, lists:reverse(Acc)};
+literal_parts(Backend, [Part | Parts], Acc) ->
+    case literal_part(Backend, Part) of
+        {ok, Term} -> literal_parts(Backend, Parts, [Term | Acc]);
+        error -> error
+    end.
+
+literal_part(
+    Backend,
+    {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, raw_attr}}, [
+        _Backend, {cons, _, {call, _, _, [Markup]}, {nil, _}}
+    ]}
+) ->
+    case literal_text(Markup) of
+        {ok, Text} -> {ok, arizona_template:raw_attr(Backend, [arizona_template:raw(Text)])};
+        error -> error
+    end;
+literal_part(
+    _Backend, {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, mark_attr_part}}, [Part]}
+) ->
+    literal_text(Part);
+literal_part(_Backend, _Part) ->
+    error.
+
+is_markup_ast({call, _, {remote, _, {atom, _, arizona_template}, {atom, _, raw_attr}}, _}) ->
+    true;
+is_markup_ast(_AST) ->
+    false.
+
+chosen_call(Value, #{backend := Backend, value := ChooserValue, multiple := Multiple}, L) ->
     {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, chosen}}, [
-        Value, ChooserValue, Multiple
+        {atom, L, Backend}, Value, ChooserValue, Multiple
     ]}.
 
-count_chosen({call, _, {remote, _, {atom, _, arizona_template}, {atom, _, chosen}}, [_, _, _]}) ->
+count_chosen(
+    {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, chosen}}, [_, _, _, _]}
+) ->
     1;
 count_chosen(Node) when is_tuple(Node) ->
     count_chosen(tuple_to_list(Node));

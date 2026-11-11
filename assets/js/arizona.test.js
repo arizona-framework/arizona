@@ -597,6 +597,21 @@ describe('applyOps -- a select that kept its value', () => {
         expect(marked(sel)).toEqual(['a', 'c']);
     });
 
+    it('compares a raw option value as the page holds it, decoded', () => {
+        // The server keeps a `?raw` select value as the text the page holds, escaped,
+        // and ships a `?raw` option value as markup: both compare decoded.
+        setupView(
+            'v',
+            '<select value="a&amp;b"><option az="0" value="x">X</option>' +
+                '<option>y</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', { raw: 'a&amp;b' }]]);
+        expect(sel.options[0].value).toBe('a&b');
+        expect(picked(sel)).toEqual(['a&b']);
+        expect(marked(sel)).toEqual(['a&b']);
+    });
+
     it('picks nothing when the value is removed', () => {
         setupView(
             'v',

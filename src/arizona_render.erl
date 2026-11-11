@@ -1015,7 +1015,7 @@ ssr_leaf(Backend, Val) ->
 %% inside the slot's located evaluation.
 render_ssr_choices(Backend, #{choices := Picks, esc := Esc, child := Child}) ->
     {Value, Multiple} = Picks(),
-    Texts = arizona_template:picks(Value, Multiple),
+    Texts = arizona_template:picks(Backend, Value, Multiple),
     Inner =
         case Esc of
             true -> render_ssr_esc_val(Backend, Child);

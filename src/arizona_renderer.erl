@@ -234,7 +234,7 @@ marked picked by its `selected` attribute; `none` for any other tag.
 Optional, for a target whose output has no such attribute: HTML ignores `value` on
 `<select>` and loads on the first option, so the parse transform drops the chooser's
 `value` and gives each choice a `selected` that tests the choice's value against it
-(`arizona_template:chosen/3`). A backend without the callback keeps `value` as an
+(`arizona_template:chosen/4`). A backend without the callback keeps `value` as an
 ordinary attribute. `choice` is the choice's tag name as `name/1` spells it, which
 the transform also looks for in compiled markup to refuse a choice it cannot mark.
 """.
@@ -245,7 +245,7 @@ the transform also looks for in compiled markup to refuse a choice it cannot mar
 
 -doc """
 Marks picked the choices in `Fragment` whose value is one of `Picks`, the texts the
-chooser's value picks (`arizona_template:picks/2`), compared as the backend's own
+chooser's value picks (`arizona_template:picks/3`), compared as the backend's own
 parser would read both. `Fragment` is what
 one child of a chooser with a value rendered when the parse transform could not see the
 choices in it (a component, a remote helper, a runtime value, raw markup): the
@@ -261,8 +261,11 @@ Optional, and required of a backend that implements `selection_role/1`.
 -callback mark_choices(Fragment :: iodata(), Picks :: [binary()]) -> iodata().
 
 -doc """
-The text `Markup` of this backend shows as the text of a choice valued by its text
-(`selection_role/1`), and whether it holds markup syntax. Read at compile time for a
+The text `Markup` of this backend shows in `Context`, and whether it holds markup
+syntax.
+
+In `text`, the text of a choice valued by its text (`selection_role/1`). Read at
+compile time for a
 static binary in such a choice, which is spliced as markup: `{text, Text}` folds to the
 choice's value, while `{markup, _}` (a tag) is left for `mark_choices/2`, since static
 markup can end the choice and open others. Read at render time for a value there that
@@ -272,13 +275,23 @@ comparison stays an ordinary attribute that renders, tracks and diffs. For HTML:
 the option's `text` reads, tags and comments left out, character references decoded,
 up to what would end the option.
 
-Optional. A backend that implements `selection_role/1` without it cannot compile a
-choice whose text holds a value (a `select_value` compile error), and its static text
-holding markup syntax is left for `mark_choices/2`.
-""".
--callback markup_text(Markup :: iodata()) -> {text | markup, binary()}.
+In `attribute`, the text an attribute value written as markup holds once the page is
+parsed (always `{text, Text}`): a literal `raw/1` value, spliced into the attribute verbatim.
+A choice and a chooser's value compare in this form when either is markup
+(`arizona_template:attr_text/2`), so an option valued `?raw(~"a&amp;b")` is the one a
+value `a&b` picks, as it is in the page. For HTML: the value preprocessed (newlines
+normalized, NUL replaced) and its character references decoded as an attribute
+value's are.
 
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/1]).
+Optional. A backend that implements `selection_role/1` without it cannot compile a
+choice whose text holds a value (a `select_value` compile error), its static text
+holding markup syntax is left for `mark_choices/2`, and a markup value compares as
+written, as an escaped one does.
+""".
+-callback markup_text(Markup :: iodata(), Context :: text | attribute) ->
+    {text | markup, binary()}.
+
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/2]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
