@@ -6,8 +6,8 @@ HTML has no such attribute: the parser ignores it and the page loads on the firs
 option, while a diff writes the `.value` property. So the transform marks the matching
 option `selected` instead, at first render and on every diff, wherever the option is
 written (see `arizona_select_value`). An option it cannot see -- from a component,
-a runtime value, raw markup -- leaves the select its value: the SSR render marks
-the option it names in the document, and the client keeps it in step after.
+a runtime value, raw markup -- is marked by the SSR render in that child's own output,
+and the select keeps its value for the client to apply after.
 """.
 -include_lib("stdlib/include/assert.hrl").
 -include("arizona_wire.hrl").
@@ -37,8 +37,10 @@ the option it names in the document, and the client keeps it in step after.
     opaque_static_generation_marks_the_chosen_option/1,
     opaque_live_render_is_left_to_the_client/1,
     opaque_diff_ships_the_value/1,
-    mark_choices_reads_the_document/1,
+    mark_choices_reads_the_fragment/1,
     opaque_child_compiles/1,
+    opaque_child_is_marked_in_its_own_slot/1,
+    opaque_each_keeps_its_item_diff/1,
     option_with_runtime_text_compiles/1,
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
@@ -73,7 +75,7 @@ groups() ->
             opaque_multiple_marks_every_listed_value,
             opaque_static_generation_marks_the_chosen_option,
             opaque_live_render_is_left_to_the_client,
-            mark_choices_reads_the_document
+            mark_choices_reads_the_fragment
         ]},
         {diff, [parallel], [
             diff_moves_selected_to_the_new_option,
@@ -82,10 +84,12 @@ groups() ->
             stream_item_update_keeps_selection,
             runtime_text_option_diffs,
             runtime_text_option_in_each_row,
-            opaque_diff_ships_the_value
+            opaque_diff_ships_the_value,
+            opaque_each_keeps_its_item_diff
         ]},
         {compile, [parallel], [
             opaque_child_compiles,
+            opaque_child_is_marked_in_its_own_slot,
             option_with_runtime_text_compiles,
             runtime_text_option_refuses_markup,
             authored_selected_is_refused,
@@ -316,70 +320,152 @@ opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     %% and the child view.
     ?assertEqual([~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c"], selected_values(HTML), HTML).
 
-%% A live process renders no document: the select carries its value, and the
-%% client marks the options it names.
+%% A live render, outside a page or inside a live process alike, leaves the options a
+%% component renders to the client: the select carries its value, and nothing is left
+%% behind in the process.
 opaque_live_render_is_left_to_the_client(Config) when is_list(Config) ->
-    Self = self(),
-    Pid = spawn(fun() ->
-        _ = put('$arizona_connected', true),
-        {HTML, _Snap, _Views} = arizona_render:render(
-            arizona_select_value:component(opaque_bindings(~"b")), #{}
-        ),
-        Self ! {self(), iolist_to_binary(HTML), get('$arizona_unmarked_choices')}
-    end),
-    receive
-        {Pid, HTML, Noted} ->
-            ?assertEqual([], selected_values(HTML), HTML),
-            ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"b\""), HTML),
-            ?assertEqual(undefined, Noted)
-    after 5000 ->
-        error(timeout)
-    end.
+    Before = get(),
+    {HTML0, _Snap, _Views} = arizona_render:render(
+        arizona_select_value:component(opaque_bindings(~"b")), #{}
+    ),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual([], selected_values(HTML), HTML),
+    ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"b\""), HTML),
+    _ = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_select_value:component(opaque_bindings(~"b")))
+    ),
+    %% The renders' own caches aside (keyed by tuples), no flag is left set.
+    ?assertEqual([], [K || {K, _} <- get() -- Before, is_atom(K)]).
 
-%% The renderer's pass over a document: character references, comments and raw
-%% text, the text of an option without a value, case, and an option the page
-%% already marked.
-mark_choices_reads_the_document(Config) when is_list(Config) ->
-    Mark = fun(Doc) -> iolist_to_binary(arizona_html:mark_choices(Doc)) end,
-    Bin = fun iolist_to_binary/1,
+%% The backend marks the options in one child's output, reading it as the parser
+%% does: only real option start tags, values decoded with every named reference,
+%% an option's text as its `text` property reads it, and nothing past what closes
+%% the select.
+mark_choices_reads_the_fragment(Config) when is_list(Config) ->
+    Mark = fun(Fragment, Picks) ->
+        iolist_to_binary(arizona_html:mark_choices(Fragment, fun(T) -> lists:member(T, Picks) end))
+    end,
+    Same = fun(Fragment, Picks) -> ?assertEqual(Fragment, Mark(Fragment, Picks), Fragment) end,
     ?assertEqual(
-        ~"<SELECT Value=\"a&amp;b\"><option value=\"a&#38;b\" selected>x</option></SELECT>",
-        Mark(~"<SELECT Value=\"a&amp;b\"><option value=\"a&#38;b\">x</option></SELECT>")
+        ~"<option value=\"a\">A</option><option value=\"b\" selected>B</option>",
+        Mark(~"<option value=\"a\">A</option><option value=\"b\">B</option>", [~"b"])
+    ),
+    %% An attribute value holding markup is a value, wherever a `>` sits in it.
+    ?assertEqual(
+        <<"<option value=\"b\" title=\"<option value=a>\">B</option>",
+            "<option value=\"a\" selected>A</option>">>,
+        Mark(
+            <<"<option value=\"b\" title=\"<option value=a>\">B</option>",
+                "<option value=\"a\">A</option>">>,
+            [~"a"]
+        )
     ),
     ?assertEqual(
-        Bin([
-            ~"<select value='B c'><option selected>\n B <!--az:1--> c<!--/az--></option>",
-            ~"<option>b</option></select>"
-        ]),
-        Mark([
-            ~"<select value='B c'><option>\n B <!--az:1--> c<!--/az--></option>",
-            ~"<option>b</option></select>"
-        ])
+        ~"<option data-y=\"x>y\" value=\"a\" selected>A</option>",
+        Mark(~"<option data-y=\"x>y\" value=\"a\">A</option>", [~"a"])
     ),
-    Script = ~"<script>\"<select value=a><option>a</option></select>\"</script>",
-    ?assertEqual(Script, Mark(Script)),
-    Comment = ~"<!-- <select value=a><option>a</option></select> -->",
-    ?assertEqual(Comment, Mark(Comment)),
     ?assertEqual(
-        ~"<select value=a><option selected>a</option><option value=a selected>A</option></select>",
-        Mark(~"<select value=a><option selected>a</option><option value=a>A</option></select>")
+        ~"<OPTION value=a selected>A<option value=b>B",
+        Mark(~"<OPTION value=a>A<option value=b>B", [~"a"])
     ),
-    %% No value, or an element that is not a select: untouched.
-    Plain = ~"<select><option>a</option></select><selected value=a><option>a</option>",
-    ?assertEqual(Plain, Mark(Plain)),
-    Multiple = ~"<select multiple value=\"[&quot;a&quot;,&quot;c&quot;]\">",
-    ?assertEqual(
-        Bin([
-            Multiple,
-            ~"<option selected>a</option><option>b</option>",
-            ~"<option selected>c</option></select>"
-        ]),
-        Mark([Multiple, ~"<option>a</option><option>b</option><option>c</option></select>"])
+    %% Raw text (as the backend classifies it), comments, bogus comments, template
+    %% content, and CDATA in foreign content hold no option.
+    lists:foreach(
+        fun(Fragment) -> Same(Fragment, [~"a"]) end,
+        [
+            ~"<xmp><option value=a>A</option></xmp>",
+            ~"<iframe><option value=a></iframe>",
+            ~"<noembed><option value=a></noembed>",
+            ~"<noframes><option value=a></noframes>",
+            ~"<script>var o = '<option value=a>';</script>",
+            ~"<STYLE>/* <option value=a> */</STYLE>",
+            ~"<title><option value=a></title>",
+            ~"<!-- <option value=a> -->",
+            ~"<!-- a --!><!---->",
+            ~"<![CDATA[<option value=a>]]>",
+            ~"<?pi <option value=a> ?>",
+            ~"<svg><![CDATA[<option value=a>]]></svg>",
+            ~"<svg><option value=a></option></svg>",
+            ~"<template><template></template><option value=a></template>"
+        ]
     ),
-    %% An option's text ends at the next option, an optgroup, the select's end.
     ?assertEqual(
-        ~"<select value=b><option>a<optgroup><option selected>b<option>c</select>",
-        Mark(~"<select value=b><option>a<optgroup><option>b<option>c</select>")
+        ~"<svg><title>t</title></svg><option value=a selected>",
+        Mark(~"<svg><title>t</title></svg><option value=a>", [~"a"])
+    ),
+    ?assertEqual(
+        ~"<svg><foreignObject><option value=a selected></foreignObject></svg>",
+        Mark(~"<svg><foreignObject><option value=a></foreignObject></svg>", [~"a"])
+    ),
+    %% What closes the select ends the walk; the same text in a comment, a script or
+    %% an attribute value does not.
+    Same(~"</select><option value=a>", [~"a"]),
+    Same(~"<input><option value=a>", [~"a"]),
+    ?assertEqual(
+        <<"<!-- </select> --><script>'</select>'</script>",
+            "<option title=\"</select>\" value=a selected>">>,
+        Mark(
+            <<"<!-- </select> --><script>'</select>'</script>",
+                "<option title=\"</select>\" value=a>">>,
+            [
+                ~"a"
+            ]
+        )
+    ),
+    %% Character references, as the parser decodes them: the whole named set, legacy
+    %% names without `;` (kept as written in an attribute when a name could go on),
+    %% numeric ones with the standard's replacements.
+    lists:foreach(
+        fun({Fragment, Pick}) ->
+            ?assertEqual(1, count_selected(Mark(Fragment, [Pick])), {Fragment, Pick})
+        end,
+        [
+            {~"<option>caf&eacute;</option>", ~"café"},
+            {~"<option>caf&eacute</option>", ~"café"},
+            {~"<option value=\"a&nbsp;b\">x</option>", ~"a\x{a0}b"},
+            {~"<option value=\"&notin;&notit;\">x</option>", ~"∉&notit;"},
+            {~"<option>&notin;&notit;</option>", ~"∉¬it;"},
+            {~"<option value=\"?a=1&copy=2\">x</option>", ~"?a=1&copy=2"},
+            {~"<option value=\"&copy 2\">x</option>", ~"© 2"},
+            {~"<option value=\"&#233;&#xE9;&#x20ac\">x</option>", ~"éé€"},
+            {~"<option value=\"&#128;&#0;&#xD800;\">x</option>", ~"€\x{fffd}\x{fffd}"},
+            {~"<option value=\"a&#b\">x</option>", ~"a&#b"},
+            {~"<option value=\"a&ampb\">x</option>", ~"a&ampb"},
+            {~"<option>a&ampb</option>", ~"a&b"},
+            {~"<option value=\"&bogus;\">x</option>", ~"&bogus;"}
+        ]
+    ),
+    %% An option's text: whitespace collapsed, tags and comments dropped, a script's
+    %% content left out, up to what ends the option.
+    lists:foreach(
+        fun({Fragment, Pick}) ->
+            ?assertEqual(1, count_selected(Mark(Fragment, [Pick])), {Fragment, Pick})
+        end,
+        [
+            {~"<option>\n a <b>b</b> <!-- c --></option>", ~"a b"},
+            {~"<option>a<script>x</script></option>", ~"a"},
+            {~"<option>a<hr>b</option>", ~"a"},
+            {~"<option>a<optgroup><option>b", ~"a"},
+            {~"<option>a < b</option>", ~"a < b"},
+            {~"<option>b", ~"b"},
+            {~"<option>a<style>b</style></option>", ~"ab"}
+        ]
+    ),
+    %% An option the page already marks keeps it; the first of a repeated attribute counts.
+    ?assertEqual(
+        ~"<option SELECTED value=b>B</option><option value=a selected>A</option>",
+        Mark(~"<option SELECTED value=b>B</option><option value=a>A</option>", [~"a"])
+    ),
+    Same(~"<option value=b value=a>A</option>", [~"a"]),
+    ?assertEqual(~"<option value=\"a\"/ selected>", Mark(~"<option value=\"a\"/>", [~"a"])),
+    %% A fragment that ends inside a tag marks nothing there.
+    Same(~"<option value=a", [~"a"]),
+    %% Every pick is marked.
+    ?assertEqual(
+        2,
+        count_selected(
+            Mark(~"<option>a</option><option>b</option><option>c</option>", [~"a", ~"c"])
+        )
     ).
 
 %% --------------------------------------------------------------------
@@ -498,6 +584,27 @@ runtime_text_option_in_each_row(Config) when is_list(Config) ->
         [~"b"], selected_values(iolist_to_binary(arizona_render:snapshot_html(Snap1)))
     ).
 
+%% An `?each` the select wraps whole (its item's option is valued by markup) still
+%% diffs item by item: the wrapper is transparent to a live render.
+opaque_each_keeps_its_item_diff(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod(
+            "sel_opaque_each",
+            "arizona_template:each(fun(O) -> {option, [], [arizona_template:raw(O)]} end, "
+            "arizona_template:get(opts, Bindings))"
+        )
+    ),
+    B0 = #{v => ~"b", opts => [~"a", ~"<i>b</i>"]},
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, Snap1, _} = arizona_diff:diff(
+        Mod:render(B0#{opts => [~"a", ~"<i>c</i>"]}), Snap0, V0, #{opts => true}
+    ),
+    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 1, _]]]], Ops),
+    ?assertEqual([], [Op || Op <- flatten_ops(Ops), hd(Op) =:= ?OP_SET_ATTR]),
+    ?assertNotEqual(
+        nomatch, binary:match(iolist_to_binary(arizona_render:snapshot_html(Snap1)), ~"<i>c</i>")
+    ).
+
 %% An inserted item ships as its HTML, or as statics plus values.
 payload_html(#{~"s" := [S | Statics], ~"d" := Values}) ->
     iolist_to_binary([S | lists:zipwith(fun(V, St) -> [V, St] end, Values, Statics)]);
@@ -547,6 +654,62 @@ opaque_child_compiles(Config) when is_list(Config) ->
     Ws = compile_module(select_src_mod("sel_ws", "~\" \", <<>>")),
     WsHTML = iolist_to_binary(arizona_render:render_to_iolist(Ws:render(#{v => ~"a"}))),
     ?assertEqual(nomatch, binary:match(WsHTML, ~"value"), WsHTML).
+
+%% Every place an option can come from the compiler cannot see: the SSR render marks
+%% it in that child's own output, a live render leaves it to the client, and the
+%% select keeps its value for the client. A value list child holds no option and is
+%% left as it is.
+opaque_child_is_marked_in_its_own_slot(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Child, Picked, LivePicked}}) ->
+            Mod = compile_module(select_src_mod("sel_slot_" ++ integer_to_list(N), Child)),
+            B = #{v => ~"b", more => true, x => ~"y"},
+            HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B))),
+            ?assertEqual(Picked, count_selected(HTML), {Child, HTML}),
+            ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"b\""), {Child, HTML}),
+            {Live, _Snap, _Views} = arizona_render:render(Mod:render(B), #{}),
+            ?assertEqual(LivePicked, count_selected(iolist_to_binary(Live)), Child)
+        end,
+        lists:enumerate([
+            {"arizona_template:stateless(fun opts/1, #{o => [~\"a\", ~\"b\"]})", 1, 0},
+            {"{option, [], [arizona_template:raw(~\"<b>b</b>\")]}", 1, 0},
+            {"{option, [], [~\"a &amp; b\"]}, {option, [], [~\"b\"]}", 1, 1},
+            {"{optgroup, [], [arizona_template:raw(~\"<option>b\")]}", 1, 0},
+            {
+                "case arizona_template:get(more, Bindings) of "
+                "true -> arizona_template:stateless(fun opts/1, #{o => [~\"b\"]}); "
+                "false -> {option, [{value, ~\"b\"}], [~\"B\"]} end",
+                1,
+                0
+            },
+            {"[~\"x\", arizona_template:stateless(fun opts/1, #{o => [~\"b\"]})]", 1, 0},
+            {
+                "arizona_template:each(fun(O) -> {option, [], [arizona_template:raw(O)]} end, "
+                "[~\"a\", ~\"<i>b</i>\"])",
+                1,
+                0
+            },
+            {"arizona_template:raw(~\"<option>b</option><option value=b>B</option>\")", 2, 0}
+        ])
+    ),
+    Values = compile_module(
+        select_src_mod("sel_values", "[~\"a\", arizona_template:get(x, Bindings)]")
+    ),
+    ValuesHTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Values:render(#{v => ~"b", x => ~"y"}))
+    ),
+    ?assertEqual(nomatch, binary:match(ValuesHTML, ~"value"), ValuesHTML),
+    %% In an az-nodiff element (a layout's render path), the same.
+    Nodiff = compile_module(
+        "-module(sel_slot_nodiff). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_html, {'div', ['az-nodiff'], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], [arizona_template:stateless(fun opts/1, "
+        "#{o => [~\"a\", ~\"b\"]})]}]}). "
+        "opts(B) -> arizona_template:target(arizona_html, [arizona_template:each(fun(O) -> "
+        "{option, [{value, O}], [O]} end, maps:get(o, B))]). "
+    ),
+    NodiffHTML = iolist_to_binary(arizona_render:render_to_iolist(Nodiff:render(#{v => ~"b"}))),
+    ?assertEqual([~"b"], selected_values(NodiffHTML), NodiffHTML).
 
 %% An option without a value whose text is computed is valued by that text, at
 %% compile time: an ordinary `selected` attribute, so the select keeps no value.
@@ -774,7 +937,8 @@ select_src_mod(Mod, Child) ->
         "arizona_template:target(arizona_html, {select, "
         "[{value, arizona_template:get(v, Bindings)}], [",
         Child,
-        "]}). opts(_) -> arizona_template:target(arizona_html, []). "
+        "]}). opts(B) -> arizona_template:target(arizona_html, [arizona_template:each("
+        "fun(O) -> {option, [{value, O}], [O]} end, maps:get(o, B, []))]). "
     ]).
 
 compile_module(Source) ->

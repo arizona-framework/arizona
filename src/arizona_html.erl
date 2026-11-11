@@ -39,7 +39,7 @@ identical to the previous inlined emission.
 -export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([selection_role/1]).
--export([mark_choices/1]).
+-export([mark_choices/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -49,8 +49,13 @@ identical to the previous inlined emission.
 -export([wire_attr/2]).
 -export([static_document/2]).
 
-%% Where mark_choices/1 looks: a select, and what to skip over (raw text, comments).
--define(SCAN_OPENS, [~"<select", ~"<script", ~"<style", ~"<textarea", ~"<title", ~"<!--"]).
+-define(IS_ALPHA(C), ((C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z))).
+-define(IS_ALNUM(C), (?IS_ALPHA(C) orelse (C >= $0 andalso C =< $9))).
+-define(IS_SPACE(C),
+    (C =:= $\s orelse C =:= $\t orelse C =:= $\n orelse C =:= $\f orelse C =:= $\r)
+).
+%% The longest named character reference valid without its `;`.
+-define(LEGACY_REF_MAX, 6).
 
 %% A byte that needs no entity. Letters and UTF-8 bytes (> `>`) answer on the
 %% first test; the rest of the safe set lies between and around `"`, `&`/`'`
@@ -390,280 +395,551 @@ selection_role(Tag) ->
             none
     end.
 
--spec mark_choices(iodata()) -> iodata().
-%% A `<select>` that kept its `value` holds options the transform could not mark
-%% (arizona_template:chooser_value/2), so the parser would load it on its first
-%% option. Mark `selected` every option under it whose value (its `value` attribute,
-%% else its text, whitespace stripped and collapsed, as the browser reads it) is one
-%% the select's value names: the value itself, or under `multiple` the JSON array of
-%% values chooser_value/2 renders. An option already `selected` is left alone. The
-%% content of raw-text elements and comments is skipped, so markup spelled inside a
-%% script is never touched.
-mark_choices(Doc) ->
-    Bin = iolist_to_binary(Doc),
-    Lower = <<<<(lower_ascii(C))>> || <<C>> <= Bin>>,
-    case scan_selects(Lower, Bin, 0, []) of
-        [] -> Doc;
-        Marks -> splice_selected(Bin, lists:sort(Marks), 0, [])
+-spec mark_choices(iodata(), fun((binary()) -> boolean())) -> iodata().
+%% `Fragment` is what a child the parse transform could not see into rendered under a
+%% `<select>` with a value (a component, a runtime value, raw markup). Mark `selected`
+%% every `<option>` in it whose value `Picked` accepts, so the page loads on it: its
+%% `value` attribute, else its text with whitespace stripped and collapsed, both read
+%% as the parser reads them (character references decoded, the full named set).
+%%
+%% The fragment is tokenized the way the parser would, so markup that only looks like
+%% an option is left alone: attribute values, comments, bogus comments, the content of
+%% raw-text elements (raw_text_kind/2) and of `<template>`, and, in foreign content
+%% (content_context/2), CDATA sections; an `option` there is not an HTML option either.
+%% What closes the select (`</select>`, or a `select`/`input`/`keygen`/`textarea` start
+%% tag) ends the walk: an option after it is not this select's. An option already
+%% carrying `selected` keeps it.
+mark_choices(Fragment, Picked) ->
+    Bin = iolist_to_binary(Fragment),
+    case choices(Bin, 0, {undefined, []}, Picked, []) of
+        [] -> Fragment;
+        Marks -> splice_selected(Bin, lists:reverse(Marks), 0, [])
     end.
 
-lower_ascii(C) when C >= $A, C =< $Z -> C + 32;
-lower_ascii(C) -> C.
-
-scan_selects(L, B, Pos, Marks) ->
-    case match_from(L, ?SCAN_OPENS, Pos) of
-        nomatch ->
-            Marks;
-        {At, Len} ->
-            Next = At + Len,
-            case binary:part(L, At, Len) of
-                ~"<!--" ->
-                    scan_selects(L, B, skip_past(L, Next, ~"-->"), Marks);
-                Open ->
-                    case ends_tag_name(L, Next) of
-                        false ->
-                            scan_selects(L, B, Next, Marks);
-                        true when Open =:= ~"<select" ->
-                            {Marks1, After} = choose_select(L, B, Next, Marks),
-                            scan_selects(L, B, After, Marks1);
-                        true ->
-                            <<$<, Name/binary>> = Open,
-                            scan_selects(L, B, skip_past(L, Next, <<"</", Name/binary>>), Marks)
-                    end
-            end
+choices(Bin, Pos, Ctx, Picked, Marks) ->
+    case next_lt(Bin, Pos) of
+        nomatch -> Marks;
+        At -> choices_at(Bin, At, Ctx, Picked, Marks)
     end.
 
-choose_select(L, B, From, Marks) ->
-    {Attrs, Gt} = tag_attrs(L, B, From, []),
-    End =
-        case match_from(L, ~"</select", Gt) of
-            {Close, _} -> Close;
-            nomatch -> byte_size(L)
-        end,
-    case lists:keyfind(~"value", 1, Attrs) of
-        {_, Value} -> {mark_options(L, B, Gt, End, picks(Value, Attrs), Marks), End};
-        false -> {Marks, End}
+choices_at(Bin, At, {Content, _Stack} = Ctx, Picked, Marks) ->
+    case markup_at(Bin, At, Content) of
+        {Skip, Next} when Skip =:= skip; Skip =:= skip_text ->
+            choices(Bin, Next, Ctx, Picked, Marks);
+        {start, Name, Attrs, Close} ->
+            choices_start(Bin, Name, Attrs, Close, Ctx, Picked, Marks);
+        {'end', Name, Close} ->
+            choices_end(Bin, Name, Close, Ctx, Picked, Marks)
     end.
 
-picks(Value, Attrs) ->
-    case lists:keymember(~"multiple", 1, Attrs) of
-        true -> json_picks(Value);
-        false -> [Value]
-    end.
-
-json_picks(Value) ->
-    try json:decode(Value) of
-        Picks when is_list(Picks) -> [P || P <- Picks, is_binary(P)];
-        _One -> [Value]
-    catch
-        error:_ -> [Value]
-    end.
-
-mark_options(_L, _B, From, End, _Picks, Marks) when From >= End ->
+choices_start(_Bin, _Name, _Attrs, eof, _Ctx, _Picked, Marks) ->
     Marks;
-mark_options(L, B, From, End, Picks, Marks) ->
-    case binary:match(L, [~"<option", ~"<!--"], [{scope, {From, End - From}}]) of
+choices_start(Bin, Name, Attrs, Close, {undefined, _} = Ctx, Picked, Marks) ->
+    case Name of
+        ~"option" ->
+            choices_after(
+                Bin, Name, Close, Ctx, Picked, mark_option(Bin, Attrs, Close, Picked, Marks)
+            );
+        _Other ->
+            case closes_select(Name) of
+                true -> Marks;
+                false -> choices_after(Bin, Name, Close, Ctx, Picked, Marks)
+            end
+    end;
+choices_start(Bin, Name, _Attrs, Close, Ctx, Picked, Marks) ->
+    choices_after(Bin, Name, Close, Ctx, Picked, Marks).
+
+%% Past a start tag: over the content of an element that is not parsed as markup, and
+%% into the content context of one that changes it.
+choices_after(Bin, Name, Close, {Content, Stack} = Ctx, Picked, Marks) ->
+    case skip_content(Bin, Name, Close + 1, Content) of
+        {skipped, Next} ->
+            choices(Bin, Next, Ctx, Picked, Marks);
+        parsed ->
+            Inner = content_context_name(Name, Content),
+            Self = binary:at(Bin, Close - 1) =:= $/ andalso Content =/= undefined,
+            case Inner of
+                Content ->
+                    choices(Bin, Close + 1, Ctx, Picked, Marks);
+                _Switched when Self -> choices(Bin, Close + 1, Ctx, Picked, Marks);
+                _Switched ->
+                    choices(Bin, Close + 1, {Inner, [{Name, Content} | Stack]}, Picked, Marks)
+            end
+    end.
+
+choices_end(_Bin, _Name, eof, _Ctx, _Picked, Marks) ->
+    Marks;
+choices_end(_Bin, ~"select", _Close, {undefined, _}, _Picked, Marks) ->
+    Marks;
+choices_end(Bin, Name, Close, {_Content, [{Name, Outer} | Stack]}, Picked, Marks) ->
+    choices(Bin, Close + 1, {Outer, Stack}, Picked, Marks);
+choices_end(Bin, _Name, Close, Ctx, Picked, Marks) ->
+    choices(Bin, Close + 1, Ctx, Picked, Marks).
+
+%% The start tags that end a select's content, as the parser treats them there.
+closes_select(~"select") -> true;
+closes_select(~"input") -> true;
+closes_select(~"keygen") -> true;
+closes_select(~"textarea") -> true;
+closes_select(_Name) -> false.
+
+%% Content the parser does not read as markup: raw text runs to the element's end tag,
+%% and a `<template>`'s content is inert, its own nested templates included.
+skip_content(Bin, ~"template", From, undefined) ->
+    {skipped, past_template(Bin, From, 1)};
+skip_content(Bin, Name, From, Content) ->
+    case raw_text_kind_name(Name, Content) of
+        none -> parsed;
+        _Raw -> {skipped, past_end_tag(Bin, Name, From)}
+    end.
+
+past_template(Bin, Pos, Depth) ->
+    case next_lt(Bin, Pos) of
         nomatch ->
+            byte_size(Bin);
+        At ->
+            case markup_at(Bin, At, undefined) of
+                {start, ~"template", _Attrs, Close} when is_integer(Close) ->
+                    past_template(Bin, Close + 1, Depth + 1);
+                {'end', ~"template", Close} when is_integer(Close), Depth =:= 1 ->
+                    Close + 1;
+                {'end', ~"template", Close} when is_integer(Close) ->
+                    past_template(Bin, Close + 1, Depth - 1);
+                {Skip, Next} when Skip =:= skip; Skip =:= skip_text ->
+                    past_template(Bin, Next, Depth);
+                {_Tag, _Name, _Attrs, Close} when is_integer(Close) ->
+                    past_template(Bin, Close + 1, Depth);
+                {_Tag, _Name, Close} when is_integer(Close) ->
+                    past_template(Bin, Close + 1, Depth);
+                _Eof ->
+                    byte_size(Bin)
+            end
+    end.
+
+%% The end of a raw-text element's content: the first `</name` followed by what ends
+%% a tag name, then that end tag.
+past_end_tag(Bin, Name, From) ->
+    case raw_text_end(Bin, Name, From) of
+        nomatch ->
+            byte_size(Bin);
+        At ->
+            case markup_at(Bin, At, undefined) of
+                {'end', _Name, Close} when is_integer(Close) -> Close + 1;
+                _Eof -> byte_size(Bin)
+            end
+    end.
+
+raw_text_end(Bin, Name, From) ->
+    case match_from(Bin, ~"</", From) of
+        nomatch ->
+            nomatch;
+        {At, 2} ->
+            Len = byte_size(Name),
+            case Bin of
+                <<_:(At + 2)/binary, Candidate:Len/binary, Rest/binary>> ->
+                    case fold_name(Candidate) =:= Name andalso ends_name(Rest) of
+                        true -> At;
+                        false -> raw_text_end(Bin, Name, At + 2)
+                    end;
+                _Short ->
+                    nomatch
+            end
+    end.
+
+ends_name(<<C, _/binary>>) when C =/= $>, C =/= $/, not ?IS_SPACE(C) -> false;
+ends_name(_End) -> true.
+
+%% Mark the option whose start tag closes at `Close` when `Picked` accepts its value.
+mark_option(Bin, Attrs, Close, Picked, Marks) ->
+    case {lists:keymember(~"selected", 1, Attrs), lists:keyfind(~"value", 1, Attrs)} of
+        {true, _Value} ->
             Marks;
-        {At, 4} ->
-            mark_options(L, B, skip_past(L, At + 4, ~"-->"), End, Picks, Marks);
-        {At, Len} ->
-            Next = At + Len,
-            case ends_tag_name(L, Next) of
-                false ->
-                    mark_options(L, B, Next, End, Picks, Marks);
-                true ->
-                    {Attrs, Gt} = tag_attrs(L, B, Next, []),
-                    Marks1 =
-                        case
-                            Gt < End andalso not lists:keymember(~"selected", 1, Attrs) andalso
-                                lists:member(option_value(L, B, Attrs, Gt + 1, End), Picks)
-                        of
-                            true -> [Gt | Marks];
-                            false -> Marks
-                        end,
-                    mark_options(L, B, Gt + 1, End, Picks, Marks1)
-            end
+        {false, {_, Value}} ->
+            mark_if(Picked(Value), Close, Marks);
+        {false, false} ->
+            mark_if(Picked(collapse_ws(option_text(Bin, Close + 1, []))), Close, Marks)
     end.
 
-option_value(L, B, Attrs, From, End) ->
-    case lists:keyfind(~"value", 1, Attrs) of
-        {_, Value} -> Value;
-        false -> collapse_ws(decode_refs(iolist_to_binary(option_text(L, B, From, End))))
-    end.
+mark_if(true, Close, Marks) -> [Close | Marks];
+mark_if(false, _Close, Marks) -> Marks.
 
-%% The option's text runs to the tag that ends it; comments and the tags of any
-%% element inside it are not text.
-option_text(_L, _B, From, End) when From >= End ->
-    [];
-option_text(L, B, From, End) ->
-    case binary:match(L, ~"<", [{scope, {From, End - From}}]) of
+%% An option's text, as its `text` property reads it: the text it holds up to what
+%% ends it, character references decoded, tags and comments left out, and a script's
+%% content too.
+option_text(Bin, Pos, Acc) ->
+    case match_from(Bin, [~"<", ~"&"], Pos) of
         nomatch ->
-            [binary:part(B, From, End - From)];
+            iolist_to_binary(lists:reverse(Acc, [rest_from(Bin, Pos)]));
         {At, 1} ->
-            Text = binary:part(B, From, At - From),
-            case {ends_option(L, At), binary:part(L, At, min(4, End - At))} of
-                {true, _Open} -> [Text];
-                {false, ~"<!--"} -> [Text | option_text(L, B, skip_past(L, At + 4, ~"-->"), End)];
-                {false, _Tag} -> [Text | option_text(L, B, skip_past(L, At + 1, ~">"), End)]
+            Text = binary_part(Bin, Pos, At - Pos),
+            case binary:at(Bin, At) of
+                $& ->
+                    {Char, Next} = char_ref(Bin, At, text),
+                    option_text(Bin, Next, [Char, Text | Acc]);
+                $< ->
+                    option_markup(Bin, At, [Text | Acc])
             end
     end.
 
-ends_option(L, At) ->
-    lists:any(
-        fun(Open) ->
-            Len = byte_size(Open),
-            At + Len =< byte_size(L) andalso binary:part(L, At, Len) =:= Open andalso
-                ends_tag_name(L, At + Len)
-        end,
-        [~"</option", ~"<option", ~"</optgroup", ~"<optgroup", ~"<hr"]
-    ).
+option_markup(Bin, At, Acc) ->
+    case markup_at(Bin, At, undefined) of
+        {skip, Next} ->
+            option_text(Bin, Next, Acc);
+        {skip_text, Next} ->
+            option_text(Bin, Next, [~"<" | Acc]);
+        {start, Name, _Attrs, Close} when is_integer(Close) ->
+            case ends_option(start, Name) of
+                true -> iolist_to_binary(lists:reverse(Acc));
+                false -> option_child(Bin, Name, Close + 1, Acc)
+            end;
+        {'end', Name, Close} when is_integer(Close) ->
+            case ends_option('end', Name) of
+                true -> iolist_to_binary(lists:reverse(Acc));
+                false -> option_text(Bin, Close + 1, Acc)
+            end;
+        _Eof ->
+            iolist_to_binary(lists:reverse(Acc))
+    end.
 
-%% An open tag's attributes, names lowercased and values decoded (the first of a
-%% repeated name first, as the parser keeps it), and the position of its `>`.
-tag_attrs(L, B, Pos0, Acc) ->
-    Pos = skip_attr_space(L, Pos0),
-    case Pos >= byte_size(L) orelse binary:at(L, Pos) =:= $> of
-        true ->
-            {lists:reverse(Acc), Pos};
-        false ->
-            NameEnd = attr_name_end(L, Pos + 1),
-            Name = binary:part(L, Pos, NameEnd - Pos),
-            AfterName = skip_space(L, NameEnd),
-            case AfterName < byte_size(L) andalso binary:at(L, AfterName) =:= $= of
-                true ->
-                    {Value, After} = attr_value(B, skip_space(L, AfterName + 1)),
-                    tag_attrs(L, B, After, [{Name, decode_refs(Value)} | Acc]);
-                false ->
-                    tag_attrs(L, B, AfterName, [{Name, <<>>} | Acc])
+ends_option(start, Name) ->
+    Name =:= ~"option" orelse Name =:= ~"optgroup" orelse
+        Name =:= ~"hr" orelse closes_select(Name);
+ends_option('end', Name) ->
+    Name =:= ~"option" orelse Name =:= ~"optgroup" orelse
+        Name =:= ~"select".
+
+%% Inside an option: a script's content is not its text, a raw-text element's is (as
+%% written, or decoded for escapable raw text), and any other tag adds nothing.
+option_child(Bin, ~"script", From, Acc) ->
+    option_text(Bin, past_end_tag(Bin, ~"script", From), Acc);
+option_child(Bin, Name, From, Acc) ->
+    case raw_text_kind_name(Name, undefined) of
+        none ->
+            option_text(Bin, From, Acc);
+        Kind ->
+            End = raw_text_close(Bin, Name, From),
+            Raw = binary_part(Bin, From, End - From),
+            option_text(Bin, past_end_tag(Bin, Name, From), [raw_text_value(Kind, Raw) | Acc])
+    end.
+
+raw_text_close(Bin, Name, From) ->
+    case raw_text_end(Bin, Name, From) of
+        nomatch -> byte_size(Bin);
+        At -> At
+    end.
+
+raw_text_value(escapable, Raw) -> decode_refs(Raw, text);
+raw_text_value(raw, Raw) -> Raw.
+
+%% What the markup at `At` (a `<`) is. A start tag comes with its attributes and the
+%% position of its `>` (`eof` when the fragment ends inside it), an end tag with that
+%% position; comments, bogus comments and, in foreign content, CDATA sections are
+%% skipped; a `<` that opens nothing is text.
+markup_at(Bin, At, Content) ->
+    case Bin of
+        <<_:At/binary, "<!--", _/binary>> ->
+            {skip, comment_end(Bin, At + 4)};
+        <<_:At/binary, "<![CDATA[", _/binary>> when Content =/= undefined ->
+            {skip, past(Bin, At + 9, ~"]]>")};
+        <<_:At/binary, "<!", _/binary>> ->
+            {skip, past(Bin, At + 2, ~">")};
+        <<_:At/binary, "<?", _/binary>> ->
+            {skip, past(Bin, At + 2, ~">")};
+        <<_:At/binary, "</", C, _/binary>> when ?IS_ALPHA(C) ->
+            {Name, NameEnd} = tag_name_at(Bin, At + 2),
+            {_Attrs, Close} = tag_attrs(Bin, NameEnd, []),
+            {'end', Name, Close};
+        <<_:At/binary, "</>", _/binary>> ->
+            {skip, At + 3};
+        <<_:At/binary, "</", _/binary>> ->
+            {skip, past(Bin, At + 2, ~">")};
+        <<_:At/binary, "<", C, _/binary>> when ?IS_ALPHA(C) ->
+            {Name, NameEnd} = tag_name_at(Bin, At + 1),
+            {Attrs, Close} = tag_attrs(Bin, NameEnd, []),
+            {start, Name, Attrs, Close};
+        <<_:At/binary, "<", _/binary>> ->
+            {skip_text, At + 1}
+    end.
+
+%% A comment ends at `-->`, or `--!>`; `<!-->` and `<!--->` are empty ones.
+comment_end(Bin, From) ->
+    case Bin of
+        <<_:From/binary, ">", _/binary>> ->
+            From + 1;
+        <<_:From/binary, "->", _/binary>> ->
+            From + 2;
+        _Body ->
+            case match_from(Bin, [~"-->", ~"--!>"], From) of
+                {At, Len} -> At + Len;
+                nomatch -> byte_size(Bin)
             end
     end.
 
-attr_value(B, Pos) when Pos >= byte_size(B) ->
-    {<<>>, Pos};
-attr_value(B, Pos) ->
-    case binary:at(B, Pos) of
-        Quote when Quote =:= $"; Quote =:= $' ->
-            case binary:match(B, <<Quote>>, [{scope, {Pos + 1, byte_size(B) - Pos - 1}}]) of
-                {Close, 1} -> {binary:part(B, Pos + 1, Close - Pos - 1), Close + 1};
-                nomatch -> {binary:part(B, Pos + 1, byte_size(B) - Pos - 1), byte_size(B)}
+past(Bin, From, Pattern) ->
+    case match_from(Bin, Pattern, From) of
+        {At, Len} -> At + Len;
+        nomatch -> byte_size(Bin)
+    end.
+
+tag_name_at(Bin, From) ->
+    End = name_end(Bin, From),
+    {fold_name(binary_part(Bin, From, End - From)), End}.
+
+name_end(Bin, Pos) ->
+    case Bin of
+        <<_:Pos/binary, C, _/binary>> when C =/= $>, C =/= $/, not ?IS_SPACE(C) ->
+            name_end(Bin, Pos + 1);
+        _End ->
+            Pos
+    end.
+
+%% A name as the parser compares it, ASCII case folded; most are lowercase already.
+fold_name(Name) ->
+    case has_upper(Name) of
+        true -> ascii_lowercase(Name);
+        false -> Name
+    end.
+
+has_upper(<<C, _/binary>>) when C >= $A, C =< $Z -> true;
+has_upper(<<_, Rest/binary>>) -> has_upper(Rest);
+has_upper(<<>>) -> false.
+
+%% A tag's attributes, as the tokenizer reads them, and the position of the `>` that
+%% closes the tag, or `eof`. Only `value` and `selected` matter here: those are kept,
+%% the value decoded, the first of a repeated name winning as in the parser.
+tag_attrs(Bin, Pos0, Acc) ->
+    Pos = skip_attr_space(Bin, Pos0),
+    case Bin of
+        <<_:Pos/binary>> ->
+            {Acc, eof};
+        <<_:Pos/binary, ">", _/binary>> ->
+            {Acc, Pos};
+        _Attr ->
+            %% A `=` may start a name (a parse error the parser recovers from).
+            NameEnd = attr_name_end(Bin, Pos + 1),
+            Name = binary_part(Bin, Pos, NameEnd - Pos),
+            AfterName = skip_space(Bin, NameEnd),
+            case Bin of
+                <<_:AfterName/binary, "=", _/binary>> ->
+                    {Value, After} = attr_value(Bin, skip_space(Bin, AfterName + 1)),
+                    tag_attrs(Bin, After, add_attr(Name, Value, Acc));
+                _NoValue ->
+                    tag_attrs(Bin, AfterName, add_attr(Name, <<>>, Acc))
+            end
+    end.
+
+add_attr(Name, Value, Acc) when byte_size(Name) =:= 5; byte_size(Name) =:= 8 ->
+    case fold_name(Name) of
+        Kept when Kept =:= ~"value"; Kept =:= ~"selected" ->
+            case lists:keymember(Kept, 1, Acc) of
+                true -> Acc;
+                false -> [{Kept, decode_refs(Value, attribute)} | Acc]
+            end;
+        _Other ->
+            Acc
+    end;
+add_attr(_Name, _Value, Acc) ->
+    Acc.
+
+attr_value(Bin, Pos) ->
+    case Bin of
+        <<_:Pos/binary, Quote, _/binary>> when Quote =:= $"; Quote =:= $' ->
+            case match_from(Bin, <<Quote>>, Pos + 1) of
+                {Close, 1} -> {binary_part(Bin, Pos + 1, Close - Pos - 1), Close + 1};
+                nomatch -> {binary_part(Bin, Pos + 1, byte_size(Bin) - Pos - 1), byte_size(Bin)}
             end;
         _Unquoted ->
-            End = unquoted_end(B, Pos),
-            {binary:part(B, Pos, End - Pos), End}
+            End = unquoted_end(Bin, Pos),
+            {binary_part(Bin, Pos, End - Pos), End}
     end.
 
-unquoted_end(B, Pos) when Pos >= byte_size(B) -> Pos;
-unquoted_end(B, Pos) ->
-    case is_space(binary:at(B, Pos)) orelse binary:at(B, Pos) =:= $> of
-        true -> Pos;
-        false -> unquoted_end(B, Pos + 1)
+unquoted_end(Bin, Pos) ->
+    case Bin of
+        <<_:Pos/binary, C, _/binary>> when C =/= $>, not ?IS_SPACE(C) -> unquoted_end(Bin, Pos + 1);
+        _End -> Pos
     end.
 
-attr_name_end(L, Pos) when Pos >= byte_size(L) -> Pos;
-attr_name_end(L, Pos) ->
-    case binary:at(L, Pos) of
-        C when C =:= $=; C =:= $>; C =:= $/ -> Pos;
-        C ->
-            case is_space(C) of
-                true -> Pos;
-                false -> attr_name_end(L, Pos + 1)
-            end
+attr_name_end(Bin, Pos) ->
+    case Bin of
+        <<_:Pos/binary, C, _/binary>> when C =/= $=, C =/= $>, C =/= $/, not ?IS_SPACE(C) ->
+            attr_name_end(Bin, Pos + 1);
+        _End ->
+            Pos
     end.
 
-skip_attr_space(L, Pos) when Pos >= byte_size(L) -> Pos;
-skip_attr_space(L, Pos) ->
-    case binary:at(L, Pos) of
-        $/ ->
-            skip_attr_space(L, Pos + 1);
-        C ->
-            case is_space(C) of
-                true -> skip_attr_space(L, Pos + 1);
-                false -> Pos
-            end
+skip_attr_space(Bin, Pos) ->
+    case Bin of
+        <<_:Pos/binary, C, _/binary>> when C =:= $/; ?IS_SPACE(C) -> skip_attr_space(Bin, Pos + 1);
+        _Other -> Pos
     end.
 
-skip_space(L, Pos) when Pos >= byte_size(L) -> Pos;
-skip_space(L, Pos) ->
-    case is_space(binary:at(L, Pos)) of
-        true -> skip_space(L, Pos + 1);
-        false -> Pos
+skip_space(Bin, Pos) ->
+    case Bin of
+        <<_:Pos/binary, C, _/binary>> when ?IS_SPACE(C) -> skip_space(Bin, Pos + 1);
+        _Other -> Pos
     end.
 
-skip_past(L, Pos, Pattern) ->
-    case match_from(L, Pattern, Pos) of
-        {At, Len} -> At + Len;
-        nomatch -> byte_size(L)
+next_lt(Bin, Pos) ->
+    case match_from(Bin, ~"<", Pos) of
+        {At, 1} -> At;
+        nomatch -> nomatch
     end.
 
-match_from(L, Pattern, Pos) ->
-    binary:match(L, Pattern, [{scope, {Pos, byte_size(L) - Pos}}]).
-
-ends_tag_name(L, Pos) when Pos >= byte_size(L) -> true;
-ends_tag_name(L, Pos) ->
-    C = binary:at(L, Pos),
-    C =:= $> orelse C =:= $/ orelse is_space(C).
-
-is_space(C) -> C =:= $\s orelse C =:= $\t orelse C =:= $\n orelse C =:= $\f orelse C =:= $\r.
+match_from(Bin, _Pattern, Pos) when Pos >= byte_size(Bin) ->
+    nomatch;
+match_from(Bin, Pattern, Pos) ->
+    binary:match(Bin, Pattern, [{scope, {Pos, byte_size(Bin) - Pos}}]).
 
 collapse_ws(Text) ->
     iolist_to_binary(
         lists:join(~" ", binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]))
     ).
 
-%% The character references this module's escape/1 writes, plus numeric ones; any
-%% other `&` stays as it is.
-decode_refs(Bin) ->
+%% Character references, decoded as the tokenizer decodes them in text or in an
+%% attribute value: numeric ones (with the replacements the standard makes), and named
+%% ones from the standard's whole table, a legacy name without its `;` included -- in
+%% an attribute value, only when what follows it could not continue a name.
+decode_refs(Bin, Mode) ->
     case binary:match(Bin, ~"&") of
         nomatch -> Bin;
-        _Some -> iolist_to_binary(decode_refs(Bin, []))
+        {At, 1} -> decode_refs(Bin, At, Mode, [binary_part(Bin, 0, At)])
     end.
 
-decode_refs(<<>>, Acc) ->
-    lists:reverse(Acc);
-decode_refs(<<"&amp;", R/binary>>, Acc) ->
-    decode_refs(R, [$& | Acc]);
-decode_refs(<<"&lt;", R/binary>>, Acc) ->
-    decode_refs(R, [$< | Acc]);
-decode_refs(<<"&gt;", R/binary>>, Acc) ->
-    decode_refs(R, [$> | Acc]);
-decode_refs(<<"&quot;", R/binary>>, Acc) ->
-    decode_refs(R, [$" | Acc]);
-decode_refs(<<"&apos;", R/binary>>, Acc) ->
-    decode_refs(R, [$' | Acc]);
-decode_refs(<<"&#", R0/binary>>, Acc) ->
-    case numeric_ref(R0) of
-        {ok, Char, R} -> decode_refs(R, [Char | Acc]);
-        error -> decode_refs(R0, [~"&#" | Acc])
-    end;
-decode_refs(<<C, R/binary>>, Acc) ->
-    decode_refs(R, [C | Acc]).
+decode_refs(Bin, At, Mode, Acc) ->
+    {Char, Next} = char_ref(Bin, At, Mode),
+    case match_from(Bin, ~"&", Next) of
+        nomatch ->
+            iolist_to_binary(lists:reverse(Acc, [Char, rest_from(Bin, Next)]));
+        {Amp, 1} ->
+            decode_refs(Bin, Amp, Mode, [binary_part(Bin, Next, Amp - Next), Char | Acc])
+    end.
 
-numeric_ref(<<X, R/binary>>) when X =:= $x; X =:= $X ->
-    numeric_ref(R, 16);
-numeric_ref(R) ->
-    numeric_ref(R, 10).
+%% The reference at `At` (an `&`): the text it decodes to and where the input resumes.
+%% Not a reference: the `&` itself.
+char_ref(Bin, At, Mode) ->
+    case Bin of
+        <<_:At/binary, "&#", X, Rest/binary>> when X =:= $x; X =:= $X ->
+            numeric_ref(Bin, hex_digits(Rest, <<>>), At, 3, 16);
+        <<_:At/binary, "&#", Rest/binary>> ->
+            numeric_ref(Bin, dec_digits(Rest, <<>>), At, 2, 10);
+        <<_:At/binary, "&", Rest/binary>> ->
+            named_ref(Rest, At + 1, Mode)
+    end.
 
-numeric_ref(R, Base) ->
-    case binary:split(R, ~";") of
-        [Digits, Rest] when Digits =/= <<>>, byte_size(Digits) =< 8 ->
-            try binary_to_integer(Digits, Base) of
-                N ->
-                    case unicode:characters_to_binary([N]) of
-                        Char when is_binary(Char) -> {ok, Char, Rest};
-                        _Invalid -> error
-                    end
-            catch
-                error:badarg -> error
+%% `&#` (or `&#x`) with no digit is no reference: the `&` is text.
+numeric_ref(_Bin, <<>>, At, _Lead, _Base) ->
+    {~"&", At + 1};
+numeric_ref(Bin, Digits, At, Lead, Base) ->
+    End = At + Lead + byte_size(Digits),
+    Next =
+        case Bin of
+            <<_:End/binary, ";", _/binary>> -> End + 1;
+            _NoSemicolon -> End
+        end,
+    {code_point_text(binary_to_integer(Digits, Base)), Next}.
+
+hex_digits(<<C, Rest/binary>>, Acc) when
+    (C >= $0 andalso C =< $9) orelse (C >= $a andalso C =< $f) orelse (C >= $A andalso C =< $F)
+->
+    hex_digits(Rest, <<Acc/binary, C>>);
+hex_digits(_Rest, Acc) ->
+    Acc.
+
+dec_digits(<<C, Rest/binary>>, Acc) when C >= $0, C =< $9 ->
+    dec_digits(Rest, <<Acc/binary, C>>);
+dec_digits(_Rest, Acc) ->
+    Acc.
+
+%% What a numeric reference decodes to: U+FFFD for NUL, a surrogate or past Unicode,
+%% the windows-1252 character for a C1 control the standard remaps.
+code_point_text(0) ->
+    <<16#FFFD/utf8>>;
+code_point_text(N) when N > 16#10FFFF ->
+    <<16#FFFD/utf8>>;
+code_point_text(N) when N >= 16#D800, N =< 16#DFFF ->
+    <<16#FFFD/utf8>>;
+code_point_text(N) when N >= 16#80, N =< 16#9F ->
+    <<(c1_replacement(N))/utf8>>;
+code_point_text(N) ->
+    <<N/utf8>>.
+
+c1_replacement(16#80) -> 16#20AC;
+c1_replacement(16#82) -> 16#201A;
+c1_replacement(16#83) -> 16#0192;
+c1_replacement(16#84) -> 16#201E;
+c1_replacement(16#85) -> 16#2026;
+c1_replacement(16#86) -> 16#2020;
+c1_replacement(16#87) -> 16#2021;
+c1_replacement(16#88) -> 16#02C6;
+c1_replacement(16#89) -> 16#2030;
+c1_replacement(16#8A) -> 16#0160;
+c1_replacement(16#8B) -> 16#2039;
+c1_replacement(16#8C) -> 16#0152;
+c1_replacement(16#8E) -> 16#017D;
+c1_replacement(16#91) -> 16#2018;
+c1_replacement(16#92) -> 16#2019;
+c1_replacement(16#93) -> 16#201C;
+c1_replacement(16#94) -> 16#201D;
+c1_replacement(16#95) -> 16#2022;
+c1_replacement(16#96) -> 16#2013;
+c1_replacement(16#97) -> 16#2014;
+c1_replacement(16#98) -> 16#02DC;
+c1_replacement(16#99) -> 16#2122;
+c1_replacement(16#9A) -> 16#0161;
+c1_replacement(16#9B) -> 16#203A;
+c1_replacement(16#9C) -> 16#0153;
+c1_replacement(16#9E) -> 16#017E;
+c1_replacement(16#9F) -> 16#0178;
+c1_replacement(N) -> N.
+
+%% A named reference: the longest name the standard knows, with its `;`, else the
+%% longest legacy name (one valid without it) the run of letters and digits starts with.
+named_ref(Rest, From, Mode) ->
+    Name = alnum_run(Rest, <<>>),
+    Len = byte_size(Name),
+    Full =
+        case Rest of
+            <<Name:Len/binary, ";", _/binary>> -> arizona_html_entities:named(<<Name/binary, ";">>);
+            _NoSemicolon -> error
+        end,
+    case Full of
+        {ok, Text} -> {Text, From + Len + 1};
+        error -> legacy_ref(Name, min(Len, ?LEGACY_REF_MAX), Rest, From, Mode)
+    end.
+
+legacy_ref(_Name, Len, _Rest, From, _Mode) when Len < 2 ->
+    {~"&", From};
+legacy_ref(Name, Len, Rest, From, Mode) ->
+    case arizona_html_entities:named(binary_part(Name, 0, Len)) of
+        {ok, Text} ->
+            case Mode =:= attribute andalso continues_name(Rest, Len) of
+                true -> {~"&", From};
+                false -> {Text, From + Len}
             end;
-        _NoRef ->
-            error
+        error ->
+            legacy_ref(Name, Len - 1, Rest, From, Mode)
     end.
+
+%% In an attribute value a legacy name followed by `=` or a letter or digit is kept as
+%% written: `?a=1&copy=2` is a query string, not a copyright sign.
+continues_name(Rest, Len) ->
+    case Rest of
+        <<_:Len/binary, C, _/binary>> -> C =:= $= orelse ?IS_ALNUM(C);
+        _End -> false
+    end.
+
+alnum_run(<<C, Rest/binary>>, Acc) when ?IS_ALNUM(C) ->
+    alnum_run(Rest, <<Acc/binary, C>>);
+alnum_run(_Rest, Acc) ->
+    Acc.
 
 splice_selected(Bin, [], From, Acc) ->
-    lists:reverse(Acc, [binary:part(Bin, From, byte_size(Bin) - From)]);
+    lists:reverse(Acc, [rest_from(Bin, From)]);
 splice_selected(Bin, [Gt | Marks], From, Acc) ->
-    splice_selected(Bin, Marks, Gt, [~" selected", binary:part(Bin, From, Gt - From) | Acc]).
+    splice_selected(Bin, Marks, Gt, [~" selected", binary_part(Bin, From, Gt - From) | Acc]).
+
+rest_from(Bin, From) ->
+    binary_part(Bin, From, byte_size(Bin) - From).
 
 boolean_attrs() -> presence.
 

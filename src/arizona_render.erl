@@ -59,10 +59,6 @@ op-code targets.
 %% note_fp_payload/0 / drain_fp_note/0).
 -define(FP_NOTE, '$arizona_fp_payload').
 
-%% Set while an SSR render produces a document holding a chooser that kept its value
-%% for the page to apply (see note_unmarked_choices/0).
--define(UNMARKED_CHOICES_KEY, '$arizona_unmarked_choices').
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -89,7 +85,6 @@ op-code targets.
 -export([zip_stream_fp/3]).
 -export([fingerprint_payload/1]).
 -export([drain_fp_note/0]).
--export([note_unmarked_choices/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -240,7 +235,7 @@ server response before any client is attached.
     Template :: arizona_template:template().
 render_to_iolist(#{s := Statics, d := Dynamics} = Tmpl) ->
     Backend = backend(Tmpl),
-    mark_choices(Backend, fun() -> zip_ssr(Backend, Statics, Dynamics) end).
+    zip_ssr(Backend, Statics, Dynamics).
 
 -doc """
 SSR render for a stateful handler (embedded-component style).
@@ -321,22 +316,6 @@ render_view(Handler, Opts, TmplFun) ->
     end.
 
 -doc """
-Notes that the document being rendered holds a chooser that kept its value for the
-page to apply (`arizona_template:chooser_value/2`), so the SSR render that produces
-it marks the choices it picks (`c:arizona_renderer:mark_choices/1`). A live process
-renders no document and notes nothing: the client applies the value there.
-""".
--spec note_unmarked_choices() -> ok.
-note_unmarked_choices() ->
-    case arizona_live:connected() of
-        true ->
-            ok;
-        false ->
-            _ = put(?UNMARKED_CHOICES_KEY, true),
-            ok
-    end.
-
--doc """
 Resolves an id-or-template to a binary id.
 
 If the input is already a binary, returns it unchanged. If it is a template,
@@ -406,6 +385,10 @@ render_dyn(Backend, #{s := InnerS, d := InnerD} = Nested) ->
     zip_d(NestedBackend, InnerS, InnerD);
 render_dyn(_Backend, V) when is_binary(V) ->
     V;
+render_dyn(Backend, {arizona_choices, Picked, Inner}) ->
+    %% A child of a chooser the parse transform could not see into, rendered at SSR
+    %% (render_ssr_val/2): only its own output is searched for the choices to mark.
+    Backend:mark_choices(render_dyn(Backend, Inner), Picked);
 render_dyn(Backend, V) ->
     text_leaf(Backend, arizona_template:to_bin(V)).
 
@@ -665,17 +648,14 @@ page_template(TmplFun, PageTmpl) -> TmplFun(PageTmpl).
 
 finish_page(PageTmpl, Bindings, Opts) ->
     Backend = backend(PageTmpl),
+    PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),
-    Finish = fun() ->
-        PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
-        %% The page's own root is held to one node at compile time.
-        {DocBackend, Root, Doc} = apply_layouts(
-            Layouts, Backend, {Backend, single, PageHTML}, Bindings
-        ),
-        ok = assert_document_root(Root),
-        {DocBackend, Doc}
-    end,
-    mark_choices(Finish).
+    %% The page's own root is held to one node at compile time.
+    {DocBackend, Root, Doc} = apply_layouts(
+        Layouts, Backend, {Backend, single, PageHTML}, Bindings
+    ),
+    ok = assert_document_root(Root),
+    {DocBackend, Doc}.
 
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
@@ -827,33 +807,6 @@ zip_d(Backend, [S | Statics], [{_Az, V} | DRest]) ->
 render_v(Backend, {attr, Name, V}) -> Backend:render_attr(Name, V);
 render_v(Backend, V) -> render_dyn(Backend, V).
 
-%% A chooser that kept its value holds choices the parse transform could not mark
-%% (a component, a runtime value, raw markup), so the document marks them before it
-%% is served, or the page would load on the first choice. Only a render that noted
-%% one (note_unmarked_choices/0) pays for the backend's pass over the document.
-mark_choices(Backend, Render) ->
-    {Backend, Doc} = mark_choices(fun() -> {Backend, Render()} end),
-    Doc.
-
-mark_choices(Render) ->
-    Outer = erase(?UNMARKED_CHOICES_KEY),
-    try
-        {Backend, Doc} = Render(),
-        case erase(?UNMARKED_CHOICES_KEY) of
-            true -> {Backend, Backend:mark_choices(Doc)};
-            undefined -> {Backend, Doc}
-        end
-    after
-        restore_unmarked_choices(Outer)
-    end.
-
-restore_unmarked_choices(undefined) ->
-    _ = erase(?UNMARKED_CHOICES_KEY),
-    ok;
-restore_unmarked_choices(true) ->
-    _ = put(?UNMARKED_CHOICES_KEY, true),
-    ok.
-
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly. `Backend` is the enclosing
 %% template's render backend, used to escape scalar leaves and render attributes.
@@ -901,14 +854,17 @@ render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
     render_ssr_esc_val(Backend, Fun());
 render_ssr_val(Backend, Fun) when is_function(Fun, 0) ->
     render_ssr_val(Backend, Fun());
-render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
+render_ssr_val(Backend, #{
+    t := ?EACH, source := Items, template := #{s := ItemStatics, d := DynamicsFun}
+}) when
+    is_list(Items)
+->
     %% SSR keeps no snapshot, so render the items and keep nothing else. Going through
     %% the item-snapshot shape instead materialised a `{Az, Value, Deps}` triple per
     %% dynamic, a list of those per item, and a list of those -- all of it read once,
     %% by the walk that turns it into exactly this output, and then dropped. The live
     %% paths still build it, because their snapshot is what the next diff reads.
     %% What the items render TO is the backend's concern, as everywhere else here.
-    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
     {ssr_rendered,
         join_items(Backend, [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items])};
 render_ssr_val(Backend, #{
@@ -918,18 +874,20 @@ render_ssr_val(Backend, #{
         order = Order,
         limit = Limit
     },
-    template := Tmpl
+    template := #{s := ItemStatics, d := DynamicsFun}
 }) ->
-    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
     {ssr_rendered,
         join_items(Backend, [
             zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
          || K <- arizona_template:visible_keys(Order, Limit)
         ])};
-render_ssr_val(Backend, #{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
+render_ssr_val(Backend, #{
+    t := ?EACH, source := Source, template := #{s := ItemStatics, d := DynamicsFun}
+}) when
+    is_map(Source)
+->
     %% Same entry order as the live path (`arizona_eval:render_map_items_simple/2`),
     %% so a later diff lines up with what SSR put on the page.
-    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
     {ssr_rendered,
         join_items(Backend, [
             zip_ssr(Backend, ItemStatics, DynamicsFun(K, V))
@@ -963,6 +921,8 @@ render_ssr_val(Backend, #{az_local := _, v := V}) ->
     %% Escape the content `?local` init to match the client's text-node semantics
     %% (see render_dyn/2); a raw splice here is an XSS vector for a seeded init.
     arizona_template:escape_value(Backend, V);
+render_ssr_val(Backend, #{choices := _} = Choices) ->
+    render_ssr_choices(Backend, Choices);
 render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     %% A nested template carries its own backend, so render its dynamics through
     %% that rather than the enclosing one -- but only when the two agree. They
@@ -981,6 +941,20 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     arizona_template:maybe_propagate(Tmpl, Snap0);
 render_ssr_val(Backend, Val) ->
     text_leaf(Backend, arizona_template:to_bin(Val)).
+
+%% A child of a chooser the parse transform could not see into (arizona_template:choices/3),
+%% rendered here like any child -- the slot scopes it, scope_slot/2 sees through the tag --
+%% for render_dyn/2 to mark the choices in its output alone. The value is read here,
+%% inside the slot's located evaluation.
+render_ssr_choices(Backend, #{choices := Picks, esc := Esc, child := Child}) ->
+    {Value, Multiple} = Picks(),
+    Texts = arizona_template:picks(Value, Multiple),
+    Inner =
+        case Esc of
+            true -> render_ssr_esc_val(Backend, Child);
+            false -> render_ssr_val(Backend, Child)
+        end,
+    {arizona_choices, fun(Text) -> lists:member(Text, Texts) end, Inner}.
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`

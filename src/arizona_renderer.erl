@@ -244,21 +244,22 @@ the transform also looks for in compiled markup to refuse a choice it cannot mar
     | {choice, #{value := binary(), selected := binary()}}.
 
 -doc """
-Marks picked, in a whole document of this backend, every choice under a chooser that
-kept its value. The parse transform keeps a chooser's value (rendering it with
-`arizona_template:chooser_value/2`) when something under it may render a choice it
-cannot mark at compile time: a component, a remote helper, a runtime value, raw
-markup. The renderer calls this on the document an SSR render produced (a page
-served over HTTP, static generation) when such a chooser rendered in it, so the page
-loads on the right choice before any script runs; a live client keeps the choices in
-step after. For HTML: `selected` on every `<option>` of such a `<select>` whose value
-its `value` names.
+Marks picked the choices in `Fragment` whose value `Picked` accepts. `Fragment` is what
+one child of a chooser with a value rendered when the parse transform could not see the
+choices in it (a component, a remote helper, a runtime value, raw markup): the
+transform wraps such a child (`arizona_template:choices/3`), and the SSR render
+(a page served over HTTP, static generation) renders it in place and hands this
+callback only its own output, so the page loads on the right choice before any script
+runs; a live client applies the chooser's value after. For HTML: `selected` on every
+`<option>` in the fragment whose value (its `value`, else its text) `Picked` accepts,
+read as the parser reads it.
 
 Optional, and required of a backend that implements `selection_role/1`.
 """.
--callback mark_choices(Document :: iodata()) -> iodata().
+-callback mark_choices(Fragment :: iodata(), Picked :: fun((binary()) -> boolean())) ->
+    iodata().
 
--optional_callbacks([selection_role/1, mark_choices/1]).
+-optional_callbacks([selection_role/1, mark_choices/2]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for

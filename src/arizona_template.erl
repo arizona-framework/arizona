@@ -56,6 +56,8 @@ render(Bindings) ->
 -export([chosen/3]).
 -export([chooser_value/2]).
 -export([option_text/1]).
+-export([choices/3]).
+-export([picks/2]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -110,6 +112,8 @@ render(Bindings) ->
 %% Emitted by the parse transform as the value of an option without one whose text
 %% holds a runtime value, under a valued select.
 -ignore_xref([option_text/1]).
+%% Emitted by the parse transform around a child of a valued select it cannot see into.
+-ignore_xref([choices/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -127,6 +131,7 @@ render(Bindings) ->
 -export_type([nodiff_identity/0]).
 -export_type([stateful_descriptor/0]).
 -export_type([stateless_descriptor/0]).
+-export_type([choices/0]).
 -export_type([render_fun/0]).
 
 %% --------------------------------------------------------------------
@@ -203,6 +208,12 @@ render(Bindings) ->
 -nominal nodiff_identity() :: {pos_integer() | undefined, term()}.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
+%% A child of a valued chooser the parse transform could not see into (choices/3).
+-nominal choices() :: #{
+    choices := fun(() -> {term(), term()}),
+    esc := boolean(),
+    child := term()
+}.
 -nominal stateless_descriptor() :: #{
     callback := fun((map()) -> template()),
     props := map(),
@@ -439,26 +450,55 @@ attr_text(V) -> to_bin(V).
 The value a chooser keeps when it holds a choice the parse transform cannot mark (a
 component, a runtime value, raw markup): `Value` as its attribute text, and with
 `Multiple` present (anything but `false`, as for `chosen/3`) a list of picks (or one
-pick) as a JSON array of their texts.
-`false` renders no attribute, picking nothing.
-
-Rendered outside a live process (a page served over HTTP, static generation) it also
-tells the renderer the document holds such a chooser, so that
-`c:arizona_renderer:mark_choices/1` marks the choices it picks before the page is
-served; the client keeps them in step after.
+pick) as a JSON array of their texts. `false` renders no attribute, picking nothing.
+The client applies it to the options a live update renders; the page loads on the
+ones `choices/3` marked.
 """.
 -spec chooser_value(Value, Multiple) -> binary() | false when
     Value :: term(),
     Multiple :: term().
 chooser_value(false, _Multiple) ->
     false;
+chooser_value(Value, false) ->
+    attr_text(Value);
 chooser_value(Value, Multiple) ->
-    ok = arizona_render:note_unmarked_choices(),
-    case Multiple of
-        false -> attr_text(Value);
-        _Present when is_list(Value) -> iolist_to_binary(json:encode([attr_text(V) || V <- Value]));
-        _Present -> iolist_to_binary(json:encode([attr_text(Value)]))
-    end.
+    iolist_to_binary(json:encode(picks(Value, Multiple))).
+
+-doc """
+The texts of the values a chooser's `Value` picks, compared as `chosen/3` compares
+them: none for `false`, each element of a list `Value` when `Multiple` is present
+(anything but `false`), else the one text `Value` renders as.
+""".
+-spec picks(Value, Multiple) -> [binary()] when
+    Value :: term(),
+    Multiple :: term().
+picks(false, _Multiple) ->
+    [];
+picks(Value, false) ->
+    [attr_text(Value)];
+picks(Values, _Multiple) when is_list(Values) ->
+    [attr_text(V) || V <- Values];
+picks(Value, _Multiple) ->
+    [attr_text(Value)].
+
+-doc """
+Wraps `Child`, a child of a chooser carrying a value that the parse transform could not
+see into (a component, a remote or non-inlined helper, a runtime value, raw markup),
+so the page loads on the choice the value names however the child renders it.
+
+`Picks` returns the chooser's `{Value, Multiple}`; `Esc` is whether the child's slot
+escapes (the slot's own rule, decided on `Child`). The SSR render renders `Child` in
+place and has the backend mark, in that output alone, the choices the value picks
+(`c:arizona_renderer:mark_choices/2`). A live render and every diff see `Child` itself,
+and `Picks` is never called there: the chooser keeps its value
+(`chooser_value/2`) and the client applies it.
+""".
+-spec choices(Picks, Esc, Child) -> choices() when
+    Picks :: fun(() -> {term(), term()}),
+    Esc :: boolean(),
+    Child :: term().
+choices(Picks, Esc, Child) ->
+    #{choices => Picks, esc => Esc, child => Child}.
 
 -doc """
 The value of a choice valued by its text: the text its children render, ASCII
@@ -918,6 +958,7 @@ scope_slot(_Az, Value) ->
 %% something other than hand its argument back. Keep the two in step -- a shape that
 %% answers `false` here can never be prefixed, however `scope_val/2` treats it.
 scopable({arizona_esc, Val}) -> scopable(Val);
+scopable({arizona_choices, _Picked, Val}) -> scopable(Val);
 scopable(#{view_id := _}) -> false;
 scopable(#{t := ?EACH}) -> false;
 scopable(#{az_local := _}) -> false;
@@ -1104,6 +1145,7 @@ scope_az(Prefix, Az) -> <<Prefix:(byte_size(Prefix))/binary, "-", Az/binary>>.
 %% their bodies are left alone -- only the container/element `az` in the enclosing
 %% statics (already scoped above) and this dynamic's own `az` are prefixed.
 scope_val(Prefix, {arizona_esc, V}) -> {arizona_esc, scope_val(Prefix, V)};
+scope_val(Prefix, {arizona_choices, Picked, V}) -> {arizona_choices, Picked, scope_val(Prefix, V)};
 scope_val(_Prefix, #{view_id := _} = Child) -> Child;
 scope_val(_Prefix, #{t := ?EACH} = Each) -> Each;
 scope_val(_Prefix, #{az_local := _} = Local) -> Local;

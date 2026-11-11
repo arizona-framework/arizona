@@ -198,6 +198,8 @@ peek_spec(Spec) -> {false, Spec}.
 %% own reads kept out of the slot's deps.
 peek_nodiff(#{callback := _, props := _} = Desc) ->
     with_saved_deps(fun() -> peek_nodiff(arizona_template:stateless_template(Desc)) end);
+peek_nodiff(#{choices := _, child := Child}) ->
+    peek_nodiff(Child);
 peek_nodiff(Val) ->
     Val.
 
@@ -248,6 +250,8 @@ eval_each_def({Az, Spec}, Views0) ->
 each_def(Az, Spec, Outer, Views0) ->
     case peek_spec(Spec) of
         {_Esc, #{t := ?EACH, source := _, template := _} = Each} ->
+            {each, Az, Each, close_deps(Outer)};
+        {_Esc, #{choices := _, child := #{t := ?EACH, source := _, template := _} = Each}} ->
             {each, Az, Each, close_deps(Outer)};
         {Esc, Raw} ->
             eval_peeked(Az, Esc, Raw, Outer, Views0)
@@ -701,6 +705,10 @@ eval_val(#{
 eval_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
     ItemSnaps = render_map_items_simple(Source, Tmpl),
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
+eval_val(#{choices := _, child := Child}) ->
+    %% A live render sees the child of a valued chooser as written: the client applies
+    %% the value the chooser keeps (arizona_template:choices/3).
+    eval_val(Child);
 eval_val(#{callback := _, props := _} = Desc) ->
     %% A stateless child evaluates to a plain snapshot map, structurally like an
     %% inline nested template. The enclosing eval_one (which knows the slot az)
@@ -848,6 +856,8 @@ eval_val_v(#{t := ?EACH, source := #stream{} = Source, template := Tmpl}, Views)
     eval_each_stream(Source, Tmpl, Views);
 eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, Views) when is_map(Source) ->
     eval_each_map(Source, Tmpl, Views);
+eval_val_v(#{choices := _, child := Child}, Views) ->
+    eval_val_v(Child, Views);
 eval_val_v(#{callback := _, props := _} = Desc, Views) ->
     %% Bracket the whole stateless recursion so eager ?get calls inside the
     %% callback body don't leak into the outer dynamic's tracked deps. The child
