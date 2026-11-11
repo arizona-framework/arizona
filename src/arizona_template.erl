@@ -80,6 +80,7 @@ render(Bindings) ->
 -export([text_statics/3]).
 -export([has_tag_open/1]).
 -export([raw_to_bin/1]).
+-export([mark_attr_part/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
@@ -107,8 +108,10 @@ render(Bindings) ->
 -ignore_xref([nodiff_token/3]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
-%% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
+%% Emitted by the parse transform around an attribute value holding a literal `?raw`.
 -ignore_xref([raw_attr/2]).
+%% Emitted by the parse transform around each other part of such a value.
+-ignore_xref([mark_attr_part/1]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
 %% Emitted by the parse transform as the `selected` of an option under a valued select.
@@ -589,6 +592,8 @@ to_bin({arizona_esc, V}) ->
 %% per list value was the one thing that cost.
 to_bin({arizona_raw, V}) ->
     to_bin(V);
+to_bin({arizona_markup, V}) ->
+    to_bin(V);
 to_bin(V) when is_list(V) ->
     %% A charlist/iodata is text: decode it as Unicode codepoints so the output is
     %% valid UTF-8. `iolist_to_binary/1` truncates a 128..255 codepoint to an
@@ -787,22 +792,39 @@ every path; in title and textarea a template with no element renders its text
 -- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
 Map}` where the attribute is evaluated, located on every path. A command in a raw
 is refused as in content (`effect_in_content`). A map inside a list in the raw is
-not looked for and raises `bad_template_value` at output, located on SSR only.
+not looked for and raises `bad_template_value`: in content at output, located on
+SSR only; in an attribute value inside its evaluation, located on every path (as
+does a raw in a literal attribute `?raw`).
+
+Only a `raw/1` literal at the template site opts out. Text in a raw that arrives
+any other way as the whole value -- from a helper, a `case`/`begin`, a prop a child
+reads -- is escaped, in content and attribute values alike; one inside a list value
+raises `bad_template_value`. A single-clause local helper whose body is a literal
+list holding a `?raw` is inlined at the call site, so that `?raw` is literal there
+and spliced, in content and attribute values alike; the same body behind a
+multi-clause or remote helper is a runtime list value and raises. A helper whose
+whole body is `?raw(X)` is a scalar helper, never inlined, so text in its raw is
+escaped. A `?local` attribute init is always text, as the client sets it; a content
+`?local` raw init is spliced.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
 raw(Value) -> {arizona_raw, Value}.
 
-%% Internal, emitted only by the parse transform for an interpolated attribute value
-%% with a literal `raw/1` part. The assembled value is markup, so it is one raw value:
-%% the raw parts verbatim, every other part escaped through `Backend` -- a static or
-%% `?get` part means the same text with or without a raw sibling.
+%% Internal, emitted only by the parse transform for an attribute value holding a
+%% literal `raw/1`, whole or as a part. The assembled value is markup: the literal raw
+%% parts verbatim, every other part escaped through `Backend` (the transform marks it
+%% with `mark_attr_part/1`, so a helper's raw in it is escaped too) -- a part means the same
+%% text with or without a raw sibling. It comes back `{arizona_markup, Bin}`, the one
+%% attribute value an attribute renderer splices: a bare `{arizona_raw, _}` reaching
+%% one is a helper's, and the opt-out applies only to a raw literal at the template
+%% site.
 -doc false.
--spec raw_attr(Backend, Parts) -> {arizona_raw, binary()} when
+-spec raw_attr(Backend, Parts) -> {arizona_markup, binary()} when
     Backend :: module(),
     Parts :: [term()].
 raw_attr(Backend, Parts) ->
-    {arizona_raw, <<<<(escape_value(Backend, P))/binary>> || P <- Parts>>}.
+    {arizona_markup, <<<<(escape_value(Backend, P))/binary>> || P <- Parts>>}.
 
 %% Internal, emitted only by the parse transform for a `value`-boolean backend
 %% (`boolean_attrs/0`, i.e. ?json): tags a dynamic attribute's boolean so the diff
@@ -816,10 +838,12 @@ bool_attr(Value) -> Value.
 
 -doc """
 Classifies the trusted shapes: a `raw/1` opt-out (`{arizona_raw, V}`, returned
-unwrapped) and an effect command or command list (`{arizona_effect, _}`). Every
-other value is `value`. A raw holding a map is still `{raw, Map}`: a caller that renders text
-refuses it in its raw arm (`raw_to_bin/1`), content renders it as the map before
-it gets here, and no other shape pays to test for it.
+unwrapped), the attribute markup `raw_attr/2` assembles (`{arizona_markup, Bin}`) and
+an effect command or command list (`{arizona_effect, _}`). Every other value is
+`value`. An attribute renderer splices `markup` and escapes a `raw`, which in an
+attribute value can only be a helper's. A raw holding a map is still `{raw, Map}`: a
+caller that renders text refuses it in its raw arm (`raw_to_bin/1`), content renders
+it as the map before it gets here, and no other shape pays to test for it.
 
 The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
 the backends' attribute renderers dispatch on it. `to_bin/1` matches the raw
@@ -829,10 +853,13 @@ both. Each call site decides the policy for a shape: an attribute renders a
 command through its backend, a content slot refuses one (`effect_in_content/1`),
 and `mark_esc/1` deliberately unwraps and re-escapes a helper-produced raw.
 """.
--spec classify_trusted(Value) -> {raw, term()} | {effect, Effect} | value when
+-spec classify_trusted(Value) ->
+    {raw, term()} | {markup, binary()} | {effect, Effect} | value
+when
     Value :: term(),
     Effect :: term().
 classify_trusted({arizona_raw, V}) -> {raw, V};
+classify_trusted({arizona_markup, Bin}) -> {markup, Bin};
 classify_trusted({arizona_effect, _} = Cmd) -> {effect, Cmd};
 classify_trusted([{arizona_effect, _} | _] = Cmds) -> {effect, Cmds};
 classify_trusted([Nested | _] = Cmds) when is_list(Nested) -> classify_nested(Cmds);
@@ -863,6 +890,8 @@ effect command is not text and raises `{effect_in_content, Cmd}`.
 -spec escape_value(Backend, Value) -> binary() when
     Backend :: module(),
     Value :: term().
+%% No `{markup, _}` arm: `raw_attr/2` builds that shape only as an attribute value,
+%% and content never receives one.
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
         {raw, V} -> raw_to_bin(V);
@@ -896,9 +925,9 @@ treatment a directly-slotted stateless child gets.
 
 `mark_esc/1` is reached only for an **escape-tagged** content slot (`{esc, Fun}`),
 which the parse transform emits for every content interpolation that is not a
-literal block -- a literal `raw/1` at the template site compiles to a bare
-(un-esc-tagged) slot and never reaches here. So a `{arizona_raw, V}` arriving
-here was produced by a **helper** returning `raw/1` into an escaping slot, which
+literal block, and for each part of a `raw_attr/2` attribute value that is not a
+literal `raw/1` -- a literal `raw/1` at the template site never reaches here. So a
+`{arizona_raw, V}` arriving here was produced by a **helper** returning `raw/1`, which
 the documented rule forbids ("the parse transform only recognizes the opt-out
 when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
@@ -914,6 +943,7 @@ mark_esc(#{az_local := _, v := Init}) ->
     mark_local_init(Init);
 mark_esc(V) when is_map(V) ->
     V;
+%% No `{markup, _}` arm, as in escape_value/2: the shape is attribute-only.
 mark_esc(V0) ->
     case classify_trusted(V0) of
         {raw, V} -> mark_raw_esc(V);
@@ -1084,6 +1114,21 @@ has_tag_open(<<_, Rest/binary>>) ->
     has_tag_open(Rest);
 has_tag_open(<<>>) ->
     false.
+
+%% Internal, emitted only by the parse transform around each part of a `raw_attr/2`
+%% value that is not a literal `raw/1`: marked for escaping as a content value is
+%% (`mark_esc/1`), except that a raw around a map is refused rather than rendered as
+%% the map, since an attribute value must be text.
+-doc false.
+-spec mark_attr_part(Value) -> term() when
+    Value :: term().
+mark_attr_part({arizona_raw, _} = Raw) ->
+    case mark_esc(Raw) of
+        Map when is_map(Map) -> raw_not_text(Map);
+        Marked -> Marked
+    end;
+mark_attr_part(Value) ->
+    mark_esc(Value).
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
 %% `?local` -- held directly by a `raw/1` in an attribute value, which must be text.
