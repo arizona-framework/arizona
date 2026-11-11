@@ -52,7 +52,8 @@ and the select keeps its value for the client to apply after.
     shadowing_parameter_is_renamed/1,
     shadowing_hoisted_read_is_refused/1,
     static_value_selects_at_compile_time/1,
-    static_text_with_references_folds/1
+    static_text_with_references_folds/1,
+    values_compare_as_the_parser_reads_them/1
 ]).
 
 all() ->
@@ -103,7 +104,8 @@ groups() ->
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
-            static_text_with_references_folds
+            static_text_with_references_folds,
+            values_compare_as_the_parser_reads_them
         ]}
     ].
 
@@ -890,6 +892,32 @@ static_text_with_references_folds(Config) when is_list(Config) ->
     ),
     ?assertEqual(nomatch, binary:match(HTML, [~"<!--az", ~" value="]), HTML),
     ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>Caf&eacute;"), HTML).
+
+%% The parser normalizes newlines and NUL before an attribute value exists, so a value
+%% and an option compare as it reads them on every path: an option the transform
+%% marks, and the value a select keeps for the client (a JSON array under `multiple`).
+values_compare_as_the_parser_reads_them(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod("sel_crlf", "{option, [{value, ~\"a\\nb\"}], []}, {option, [], [~\"z\"]}")
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a\r\nb"}))),
+    ?assertEqual(1, count_selected(HTML), HTML),
+    Static = compile_module(
+        "-module(sel_crlf_static). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:target(arizona_html, {select, [{value, ~\"a\\r\\nb\"}], "
+        "[{option, [{value, ~\"a\\nb\"}], []}]}). "
+    ),
+    ?assertEqual(
+        1, count_selected(iolist_to_binary(arizona_render:render_to_iolist(Static:render(#{}))))
+    ),
+    ?assert(arizona_template:chosen(<<"a", 0>>, <<"a", 16#FFFD/utf8>>, false)),
+    ?assertEqual(
+        ~"[\"a\\nb\",\"c\\nd\"]", arizona_template:chooser_value([~"a\r\nb", ~"c\rd"], true)
+    ),
+    ?assertEqual([~"a\nb"], arizona_template:picks(~"a\r\nb", false)),
+    %% A NUL in text is dropped by the tree builder, on every path that reads text.
+    ?assertEqual({ok, ~"ab"}, arizona_html:static_text(<<"a", 0, "b">>)),
+    ?assertEqual(~"ab", arizona_template:option_text([<<"a", 0>>, ~"b"])).
 
 %% --------------------------------------------------------------------
 %% Helpers

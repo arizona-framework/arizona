@@ -401,7 +401,8 @@ selection_role(Tag) ->
 %% references decoded, unless it opens a tag (or anything else `<` starts).
 static_text(Markup) ->
     case binary:match(Markup, ~"<") of
-        nomatch -> {ok, decode_refs(Markup, text)};
+        %% The tree builder drops a NUL in text, as option text does (mark_option/5).
+        nomatch -> {ok, decode_refs(binary:replace(Markup, <<0>>, <<>>, [global]), text)};
         _Tag -> error
     end.
 
@@ -411,7 +412,7 @@ static_text(Markup) ->
 %% every `<option>` in it whose value is one of `Picks`, so the page loads on it: its
 %% `value` attribute, else its text with whitespace stripped and collapsed, both read
 %% as the parser reads them (newlines and NUL preprocessed, character references
-%% decoded from the full named set), the picks preprocessed as attribute text too.
+%% decoded from the full named set), the picks read as attribute text the same way.
 %%
 %% The fragment is tokenized the way the parser would, so markup that only looks like
 %% an option is left alone: attribute values, comments, bogus comments, the content of
@@ -430,7 +431,8 @@ static_text(Markup) ->
 %% static markup after the slot) is valued by the part inside it.
 mark_choices(Fragment, Picks) ->
     Bin = iolist_to_binary(Fragment),
-    %% The picks render as the select's attribute, so they read as one would.
+    %% Picks from arizona_template:picks/2 are read as attribute text already; one a
+    %% caller hands as written is read the same way here.
     Texts = [preprocess(P) || P <- Picks],
     Picked = fun(Text) -> lists:member(Text, Texts) end,
     case choices(Bin, 0, {undefined, []}, Picked, []) of
@@ -780,18 +782,10 @@ first_attr(Name, Value, Acc) ->
         false -> [{Name, decode_refs(preprocess(Value), attribute)} | Acc]
     end.
 
-%% What the parser does to an attribute value before it decodes it: newlines
-%% normalized (CR LF and CR to LF), NUL replaced with U+FFFD.
+%% What the parser does to an attribute value before it decodes it, as
+%% arizona_template:attr_input/1 reads the picks.
 preprocess(Text) ->
-    case binary:match(Text, [~"\r", <<0>>]) of
-        nomatch ->
-            Text;
-        _Some ->
-            Lf = binary:replace(binary:replace(Text, ~"\r\n", ~"\n", [global]), ~"\r", ~"\n", [
-                global
-            ]),
-            binary:replace(Lf, <<0>>, <<16#FFFD/utf8>>, [global])
-    end.
+    arizona_template:attr_input(Text).
 
 attr_value(Bin, Pos) ->
     case Bin of

@@ -258,21 +258,22 @@ view marker. `keyed_item_ops/0` false lets a stream `?each` body skip `az_key`, 
 nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
 error. Mentions of `?terminal` elsewhere in this document describe that package's target.
 
-One callback is optional, `c:arizona_renderer:selection_role/1`, for a target whose output has
-no attribute for an element's chosen value. HTML is that target: `value` on a `<select>` is
-ignored by the parser, which loads on the first option (or the one marked `selected`), while a
-diff writes the `.value` property, so the page and every later update would disagree. The
-backend names the roles -- `select` is a `chooser` (its `value`, its `multiple`, its `option`
-choices), `option` a `choice` (its `value`, its `selected`) -- and the transform does the rest
-generically: it drops the chooser's value and appends to every choice under it a `selected`
-calling `arizona_template:chosen(ChoiceValue, ChooserValue, Multiple)`, folded to a static
-`true`/`false` when both values are literals. The choices are found where the chooser compiles
-(`compile_element/5`), after hoisted variables and helper bodies are spliced, through elements,
-content lists and conditional tails. An `?each` compiles bottom-up, before its chooser, so the
-pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a chooser in a
-`'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its item as it
-compiles (`compile_each_clause/11`). A template compiled before the chooser was seen counts as
-reached only when every option element in its statics carries a `chosen/3` call.
+One callback is optional, `c:arizona_renderer:selection_role/1`, for a target whose output has no
+attribute for an element's chosen value. HTML is that target: `value` on a `<select>` is ignored by
+the parser, which loads on the first option (or the one marked `selected`), while a diff writes the
+`.value` property, so the page and every later update would disagree. The backend names the roles --
+`select` is a `chooser` (its `value`, its `multiple`, its `option` choices), `option` a `choice`
+(its `value`, its `selected`) -- and the transform does the rest generically: it drops the chooser's
+value and appends to every choice under it a `selected` calling
+`arizona_template:chosen(ChoiceValue, ChooserValue, Multiple)` (both read as the parser reads an
+attribute value, `attr_input/1`: newlines normalized, NUL replaced, as every other path compares
+them), folded to a static `true`/`false` when both values are literals. The choices are found where
+the chooser compiles (`compile_element/5`), after hoisted variables and helper bodies are spliced,
+through elements, content lists and conditional tails. An `?each` compiles bottom-up, before its
+chooser, so the pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a
+chooser in a `'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its
+item as it compiles (`compile_each_clause/11`). A template compiled before the chooser was seen
+counts as reached only when every option element in its statics carries a `chosen/3` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
 stripped and collapsed): static text folds at compile time (read through the optional

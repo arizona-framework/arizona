@@ -224,13 +224,15 @@ batch in which an op, at any depth (an item or list patch's inner ops, a child v
 an item), targeted a select/option/optgroup or carried markup holding one (`noteChoices`,
 `arizona-ops.js`): an option the value names may arrive later. Option markup counts only when the
 page has a valued select (asked once per batch); otherwise only markup bringing a select does, so a
-page without one never searches for one. Options sharing a value are all marked, and the last one is
-selected, as the parser selects the last `selected` option (the `.value` setter would pick the
-first), also when an update brings one before it. The `arizona_js` attribute effects (`set_attr`,
-`remove_attr`, `toggle_attr`) go through the same writers, so `value` on a select means the same
-from an effect: it picks the option(s) it names, and removing it names none, which leaves a single
-select on its first option (the HTML default) and a multiple one on none. A select without a `value`
-is never touched by a batch.
+page without one never searches for one. Picks are read as the parser reads an attribute value
+(newlines normalized, NUL replaced; a live write or a JSON array skipped the parser), as the server
+compares them. Options sharing a value are all marked, and the last one is selected, as the parser
+selects the last `selected` option (the `.value` setter would pick the first), also when an update
+brings one before it. The `arizona_js` attribute effects (`set_attr`, `remove_attr`, `toggle_attr`)
+go through the same writers, so `value` on a select means the same from an effect: it picks the
+option(s) it names, and removing it names none, which leaves a single select on its first option
+(the HTML default) and a multiple one on none. A select without a `value` is never touched by a
+batch.
 
 A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. `set`/`setAll` on a missing view or key are silent no-ops.
 

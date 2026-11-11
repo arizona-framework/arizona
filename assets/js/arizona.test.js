@@ -666,6 +666,23 @@ describe('applyOps -- a select that kept its value', () => {
         search.mockRestore();
     });
 
+    // The value compares as the parser reads an attribute: newlines normalized, NUL
+    // replaced, whether it arrives as markup, as a JSON array or through a live write.
+    it('compares the value as the parser reads it', () => {
+        setupView(
+            'v',
+            '<select az="0" multiple value="[&quot;a\\r\\nb&quot;,&quot;c\\u0000&quot;]">' +
+                '<option value="z">z</option><option value="a&#10;b">x</option>' +
+                '<option value="c&#xFFFD;">y</option></select>' +
+                '<select az="1"><option value="z">z</option><option value="a&#10;b">x</option></select>',
+        );
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', '["a\\r\\nb","c\\u0000"]']]);
+        const many = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        expect([...many.selectedOptions].map((o) => o.text)).toEqual(['x', 'y']);
+        applyOps([[OP.SET_ATTR, 'v:1', 'value', 'a\r\nb']]);
+        expect(/** @type {HTMLSelectElement} */ (resolveEl('v:1')).value).toBe('a\nb');
+    });
+
     // An update that inserts an option sharing the value before the selected one: the
     // last of them stays selected, as a reload of the same markup would show.
     it('keeps the last of options sharing the value when an earlier one arrives', () => {

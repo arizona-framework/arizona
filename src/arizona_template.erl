@@ -58,6 +58,7 @@ render(Bindings) ->
 -export([option_text/1]).
 -export([choices/3]).
 -export([picks/2]).
+-export([attr_input/1]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -442,9 +443,30 @@ same_text(Same, Same) ->
 same_text(Choice, Value) ->
     attr_text(Choice) =:= attr_text(Value).
 
-%% `true` renders a bare attribute, whose value is the empty string.
+%% `true` renders a bare attribute, whose value is the empty string. The text is read
+%% as the parser reads an attribute value (attr_input/1), so a value compares on every
+%% path -- here, the backend's mark_choices/2, the client -- as the page holds it.
 attr_text(true) -> <<>>;
-attr_text(V) -> to_bin(V).
+attr_text(V) -> attr_input(to_bin(V)).
+
+-doc """
+`Text` as the HTML parser preprocesses an attribute value before anything reads it:
+newlines normalized (CR LF and CR to LF), NUL replaced with U+FFFD. A choice and a
+chooser's value compare in this form (`chosen/3`, `picks/2`), so the server, the
+backend's `mark_choices/2` and the client agree on which option a value names.
+""".
+-spec attr_input(Text) -> Text when
+    Text :: binary().
+attr_input(Text) ->
+    case binary:match(Text, [~"\r", <<0>>]) of
+        nomatch ->
+            Text;
+        _Some ->
+            Lf = binary:replace(binary:replace(Text, ~"\r\n", ~"\n", [global]), ~"\r", ~"\n", [
+                global
+            ]),
+            binary:replace(Lf, <<0>>, <<16#FFFD/utf8>>, [global])
+    end.
 
 -doc """
 The value a chooser keeps when it holds a choice the parse transform cannot mark (a
@@ -515,7 +537,10 @@ compare: that raises `option_text_markup`; give the option a `value` attribute.
 -spec option_text(Parts) -> binary() when
     Parts :: [term()].
 option_text(Parts) ->
-    Text = iolist_to_binary([option_text_part(P) || P <- Parts]),
+    %% The tree builder drops a NUL in text; splitting folds CR away.
+    Text = binary:replace(iolist_to_binary([option_text_part(P) || P <- Parts]), <<0>>, <<>>, [
+        global
+    ]),
     Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
     iolist_to_binary(lists:join(~" ", Words)).
 

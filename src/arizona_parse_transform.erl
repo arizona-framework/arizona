@@ -7574,10 +7574,12 @@ collapse_ws(Text) ->
 
 %% Literal on both sides and one value: decided here, a static attribute.
 chosen_ast(Value, #{fold := true, multiple := {atom, _, false}} = Sel, L) ->
+    %% Compared as the parser reads both (arizona_template:attr_input/1), as chosen/3 does.
     case {literal_text(Value), literal_text(maps:get(value, Sel))} of
-        {{ok, Same}, {ok, Same}} -> {atom, L, true};
-        {{ok, _}, {ok, _}} -> {atom, L, false};
-        _Dynamic -> chosen_call(Value, Sel, L)
+        {{ok, Choice}, {ok, Chosen}} ->
+            {atom, L, arizona_template:attr_input(Choice) =:= arizona_template:attr_input(Chosen)};
+        _Dynamic ->
+            chosen_call(Value, Sel, L)
     end;
 chosen_ast(Value, Sel, L) ->
     chosen_call(Value, Sel, L).

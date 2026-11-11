@@ -143,14 +143,26 @@ export function applyChooser(sel, force) {
  * @returns {string[]}
  */
 function chooserPicks(sel, raw) {
-    if (!sel.multiple) return [raw];
-    try {
-        const picks = JSON.parse(raw);
-        if (Array.isArray(picks)) return picks.map(String);
-    } catch {
-        // Not the server's array: one value, as the server compares it.
+    if (sel.multiple) {
+        try {
+            const picks = JSON.parse(raw);
+            if (Array.isArray(picks)) return picks.map((p) => attrInput(String(p)));
+        } catch {
+            // Not the server's array: one value, as the server compares it.
+        }
     }
-    return [raw];
+    return [attrInput(raw)];
+}
+
+/**
+ * A pick as the parser reads an attribute value (and an option's value reads):
+ * newlines normalized, NUL replaced. A value written live or decoded from JSON skipped
+ * the parser, so it is read here as the server compares it.
+ * @param {string} text
+ * @returns {string}
+ */
+function attrInput(text) {
+    return text.replace(/\r\n?/g, '\n').replace(/\0/g, '\uFFFD');
 }
 
 /**
