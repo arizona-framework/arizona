@@ -190,6 +190,12 @@ render(Bindings) ->
 %% `undef` at render.
 -define(CHOICES_MARK, '$arizona_choices').
 
+%% Wraps the `selected` test a choice under a chooser whose value is a `?local` gets
+%% (rewrite_choice/4): the selection is the client's, so the attribute compiles as a
+%% browser-owned slot (compile_dynamic_attr/5) -- rendered, never diffed. One left
+%% over is `undef` at render.
+-define(CHOSEN_ONCE_MARK, '$arizona_chosen_once').
+
 %% Stands in for an az-nodiff element's fingerprint in its `az-nodiff` token call until the
 %% statics, and so the fingerprint, are known (fill_nodiff_fingerprint/2).
 -define(NODIFF_FP, '$arizona_nodiff_fp').
@@ -5101,6 +5107,20 @@ emit_backend(Fun, Line) ->
 
 %% Emit a dynamic attribute value: a folded arizona_js command becomes a static,
 %% otherwise the backend bakes the name and the value flushes as a dynamic.
+compile_dynamic_attr(
+    Backend,
+    NameBin,
+    {call, L, {remote, _, {atom, _, arizona_template}, {atom, _, ?CHOSEN_ONCE_MARK}}, [Chosen]},
+    ElemAz,
+    State0
+) ->
+    %% A browser-owned slot (arizona_template:local/2) the client never reads by key:
+    %% the descriptor is built from the `?local` calls written in the template.
+    Once =
+        {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, local}}, [
+            ast_binary(<<>>), Chosen
+        ]},
+    compile_local_attr(Backend, NameBin, Once, ElemAz, State0);
 compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     case attr_local_spec(ValueAST, anno(ValueAST)) of
         {whole, _LocalCall} ->
@@ -7511,16 +7531,28 @@ push_each_fun(FunArg, _Sel) ->
     FunArg.
 
 choice_mark(Sel, FunArg) ->
-    #{backend := Backend, tag := Tag, value := Value, multiple := Multiple, choice := Choice} =
-        Sel,
+    #{
+        backend := Backend,
+        tag := Tag,
+        value := Value,
+        multiple := Multiple,
+        choice := Choice,
+        local := Local
+    } = Sel,
     L = anno(FunArg),
     {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, ?CHOICE_MARK}}, [
-        {atom, L, Backend}, ast_binary(Tag), Value, Multiple, ast_binary(Choice), FunArg
+        {atom, L, Backend},
+        ast_binary(Tag),
+        Value,
+        Multiple,
+        ast_binary(Choice),
+        {atom, L, Local},
+        FunArg
     ]}.
 
 take_choice_mark(
     {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, ?CHOICE_MARK}}, [
-        {atom, _, Backend}, TagAST, Value, Multiple, ChoiceAST, FunArg
+        {atom, _, Backend}, TagAST, Value, Multiple, ChoiceAST, {atom, _, Local}, FunArg
     ]}
 ) ->
     Sel = #{
@@ -7529,7 +7561,8 @@ take_choice_mark(
         value => Value,
         multiple => Multiple,
         choice => binary_text(ChoiceAST),
-        fold => false
+        fold => false,
+        local => Local
     },
     {Sel, FunArg};
 take_choice_mark(FunArg) ->
@@ -7645,7 +7678,7 @@ rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
     end,
     case choice_value(Backend, ValueName, Attrs, Rest) of
         {ok, Value} ->
-            Selected = {tuple, L, [ast_binary(Flag), chosen_ast(Value, Sel, L)]},
+            Selected = {tuple, L, [ast_binary(Flag), chosen_attr_ast(Value, Sel, L)]},
             {tuple, L, [TagAST, ast_list(Attrs ++ [Selected]) | Rest]};
         error ->
             opaque_child(Child, Sel)
@@ -7744,6 +7777,21 @@ choice_text_call(Backend, Parts, L) ->
 collapse_ws(Text) ->
     Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
     iolist_to_binary(lists:join(~" ", Words)).
+
+%% The `selected` a choice gets. Under a `?local` value the selection is the client's:
+%% the page loads on the initial, and the server never moves it again, so a test it
+%% cannot decide here renders once (?CHOSEN_ONCE_MARK) instead of tracking the reads
+%% the initial makes.
+chosen_attr_ast(Value, #{local := Local} = Sel, L) ->
+    case chosen_ast(Value, Sel, L) of
+        {atom, _, _} = Folded -> Folded;
+        Chosen when Local -> chosen_once(Chosen);
+        Chosen -> Chosen
+    end.
+
+chosen_once(Chosen) ->
+    L = anno(Chosen),
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, ?CHOSEN_ONCE_MARK}}, [Chosen]}.
 
 %% Literal on both sides and one value: decided here, a static attribute.
 chosen_ast(Value, #{fold := true, multiple := {atom, _, false}, backend := Backend} = Sel, L) ->

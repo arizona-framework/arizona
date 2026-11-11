@@ -2,10 +2,10 @@
 -moduledoc """
 A live page whose selects take their choice from a `value`: written literally, from a
 list `?each`, from a stream `?each`, `multiple`, from a component, from a child
-view (`arizona_select_value_child`), and from a `?local` under `multiple`, whole and
-interpolated. Buttons move the choice and add an option to the
-child, so the e2e can check the page loads on the chosen option and every update
-follows.
+view (`arizona_select_value_child`), from a `?local` under `multiple`, whole and
+interpolated, and from a `?local` whose initial is a binding. Buttons move the choice
+and add an option to the child, so the e2e can check the page loads on the chosen
+option and every update follows.
 """.
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
@@ -93,6 +93,9 @@ render(Bindings) ->
                 {option, [], [~"a"]},
                 {option, [], [~"c"]},
                 {option, [], [~"ac"]}
+            ]},
+            {select, [{class, ~"local-bound"}, {value, ?local(bound, ?get(v))}], [
+                ?each(fun(O) -> {option, [{value, O}], [O]} end, ?get(opts))
             ]}
         ]}
     ).

@@ -44,6 +44,7 @@ and the select keeps its value for the client to apply after.
     opaque_child_compiles/1,
     opaque_child_is_marked_in_its_own_slot/1,
     opaque_each_keeps_its_item_diff/1,
+    local_value_marks_render_once/1,
     option_with_runtime_text_compiles/1,
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
@@ -109,7 +110,8 @@ groups() ->
             raw_template_option_is_valued_by_its_text,
             markup_text_tracks_what_its_slot_tracks,
             opaque_diff_ships_the_value,
-            opaque_each_keeps_its_item_diff
+            opaque_each_keeps_its_item_diff,
+            local_value_marks_render_once
         ]},
         {compile, [parallel], [
             opaque_child_compiles,
@@ -252,10 +254,10 @@ static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     ),
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each and stream ?each on `b`; the multiple select on its two;
-    %% the component and the child view on `b`; the `?local` multiple selects on their
+    %% the component and the child view on `b`; the `?local` selects on their
     %% initials.
     ?assertEqual(
-        [~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b", ~"a", ~"c", ~"ac"], selected_values(HTML)
+        [~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b", ~"a", ~"c", ~"ac", ~"b"], selected_values(HTML)
     ).
 
 nodiff_select_marks_the_chosen_option(Config) when is_list(Config) ->
@@ -366,9 +368,11 @@ opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     ),
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each, stream ?each, the multiple select, then the component
-    %% and the child view, and the `?local` multiple selects.
+    %% and the child view, and the `?local` selects.
     ?assertEqual(
-        [~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c", ~"a", ~"c", ~"ac"], selected_values(HTML), HTML
+        [~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c", ~"a", ~"c", ~"ac", ~"c"],
+        selected_values(HTML),
+        HTML
     ).
 
 %% A live render, outside a page or inside a live process alike, leaves the options a
@@ -1392,9 +1396,50 @@ multiple_local_value_is_a_json_array(Config) when is_list(Config) ->
         ])
     ).
 
+%% A `?local` value is the client's: the options it names are marked as the page
+%% loads, from its initial, and never again by the server. A later change of the
+%% binding the initial came from ships no `selected` op, so the server never moves a
+%% selection the client owns, wherever the options come from.
+local_value_marks_render_once(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Multiple, Value, Kind}}) ->
+            Mod = "sel_local_once_" ++ integer_to_list(N),
+            M = compile_module(
+                raw_src(Mod, [Multiple, "{value, ", Value, "}"], once_options(Kind))
+            ),
+            B0 = #{x => ~"c", xs => [~"c"], os => [~"a", ~"c", ~"ac"]},
+            {_, Snap0, V0} = arizona_render:render(M:render(B0), #{}),
+            B1 = B0#{x => ~"a", xs => [~"a"]},
+            {Ops, _Snap1, _} = arizona_diff:diff(M:render(B1), Snap0, V0, #{x => true, xs => true}),
+            ?assertEqual([], attr_ops(Ops), {Mod, Ops}),
+            {AllOps, _, _} = arizona_diff:diff(M:render(B1), Snap0, V0),
+            ?assertEqual([], attr_ops(AllOps), {Mod, AllOps})
+        end,
+        lists:enumerate([
+            {Multiple, Value, Kind}
+         || Kind <- [literal, each_list, each_stream],
+            {Multiple, Value} <- [
+                {"", "arizona_template:local(k, arizona_template:get(x, Bindings))"},
+                {"", "[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]"},
+                {"multiple, ", "arizona_template:local(k, arizona_template:get(xs, Bindings))"},
+                {"multiple, ",
+                    "[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]"}
+            ]
+        ])
+    ).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+once_options(literal) ->
+    "{option, [], [~\"a\"]}, {option, [], [~\"c\"]}, {option, [], [~\"ac\"]}, "
+    "{option, [], [~\"aa\"]}";
+once_options(each_list) ->
+    "arizona_template:each(fun(O) -> {option, [], [O]} end, arizona_template:get(os, Bindings))";
+once_options(each_stream) ->
+    "arizona_template:each(fun(O, K) -> {option, [{az_key, K}], [O]} end, "
+    "arizona_stream:new(fun(O) -> O end, arizona_template:get(os, Bindings)))".
 
 %% Options named `a`, `c` and `ac`: written literally, or the last two in raw markup
 %% the transform cannot see into.

@@ -110,4 +110,18 @@ test.describe('select value', () => {
         await page.locator('#select-value .set-tail').click();
         expect(await picked('local-tail')).toEqual(['a']);
     });
+
+    // A `?local` value is the client's even when its initial came from a binding: the
+    // page loads on it, and a later server change of that binding leaves the option
+    // the user picked alone.
+    test('a server change never moves a local value', async ({ page }) => {
+        await page.goto('/select-value');
+        await wsReady(page);
+        const bound = page.locator('#select-value .local-bound');
+        await expect(bound).toHaveValue('b');
+        await bound.selectOption('a');
+        await expectStaysConnected(page, () => page.locator('#select-value .pick-c').click());
+        await expect(page.locator('#select-value .lit')).toHaveValue('c');
+        await expect(bound).toHaveValue('a');
+    });
 });

@@ -126,7 +126,9 @@ keeping a raw value keeps that decoded text. A raw a helper returns renders esca
 as its text, references and all. Under `multiple` each part of a literal list holding a `?raw` is
 its own pick, compared alone.
 `multiple` counts as present whatever it holds but `false`, as the attribute renders. A `?local`
-value stays on the select for the client to move, and the page loads on its initial. A whole
+value stays on the select for the client to move, and the page loads on its initial. The
+selection is the client's from then on: the options are marked from the initial where they render,
+never diffed, so a later change of a binding the initial reads ships no `selected` op. A whole
 `?local` holds the value; an interpolated one (`[~"user-", ?local(id, ~"1")]`) is one text, its
 static parts the client-side affixes, so under `multiple` it is **one** pick, not a list of its
 parts -- a list of picks is a whole `?local` holding the list (`?local(k, [~"a", ~"c"])`). Under

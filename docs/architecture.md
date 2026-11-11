@@ -1102,6 +1102,11 @@ attributes as written, so the client still has the affixes; its writer gives a m
 select's value the same JSON form (a list is the picks, anything else one), and `get` reads
 the selected values as a list.
 
+The options under such a select are marked from the initial where they render, but their
+`selected` compiles as a browser-owned slot (the same `az_local` map a `?local` attribute is,
+never re-evaluated or patched), since the selection is the client's: a server change of a
+binding the initial reads must not move it.
+
 Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
 op `?EFFECT_SET_LOCAL`):
 
