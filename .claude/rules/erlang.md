@@ -94,7 +94,7 @@ fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 A `value` on a `select` selects the option it names, in the `?html` target: HTML has no such
 attribute (the parser ignores it and loads on the first option), so the transform gives every
 `option` under the select a `selected` that tests the option's value against it
-(`arizona_template:chosen/3`, compared as the text both render as). That is an ordinary dynamic
+(`arizona_template:chosen/4`, compared as the text the page holds). That is an ordinary dynamic
 attribute, so the page loads on the right option (SSR and static generation alike) and a change
 ships a `REM_ATTR`/`SET_ATTR` `selected` on the two options involved. With `multiple` (static, or a
 dynamic `{multiple, ?get(m)}`) the value is a list of values. Options written literally, inside an
@@ -108,7 +108,7 @@ the option's `text` reads it, and a `?stateful` there is `stateful_in_text`. Whe
 option is reached the select emits no `value`. An option the transform cannot see -- from a
 `?stateless`/`?stateful` component, a remote or non-inlined helper, a runtime value, or
 `?raw`/static markup (an option's static text holding a tag included; a character reference in it is
-decoded at compile time through the backend's `markup_text/1`, so such an option stays static) --
+decoded at compile time through the backend's `markup_text/2`, so such an option stays static) --
 still works. Each such child is wrapped (`arizona_template:choices/3`): the SSR render renders it in
 place and the backend marks `selected`, in that child's output alone, the options the value names
 (`arizona_renderer:mark_choices/2`; for HTML a tokenizer pass that skips attribute values, comments,
@@ -116,8 +116,14 @@ raw text and `<template>` content, decodes every named character reference, and 
 the select), so a page costs nothing more unless it holds such a select, and then only that child's
 bytes. A conditional with such a tail is wrapped whole, and an `?each` whose item root is an option
 valued by markup is wrapped whole too (it still diffs item by item). Live renders and diffs see the
-child as written: the select keeps its `value` (`arizona_template:chooser_value/2`, a JSON array of
+child as written: the select keeps its `value` (`arizona_template:chooser_value/3`, a JSON array of
 texts under `multiple`) and the client applies it to what they render (see [js.md](js.md)).
+A literal `?raw` value, on the select or an option, whole or an interpolated part
+(`[~"a", ?raw(R)]`), is markup: it compares as the page holds it, character references decoded as
+the backend's parser decodes an attribute value (the optional `arizona_renderer:markup_text/2`, in
+`attribute`), so `?raw(~"a&amp;b")` and `~"a&b"` name the same option on every path, and a select
+keeping a raw value keeps that decoded text. A raw a helper returns renders escaped, so it compares
+as its text, references and all.
 `multiple` counts as present whatever it holds but `false`, as the attribute renders. A `?local`
 value stays on the select for the client to move, and the page loads on its initial. An `?each`
 callback parameter shadowing a name the value reads is renamed; a hoisted value whose definition

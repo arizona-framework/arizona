@@ -265,19 +265,25 @@ the parser, which loads on the first option (or the one marked `selected`), whil
 `select` is a `chooser` (its `value`, its `multiple`, its `option` choices), `option` a `choice`
 (its `value`, its `selected`) -- and the transform does the rest generically: it drops the chooser's
 value and appends to every choice under it a `selected` calling
-`arizona_template:chosen(ChoiceValue, ChooserValue, Multiple)` (both read as the parser reads an
-attribute value, `attr_input/1`: newlines normalized, NUL replaced, as every other path compares
-them), folded to a static `true`/`false` when both values are literals. The choices are found where
-the chooser compiles (`compile_element/5`), after hoisted variables and helper bodies are spliced,
-through elements, content lists and conditional tails. An `?each` compiles bottom-up, before its
-chooser, so the pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a
-chooser in a `'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its
-item as it compiles (`compile_each_clause/11`). A template compiled before the chooser was seen
-counts as reached only when every option element in its statics carries a `chosen/3` call.
+`arizona_template:chosen(Backend, ChoiceValue, ChooserValue, Multiple)` (both read as the text the
+page holds, `attr_text/2`: an escaped value as the parser reads an attribute value, `attr_input/1`,
+newlines normalized and NUL replaced; a literal `?raw` value, or an interpolated one with a
+literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its character references
+are decoded too, through the backend's optional `c:arizona_renderer:markup_text/2` in `attribute`;
+a raw a helper returns renders escaped and compares as its text; the transform marks the parts of
+both values as the attribute renders them, so every path compares them alike), folded to a
+static `true`/`false` when both values are literals (text, or a literal `?raw` of text). The
+choices are found where the chooser compiles (`compile_element/5`), after hoisted variables and
+helper bodies are spliced, through elements, content lists and conditional tails. An `?each`
+compiles bottom-up, before its chooser, so the pre-pass (`mark_targets/3`, and again after each
+splice) wraps an `?each` under a chooser in a `'$arizona_choice'` mark carrying the value; the each
+takes it off and rewrites its item as it compiles (`compile_each_clause/11`). A template compiled
+before the chooser was seen counts as reached only when every option element in its statics carries
+a `chosen/4` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
 stripped and collapsed). Both kinds of text are read through the backend's optional
-`c:arizona_renderer:markup_text/1` (for HTML what the option's `text` reads: tags and comments left
+`c:arizona_renderer:markup_text/2` (for HTML what the option's `text` reads: tags and comments left
 out, character references decoded, up to what would end the option). Static text folds at compile
 time when it holds no markup syntax. Text holding a value compares `arizona_template:choice_text/2`
 of the children, so it tracks and diffs like the value case; a value there that renders markup (a
@@ -298,11 +304,12 @@ multiple, `Esc` whether the slot escapes (decided on the child, so a literal `?r
 verbatim). A conditional whose tail is such a child is marked whole; an `?each` item root cannot
 become a slot, so one that is (an option valued by markup) is left as written and the compiled
 each, which then holds an unmarked option, is marked whole. The chooser keeps its value, rendered by
-`arizona_template:chooser_value/2` (the text, or under `multiple` a JSON array of texts), whenever
-its compiled children hold such a mark or a `choices/3` call (an `?each` item compiled before it).
+`arizona_template:chooser_value/3` (the text the page holds, or under `multiple` a JSON array of
+texts), whenever its compiled children hold such a mark or a `choices/3` call (an `?each` item
+compiled before it).
 
 The SSR render (`render_ssr_val/2`) evaluates `Picks`, renders the child in place, and returns it
-tagged `{arizona_choices, Picks, Rendered}` (`Picks` the texts `arizona_template:picks/2` gives);
+tagged `{arizona_choices, Picks, Rendered}` (`Picks` the texts `arizona_template:picks/3` gives);
 `scope_slot/2` scopes through the tag, and `render_dyn/2` hands only that child's output to the
 backend's optional `c:arizona_renderer:mark_choices/2`. For HTML, that pass tokenizes the fragment
 as the parser would: start tags with their attributes (values never read as markup), comments, bogus

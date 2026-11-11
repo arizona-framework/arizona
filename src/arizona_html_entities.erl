@@ -9,7 +9,7 @@ names) included, each with the text it stands for.
 does: an `<option>` a component or `?raw` markup renders under a `<select>` that has
 a value (`arizona_html:mark_choices/2`), and the text of an option valued by its text,
 static (folded at compile time) or rendered by a value in it
-(`arizona_html:markup_text/1`), each of which can be written with any of them. The
+(`arizona_html:markup_text/2`), each of which can be written with any of them. The
 table is a literal: in interactive mode the module loads on the first reference looked
 up, while an embedded release loads it at boot with every other module.
 """.
