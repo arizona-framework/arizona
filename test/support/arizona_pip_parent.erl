@@ -22,8 +22,8 @@ render(Bindings) ->
         {'div', [{id, ?get(id)}], [
             {button, [{id, ~"swap"}, {az_click, arizona_js:push_event(~"swap")}], [~"Swap"]},
             case ?get(wrap) of
-                section -> {section, [], [?stateful(arizona_pip, #{id => ~"pip_child"})]};
-                article -> {article, [], [?stateful(arizona_pip, #{id => ~"pip_child"})]}
+                section -> {section, [], [?stateful(arizona_pip_child, #{id => ~"pip_child"})]};
+                article -> {article, [], [?stateful(arizona_pip_child, #{id => ~"pip_child"})]}
             end
         ]}
     ).

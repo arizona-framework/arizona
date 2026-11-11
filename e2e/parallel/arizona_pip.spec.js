@@ -47,6 +47,25 @@ const ticked = async (page, before) => {
     return now !== null && now !== before;
 };
 
+/** Type into the popped-out child's widget, in the window. */
+const typeInWidget = (page, value) =>
+    page.evaluate((value) => {
+        const pip = /** @type {any} */ (window).documentPictureInPicture.window;
+        pip.document.querySelector('#pip_child .widget-input').value = value;
+    }, value);
+
+/** The widget input's value in the window, and the Widget hook's mount log. */
+const widgetState = (page) =>
+    page.evaluate(() => {
+        const pip = /** @type {any} */ (window).documentPictureInPicture.window;
+        const { mounts, destroys } = /** @type {any} */ (window)._widget;
+        return {
+            value: pip?.document.querySelector('#pip_child .widget-input')?.value ?? null,
+            mounts,
+            destroys,
+        };
+    });
+
 const exitPip = (page, id) =>
     page.evaluate(async (id) => (await import('/priv/arizona.min.js')).exitPip(id), id);
 
@@ -69,6 +88,7 @@ test('a parent re-render keeps a popped-out child in its window', async ({ page 
     await wsReady(page);
     await page.locator('#pip_child').getByRole('button', { name: 'Pop out', exact: true }).click();
     await inPip(page, 'pip_child');
+    await typeInWidget(page, 'typed');
 
     // The swap re-renders the child's slot wholesale, placeholder included: the
     // fresh child moves into the window.
@@ -77,6 +97,8 @@ test('a parent re-render keeps a popped-out child in its window', async ({ page 
 
     expect(await pipOpen(page)).toBe(true);
     await expect(page.locator('#pip_child')).toHaveCount(0);
+    // Its az-nodiff widget came along, never remounted.
+    expect(await widgetState(page)).toEqual({ value: 'typed', mounts: 1, destroys: 0 });
     // Still live in the window: the server's ticks keep reaching it.
     const before = await pipText(page, '#pip_child .pip-count');
     expect(before).toMatch(/^Tick: \d+$/);
@@ -92,6 +114,7 @@ test('a reconnect keeps a popped-out child in its window', async ({ page }) => {
     await wsReady(page);
     await page.locator('#pip_child').getByRole('button', { name: 'Pop out', exact: true }).click();
     await inPip(page, 'pip_child');
+    await typeInWidget(page, 'typed');
 
     // Mark the root the resync's OP_REPLACE will swap out, to wait for it.
     await page.evaluate(() => {
@@ -105,6 +128,7 @@ test('a reconnect keeps a popped-out child in its window', async ({ page }) => {
 
     expect(await pipOpen(page)).toBe(true);
     await expect(page.locator('#pip_child')).toHaveCount(0);
+    expect(await widgetState(page)).toEqual({ value: 'typed', mounts: 1, destroys: 0 });
     // The remounted child keeps ticking in the window.
     const before = await pipText(page, '#pip_child .pip-count');
     expect(before).toMatch(/^Tick: \d+$/);

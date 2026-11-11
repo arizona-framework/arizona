@@ -1,5 +1,5 @@
 import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
-import { _viewDocs, findViewRoot, reconcilePipWindows } from './arizona-docs.js';
+import { _pipWindows, _viewDocs, findViewRoot, reconcilePipWindows } from './arizona-docs.js';
 import {
     anyHookDefs,
     destroyChildHooks,
@@ -115,10 +115,26 @@ function keepNodiff(oldNodes, frag, resync) {
     // An empty old slot (a conditional switching from `<<>>` to an az-nodiff element)
     // holds nothing to keep, and has no node to find its parent from.
     if (tops.length === 0) return NO_KEPT;
-    const fresh = nodiffByIdentity(Array.from(frag.childNodes), frag);
-    if (fresh.size === 0) return NO_KEPT;
-    const old = nodiffByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
+    /** @type {Set<Element>} */
     const kept = new Set();
+    carryNodiff(tops, Array.from(frag.childNodes), frag, resync, kept);
+    if (_pipWindows.size !== 0) carryPoppedNodiff(frag, resync, kept);
+    return kept.size === 0 ? NO_KEPT : kept;
+}
+
+/**
+ * Carry each az-nodiff element under `oldTops` into the range `newTops` (children
+ * of `newParent`) where a new one of the same identity stands, adding it to `kept`.
+ * @param {Node[]} oldTops
+ * @param {Node[]} newTops
+ * @param {ParentNode} newParent
+ * @param {boolean} resync
+ * @param {Set<Element>} kept
+ */
+function carryNodiff(oldTops, newTops, newParent, resync, kept) {
+    const fresh = nodiffByIdentity(newTops, newParent);
+    if (fresh.size === 0) return;
+    const old = nodiffByIdentity(oldTops, /** @type {ParentNode} */ (oldTops[0].parentNode));
     for (const [id, news] of fresh) {
         const olds = old.get(id);
         // Two az-nodiff elements under one name at one place are items the server could not
@@ -130,7 +146,24 @@ function keepNodiff(oldNodes, frag, resync) {
         news[0].replaceWith(o);
         kept.add(o);
     }
-    return kept;
+}
+
+/**
+ * A popped-out (PiP) view the re-render in `frag` renders again is not in the
+ * content being replaced -- its window holds it, and the fresh copy moves there
+ * once the batch ends (`reconcilePipWindows`). Carry its az-nodiff elements from
+ * the window's copy, so it keeps them exactly as an inline view would.
+ * @param {DocumentFragment} frag
+ * @param {boolean} resync
+ * @param {Set<Element>} kept
+ */
+function carryPoppedNodiff(frag, resync, kept) {
+    for (const { id, win } of _pipWindows.values()) {
+        const fresh = frag.getElementById(id);
+        const stale = win.document.getElementById(id);
+        if (!fresh?.hasAttribute('az-view') || !stale || stale === fresh) continue;
+        carryNodiff([stale], [fresh], /** @type {ParentNode} */ (fresh.parentNode), resync, kept);
+    }
 }
 
 /**

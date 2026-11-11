@@ -934,4 +934,53 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         w1.fire('pagehide');
         w2.fire('pagehide');
     });
+
+    it("keeps a popped-out child's az-nodiff widget across a reconnect", async () => {
+        // The resync re-renders the child inline; its widget is the one in the
+        // window, carried over as an inline resync carries it, never remounted.
+        const mounted = vi.fn();
+        const destroyed = vi.fn();
+        hooks.W = { mounted, destroyed };
+        const html = (/** @type {string} */ n) =>
+            `<div id="root" az-view az="0"><p>${n}</p>` +
+            '<div id="v" az-view az="0"><div az-nodiff="tok1" az-hook="W">w</div></div></div>';
+        document.body.innerHTML = html('a');
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        const widget = pip.document.querySelector('[az-nodiff]');
+
+        applyOps([[OP.REPLACE, 'root', html('b')]], true);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#v [az-nodiff]')).toBe(widget);
+        expect(mounted).toHaveBeenCalledOnce();
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.W;
+    });
+
+    it("keeps a popped-out child's az-nodiff widget across a parent re-render", async () => {
+        const mounted = vi.fn();
+        const destroyed = vi.fn();
+        hooks.W = { mounted, destroyed };
+        const child =
+            '<div id="v" az-view az="V-0"><div az-nodiff="tok1" az-hook="W">w</div></div>';
+        document.body.innerHTML = `<div id="root" az-view az="R-0"><!--az:R-1-->${child}<!--/az--></div>`;
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        const widget = pip.document.querySelector('[az-nodiff]');
+
+        applyOps([[OP.TEXT, 'root:R-1', child, true]]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#v [az-nodiff]')).toBe(widget);
+        expect(mounted).toHaveBeenCalledOnce();
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.W;
+    });
 });
