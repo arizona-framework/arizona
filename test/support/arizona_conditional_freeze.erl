@@ -429,15 +429,28 @@ wrap_raw(Value) ->
     arizona_template:raw(Value).
 
 %% A content slot whose value becomes a `?local` arriving at runtime (`kind` switches
-%% it from text to a local, to a local with a `raw/1` init, or a template init).
+%% it from text to a local, to a local with a `raw/1` init, or a template init, bare or
+%% in a raw, and to a raw around such a local).
 -spec runtime_local_content(az:bindings()) -> az:template().
 runtime_local_content(Bindings) ->
     ?html({'div', [{id, ~"x"}], [local_or_text(?get(kind), ?get(v))]}).
 
-local_or_text(text, V) -> V;
-local_or_text(local, V) -> arizona_template:local(k, V);
-local_or_text(raw_local, V) -> arizona_template:local(k, arizona_template:raw(V));
-local_or_text(template_local, V) -> arizona_template:local(k, ?html({b, [], [V]})).
+local_or_text(text, V) ->
+    V;
+local_or_text(local, V) ->
+    arizona_template:local(k, V);
+local_or_text(raw_local, V) ->
+    arizona_template:local(k, arizona_template:raw(V));
+local_or_text(template_local, V) ->
+    arizona_template:local(k, ?html({b, [], [V]}));
+local_or_text(raw_template_local, V) ->
+    arizona_template:local(k, arizona_template:raw(?html({b, [], [V]})));
+local_or_text(raw_of_local, V) ->
+    arizona_template:raw(arizona_template:local(k, V));
+local_or_text(raw_of_raw_local, V) ->
+    arizona_template:raw(arizona_template:local(k, arizona_template:raw(V)));
+local_or_text(raw_of_template_local, V) ->
+    arizona_template:raw(arizona_template:local(k, ?html({b, [], [V]}))).
 
 %% A helper's `raw/1` around a template, once `wrap` is true: redundant in content (a
 %% template is markup already), refused in an attribute value (which must be text).

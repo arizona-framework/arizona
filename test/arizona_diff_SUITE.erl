@@ -114,6 +114,7 @@
     runtime_local_content_diffs_like_render/1,
     runtime_local_content_keeps_diffing/1,
     runtime_local_template_init_renders/1,
+    runtime_local_raw_is_the_bare_value/1,
     raw_template_renders/1,
     raw_template_renders_on_diff/1,
     raw_wrapped_value_is_the_value/1,
@@ -298,6 +299,7 @@ groups() ->
             runtime_local_content_diffs_like_render,
             runtime_local_content_keeps_diffing,
             runtime_local_template_init_renders,
+            runtime_local_raw_is_the_bare_value,
             raw_template_renders,
             raw_template_renders_on_diff,
             raw_wrapped_value_is_the_value,
@@ -2121,6 +2123,38 @@ runtime_local_template_init_renders(Config) when is_list(Config) ->
         M:runtime_local_content(B), S1, V1, #{kind => true, v => true}
     ),
     ?assertMatch([[?OP_TEXT, ~"1S9L2GB-0", #{}]], Ops1).
+
+%% A raw around a template is the template, and a raw around a runtime `?local` is
+%% the local, so a template init in a raw, or a raw around a local, renders and diffs
+%% exactly as the bare form does: the same markup on SSR and the live render, and the
+%% same ops onto it and inside it.
+runtime_local_raw_is_the_bare_value(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Run = fun(Kind) ->
+        B = #{kind => Kind, v => ~"<i>"},
+        SSR = iolist_to_binary(arizona_render:render_to_iolist(M:runtime_local_content(B))),
+        {HTML, _, _} = arizona_render:render(M:runtime_local_content(B), #{}),
+        ?assertEqual(SSR, iolist_to_binary(HTML), Kind),
+        {_, S0, V0} = arizona_render:render(
+            M:runtime_local_content(#{kind => text, v => ~"a"}), #{}
+        ),
+        {Ops, S1, V1} = arizona_diff:diff(
+            M:runtime_local_content(B), S0, V0, #{kind => true, v => true}
+        ),
+        {Ops1, _, _} = arizona_diff:diff(
+            M:runtime_local_content(B#{v => ~"z"}), S1, V1, #{v => true}
+        ),
+        {SSR, Ops, Ops1}
+    end,
+    [
+        ?assertEqual({Bare, Run(Bare)}, {Bare, Run(Wrapped)})
+     || {Wrapped, Bare} <- [
+            {raw_template_local, template_local},
+            {raw_of_local, local},
+            {raw_of_raw_local, raw_local},
+            {raw_of_template_local, template_local}
+        ]
+    ].
 
 %% A template is markup already, so a raw around one in content -- a helper's or a
 %% literal `?raw` -- is redundant and renders as that template: the same markup on SSR

@@ -929,8 +929,9 @@ mark_local_init({arizona_raw, _} = Raw) -> Raw;
 mark_local_init(Init) -> mark_esc(Init).
 
 %% A map in a raw is markup already (a template, component, `?local`): the slot
-%% renders it as that value, so the raw is dropped rather than its value escaped.
-mark_raw_esc(V) when is_map(V) -> V;
+%% renders it as that value, so the raw is dropped rather than its value escaped, and
+%% the map is marked as it would be bare (a `?local` stands for its init).
+mark_raw_esc(V) when is_map(V) -> mark_esc(V);
 mark_raw_esc(V) -> mark_esc(V).
 
 %% Internal: the raw arm of a `classify_trusted/1` caller, which renders text. A map
