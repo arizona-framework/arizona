@@ -5522,7 +5522,9 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
         false ->
             ok = reject_markup_in_raw_text(Child, State0#state.raw_text_kind),
             ok = reject_command_in_content(Child),
-            emit_child_dynamic(Child, ElemAz, State0, Slot)
+            emit_child_dynamic(
+                guard_raw_text_value(Child, State0#state.raw_text_kind), ElemAz, State0, Slot
+            )
     end.
 
 %% A content slot renders its value as text, and no client runs a command there.
@@ -5569,6 +5571,34 @@ reject_markup_in_raw_text(Child, escapable) ->
     ok;
 reject_markup_in_raw_text(_Child, _RawKind) ->
     ok.
+
+%% A title/textarea slot is an ordinary slot, so a template a runtime value carries
+%% would render as markup shown as text; arizona_template:raw_text_value/1 refuses it
+%% where the slot is evaluated. Inside a literal `?raw` it goes around the argument,
+%% so the opt-out stays literal; a `?local` keeps its own compilation.
+guard_raw_text_value({cons, L, Head, Tail}, escapable) ->
+    %% A literal list keeps its compilation (a value list, its `?raw` items spliced),
+    %% so each item is guarded instead.
+    {cons, L, guard_raw_text_value(Head, escapable), guard_raw_text_value(Tail, escapable)};
+guard_raw_text_value({nil, _} = Nil, escapable) ->
+    Nil;
+guard_raw_text_value(Child, escapable) ->
+    case {is_local_marker(Child), Child} of
+        {true, _} ->
+            Child;
+        {false, {call, L, {remote, _, {atom, _, Mod}, {atom, _, raw}} = Raw, [Arg]}} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            {call, L, Raw, [raw_text_value_ast(Arg)]};
+        {false, _} ->
+            raw_text_value_ast(Child)
+    end;
+guard_raw_text_value(Child, _RawKind) ->
+    Child.
+
+raw_text_value_ast(Expr) ->
+    L = line(Expr),
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, raw_text_value}}, [Expr]}.
 
 %% A tail value that renders as markup: an element, an element list or a list holding
 %% one, or a constructor other than ?raw/?local (both are values here).

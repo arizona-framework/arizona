@@ -195,11 +195,16 @@ peek_spec(Fun) when is_function(Fun, 0) -> {false, Fun()};
 peek_spec(Spec) -> {false, Spec}.
 
 %% A `?stateless` descriptor is rendered here as eval_val_v/2 would, its body's
-%% own reads kept out of the slot's deps.
+%% own reads kept out of the slot's deps. A raw around a map is the map, as eval_val/1
+%% renders it, so it keeps the bare element's skip.
 peek_nodiff(#{callback := _, props := _} = Desc) ->
     with_saved_deps(fun() -> peek_nodiff(arizona_template:stateless_template(Desc)) end);
 peek_nodiff(#{choices := _, child := Child}) ->
     peek_nodiff(Child);
+peek_nodiff({arizona_raw, V}) when is_map(V) ->
+    peek_nodiff(V);
+peek_nodiff({arizona_raw, {arizona_raw, _} = V}) ->
+    peek_nodiff(V);
 peek_nodiff(Val) ->
     Val.
 
@@ -248,14 +253,22 @@ eval_each_def({Az, Spec}, Views0) ->
     end.
 
 each_def(Az, Spec, Outer, Views0) ->
-    case peek_spec(Spec) of
-        {_Esc, #{t := ?EACH, source := _, template := _} = Each} ->
-            {each, Az, Each, close_deps(Outer)};
-        {_Esc, #{choices := _, child := #{t := ?EACH, source := _, template := _} = Each}} ->
-            {each, Az, Each, close_deps(Outer)};
-        {Esc, Raw} ->
-            eval_peeked(Az, Esc, Raw, Outer, Views0)
-    end.
+    {Esc, Val} = peek_spec(Spec),
+    each_def_val(Az, Esc, Val, Outer, Views0).
+
+%% A raw around a map is the map (eval_val/1), and a live render sees a valued
+%% chooser's child as written, so either around an each container diffs per item
+%% like the bare one.
+each_def_val(Az, _Esc, #{t := ?EACH, source := _, template := _} = Each, Outer, _Views0) ->
+    {each, Az, Each, close_deps(Outer)};
+each_def_val(Az, Esc, #{choices := _, child := Child}, Outer, Views0) ->
+    each_def_val(Az, Esc, Child, Outer, Views0);
+each_def_val(Az, Esc, {arizona_raw, V}, Outer, Views0) when is_map(V) ->
+    each_def_val(Az, Esc, V, Outer, Views0);
+each_def_val(Az, Esc, {arizona_raw, {arizona_raw, _} = V}, Outer, Views0) ->
+    each_def_val(Az, Esc, V, Outer, Views0);
+each_def_val(Az, Esc, Val, Outer, Views0) ->
+    eval_peeked(Az, Esc, Val, Outer, Views0).
 
 -doc """
 Runs `Fun`, which renders items of an `?each` whose per-item template is

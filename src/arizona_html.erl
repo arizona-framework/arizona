@@ -1112,9 +1112,10 @@ escape_runs(Bin, Acc, _Run) ->
 %% `atom_to_binary`, so an atom carries arbitrary bytes just like a binary),
 %% **chardata**, and a `?raw` opt-out wrapping any of those. An integer and a float
 %% stringify to digits and a sign, so neither can spell a sequence below; both
-%% pass through untouched, as does a map (a nested template renders structurally
-%% through the escaping path, not as bytes). An effect command is refused: it is
-%% not text (`effect_in_content`).
+%% pass through untouched. A template, component or `?local` in the `?raw` is refused
+%% (`markup_in_raw_text`): it has no rendering here, since its markup and slot
+%% markers would be read as the element's code, unneutralized. An effect command is
+%% refused too: it is not text (`effect_in_content`).
 %%
 %% The template's own static text is not checked: it is the author's markup, so
 %% statics that spell a sequence around an EMPTY value (`</scr`, `<<>>`, `ipt>`) are
@@ -1141,6 +1142,7 @@ raw_text_1(Ctx, Value) ->
     %% still spell a breakout. Unwrap it, neutralize the payload, and re-wrap, so the
     %% documented opt-out is not a hole around this check.
     case arizona_template:classify_trusted(Value) of
+        {raw, Raw} when is_map(Raw) -> arizona_template:markup_in_raw_text(Raw);
         {raw, Raw} -> arizona_template:raw(raw_text_1(Ctx, Raw));
         {effect, Cmd} -> arizona_template:effect_in_content(Cmd);
         value -> raw_text_chardata(Ctx, Value)

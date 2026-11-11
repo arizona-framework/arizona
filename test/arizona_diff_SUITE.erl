@@ -117,6 +117,9 @@
     raw_template_renders/1,
     raw_template_renders_on_diff/1,
     raw_wrapped_value_is_the_value/1,
+    raw_template_in_raw_text_refused/1,
+    raw_each_diffs_like_bare/1,
+    raw_nodiff_skips_like_bare/1,
     literal_raw_template_refused/1,
     raw_in_raw_effect_located/1,
     wire_raw_in_list_item/1,
@@ -293,6 +296,9 @@ groups() ->
             raw_template_renders,
             raw_template_renders_on_diff,
             raw_wrapped_value_is_the_value,
+            raw_template_in_raw_text_refused,
+            raw_each_diffs_like_bare,
+            raw_nodiff_skips_like_bare,
             literal_raw_template_refused,
             raw_in_raw_effect_located,
             wire_raw_in_list_item,
@@ -2173,6 +2179,99 @@ raw_wrapped_value_is_the_value(Config) when is_list(Config) ->
     ],
     ?assertMatch({_, _, [[~"c1", [[?OP_TEXT, _, ~"2"]]]]}, Run(1, stateful)),
     ?assertMatch({_, _, [[?OP_TEXT, _, ~"2"]]}, Run(2, template)).
+
+%% A template has no rendering inside a raw-text element -- in script/style its markup
+%% and slot markers would run as code, in textarea/title they would show as text -- so
+%% a raw around one there, literal or a helper's, is refused at the slot's line on
+%% SSR, the live render and the diff.
+raw_template_in_raw_text_refused(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, name => ~"</script><img src=x onerror=alert(1)>"},
+    [
+        begin
+            ok = assert_markup_in_raw_text(M, fun() ->
+                arizona_render:render_to_iolist(M:Fun(B))
+            end),
+            ok = assert_markup_in_raw_text(M, fun() -> arizona_render:render(M:Fun(B), #{}) end),
+            {_, S0, V0} = arizona_render:render(M:Fun(B#{wrap => false}), #{}),
+            ok = assert_markup_in_raw_text(M, fun() ->
+                arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
+            end)
+        end
+     || Fun <- [
+            script_literal_raw_template,
+            script_helper_raw_template,
+            style_literal_raw_template,
+            style_helper_raw_template,
+            textarea_literal_raw_template,
+            textarea_helper_raw_template,
+            title_literal_raw_template,
+            title_helper_raw_template
+        ]
+    ].
+
+assert_markup_in_raw_text(M, Fun) ->
+    try Fun() of
+        Result -> ct:fail({expected_markup_in_raw_text, Result})
+    catch
+        error:Reason:ST ->
+            ?assertMatch({arizona_loc, {M, _}, {markup_in_raw_text, #{s := _}}}, Reason),
+            Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"raw-text element")),
+            ok
+    end.
+
+%% A raw around a list or stream `?each` diffs exactly as the bare one: per item, not
+%% as a re-render of the whole container.
+raw_each_diffs_like_bare(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Run = fun(Fun, B0, B1, Changed) ->
+        {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(M:Fun(B1), S0, V0, Changed),
+        {iolist_to_binary(HTML), Ops}
+    end,
+    L0 = #{items => [~"a", ~"b"]},
+    L1 = #{items => [~"a", ~"c"]},
+    ?assertEqual(Run(each_bare, L0, L1, #{items => true}), Run(each_raw, L0, L1, #{items => true})),
+    ?assertMatch({_, [[?OP_LIST_PATCH | _]]}, Run(each_raw, L0, L1, #{items => true})),
+    KeyFun = fun(#{id := Id}) -> Id end,
+    St0 = arizona_stream:new(KeyFun, [#{id => 1, t => ~"a"}, #{id => 2, t => ~"b"}]),
+    St1 = arizona_stream:update(St0, 2, #{id => 2, t => ~"c"}),
+    ?assertEqual(
+        Run(stream_bare, #{s => St0}, #{s => St1}, #{s => true}),
+        Run(stream_raw, #{s => St0}, #{s => St1}, #{s => true})
+    ),
+    ?assertMatch(
+        {_, [[?OP_ITEM_PATCH | _]]}, Run(stream_raw, #{s => St0}, #{s => St1}, #{s => true})
+    ).
+
+%% A raw around an az-nodiff element keeps the bare element's O(1) skip: re-running
+%% the slot that chose the same element does not evaluate the element again.
+raw_nodiff_skips_like_bare(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            B0 = #{raws => Raws, x => 1, y => ~"a"},
+            {_, S0, V0} = arizona_render:render(M:nodiff_pick(B0), #{}),
+            ok = flush_nodiff_evaluated(),
+            {Ops, _, _} = arizona_diff:diff(M:nodiff_pick(B0#{x => 2}), S0, V0, #{x => true}),
+            ?assertEqual({Raws, []}, {Raws, Ops}),
+            ?assertEqual({Raws, 0}, {Raws, count_nodiff_evaluated(0)})
+        end
+     || Raws <- [0, 1, 2]
+    ].
+
+flush_nodiff_evaluated() ->
+    receive
+        {nodiff_evaluated, _} -> flush_nodiff_evaluated()
+    after 0 -> ok
+    end.
+
+count_nodiff_evaluated(N) ->
+    receive
+        {nodiff_evaluated, _} -> count_nodiff_evaluated(N + 1)
+    after 0 -> N
+    end.
 
 %% A template is not text, so a raw around one in an attribute value is refused at
 %% the slot's line on SSR, the live render and the diff alike -- in a whole or

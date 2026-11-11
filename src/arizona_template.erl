@@ -75,6 +75,8 @@ render(Bindings) ->
 -export([mark_esc/1]).
 -export([effect_in_content/1]).
 -export([raw_not_text/1]).
+-export([markup_in_raw_text/1]).
+-export([raw_text_value/1]).
 -export([raw_to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -105,6 +107,8 @@ render(Bindings) ->
 -ignore_xref([raw/1]).
 %% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
 -ignore_xref([raw_attr/2]).
+%% Emitted by the parse transform around a title/textarea content value.
+-ignore_xref([raw_text_value/1]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
 %% Emitted by the parse transform as the `selected` of an option under a valued select.
@@ -676,6 +680,16 @@ format_error({raw_template, V}) ->
             [V]
         )
     );
+format_error({markup_in_raw_text, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "~0tp cannot render inside a raw-text element (script, style, textarea, "
+            "title): a template, component or ?local is markup, which there would run "
+            "as code or show as text. Render text, e.g. ?raw(json:encode(Data)) in a "
+            "script",
+            [V]
+        )
+    );
 format_error({effect_in_content, V}) ->
     lists:flatten(
         io_lib:format(
@@ -731,6 +745,8 @@ format_error({bad_template_value, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error({raw_template, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
+format_error({markup_in_raw_text, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
 format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(parse_transform_not_applied = Reason, _ST) ->
@@ -764,7 +780,10 @@ markup already, never escaped, so in **content** a raw around one -- literal or 
 helper's, one raw deep or a raw in a raw -- is redundant: the slot renders, mounts
 and diffs it exactly as the bare value, on SSR, the live render and the diff alike
 (a `?local` renders as one arriving at runtime does: write it bare at the slot for
-its client binding). An **attribute value** must be text, so there a raw around one
+its client binding); a raw-wrapped each or az-nodiff element diffs as the bare one.
+Inside a **raw-text element** (script, style, textarea, title) markup would run as
+code or show as text, so a raw around one there raises `{markup_in_raw_text, Map}`,
+located on every path. An **attribute value** must be text, so there a raw around one
 -- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
 Map}` where the attribute is evaluated, located on every path. A command in a raw
 is refused as in content (`effect_in_content`). A map inside a list in the raw is
@@ -798,8 +817,9 @@ bool_attr(Value) -> Value.
 -doc """
 Classifies the trusted shapes: a `raw/1` opt-out (`{arizona_raw, V}`, returned
 unwrapped) and an effect command or command list (`{arizona_effect, _}`). Every
-other value is `value`. A raw holding a map is still `{raw, Map}`: the callers'
-raw arms refuse it (`raw_to_bin/1`), so no other shape pays to test for it.
+other value is `value`. A raw holding a map is still `{raw, Map}`: a caller that renders text
+refuses it in its raw arm (`raw_to_bin/1`), content renders it as the map before
+it gets here, and no other shape pays to test for it.
 
 The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
 the backends' attribute renderers dispatch on it. `to_bin/1` matches the raw
@@ -923,6 +943,37 @@ mark_raw_esc(V) -> mark_esc(V).
     Value :: term().
 raw_to_bin(V) when is_map(V) -> raw_not_text(V);
 raw_to_bin(V) -> to_bin(V).
+
+%% Internal: raises `{markup_in_raw_text, Map}` for a template, component or `?local`
+%% reaching raw-text content, where markup has no rendering.
+-doc false.
+-spec markup_in_raw_text(Value) -> no_return() when
+    Value :: map().
+markup_in_raw_text(V) ->
+    erlang:error({markup_in_raw_text, V}, [V], [{error_info, #{module => ?MODULE}}]).
+
+%% Internal, emitted only by the parse transform around a title/textarea content
+%% value (inside a literal `raw/1`, around its argument). Those are ordinary slots, so
+%% a template a runtime value carries -- bare or in a raw -- would render as markup
+%% shown as text; it is refused, located, as the transform refuses a literal one. A
+%% template that renders as plain text (no dynamics, no tag) is a value, as it is at
+%% compile time, and so is a `?local`.
+-doc false.
+-spec raw_text_value(Value) -> Value when
+    Value :: term().
+raw_text_value({arizona_raw, V}) ->
+    raw(raw_text_value(V));
+raw_text_value(#{az_local := _} = Local) ->
+    Local;
+raw_text_value(#{s := Statics, d := []} = Tmpl) ->
+    case lists:any(fun(S) -> binary:match(S, ~"<") =/= nomatch end, Statics) of
+        true -> markup_in_raw_text(Tmpl);
+        false -> Tmpl
+    end;
+raw_text_value(V) when is_map(V) ->
+    markup_in_raw_text(V);
+raw_text_value(V) ->
+    V.
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
 %% `?local` -- held directly by a `raw/1` in an attribute value, which must be text.
