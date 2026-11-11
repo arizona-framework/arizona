@@ -77,8 +77,10 @@ export function reconcilePipWindows(navigated) {
             _pipWindows.set(id, entry);
             continue;
         }
+        // A view, not just an element under its id: anything else stays where it
+        // was rendered.
         const fresh = navigated ? null : document.getElementById(entry.id);
-        if (fresh) {
+        if (fresh?.hasAttribute('az-view')) {
             for (const e of viewsIn(doc)) {
                 destroyHooks(e);
                 e.remove();

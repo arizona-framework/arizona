@@ -846,4 +846,19 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide');
         expect(document.querySelector('li[az-key="a"] > #player')?.textContent).toBe('new');
     });
+
+    it('closes the window when a re-render puts a non-view element under its id', async () => {
+        // Only a view is the view: a <p> reusing the id stays where it was rendered.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="player" az-view az="0">p</div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([[OP.TEXT, 'root:0', '<p id="player">just a paragraph</p>', true]]);
+
+        expect(pip.closed).toBe(true);
+        expect(document.querySelector('#root > p#player')?.textContent).toBe('just a paragraph');
+        expect(pip.document.getElementById('player')).toBeNull();
+    });
 });
