@@ -92,21 +92,6 @@ function isStale(entry) {
 }
 
 /**
- * How many windows lie between `entry`'s placeholder and the main document,
- * stopping where the chain breaks: a window is reconciled after the ones its
- * placeholder lies in.
- * @param {PipEntry} entry
- * @returns {number}
- */
-function depth(entry) {
-    let n = 0;
-    for (let e = windowOf(entry.placeholder.ownerDocument); e && n < _pipWindows.size; n++) {
-        e = windowOf(e.placeholder.ownerDocument);
-    }
-    return n;
-}
-
-/**
  * The view `id` a batch rendered again outside `own` (its window): in the page,
  * or in another window when its parent is popped out too. A view, not just an
  * element under its id: anything else stays where it was rendered.
@@ -134,17 +119,14 @@ function renderedAgain(id, own) {
  * - Otherwise the view is gone (removed, or the page navigated: a new page's
  *   views are new, whatever their ids), so the window closes; its pagehide
  *   handler discards the stale view.
- * Windows go outermost first: a child's placeholder lies in its parent's copy,
- * which must be settled -- re-adopted or closed -- before the child can tell
- * whether its own view is stale and where its fresh copy is.
+ * Order does not matter: staleness follows the chain of windows up to the page,
+ * so a child is judged right whether its parent's window is settled yet or not,
+ * and a stale parent copy holds only the child's placeholder, never a copy of it.
  * @param {boolean} navigated -- the batch replaced the page (a navigate)
  */
 export function reconcilePipWindows(navigated) {
     if (_pipWindows.size === 0) return;
-    const order = [..._pipWindows.values()]
-        .map((e) => /** @type {[number, PipEntry]} */ ([depth(e), e]))
-        .sort((a, b) => a[0] - b[0]);
-    for (const [, entry] of order) {
+    for (const entry of [..._pipWindows.values()]) {
         const doc = entry.win.document;
         if (!isStale(entry)) {
             if (doc.getElementById(entry.id)) continue;

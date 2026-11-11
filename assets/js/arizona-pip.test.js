@@ -1130,6 +1130,44 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             delete hooks.H;
         });
 
+        it('patches the fresh copy two windows down a re-rendered ancestor later in the batch', async () => {
+            // G > P > C > K, popped out C, then P, then G. G's re-render in its
+            // window leaves P's copy stale (placeholder gone) and C's copy stale
+            // through it: C's placeholder is still connected, in P's stale copy.
+            document.body.innerHTML =
+                '<div id="root" az-view az="0"><div id="G" az-view az="0"><div id="P" az-view az="0">' +
+                '<div id="C" az-view az="0"><div id="K" az-view az="0"><b az="1">k</b></div></div>' +
+                '</div></div></div>';
+            const wins = [];
+            for (const id of ['C', 'P', 'G']) {
+                const w = makePipWindow();
+                stubPip(w);
+                await requestPip(id);
+                wins.push(w);
+            }
+            const [wC, wP, wG] = wins;
+
+            applyOps([
+                [
+                    OP.TEXT,
+                    'G:0',
+                    '<div id="P" az-view az="0"><div id="C" az-view az="0">' +
+                        '<div id="K" az-view az="0"><b az="1">k</b></div></div></div>',
+                    true,
+                ],
+                [OP.SET_ATTR, 'K:1', 'class', 'two'],
+            ]);
+
+            expect(wins.map((w) => w.closed)).toEqual([false, false, false]);
+            expect(wC.document.querySelector('#K b')?.getAttribute('class')).toBe('two');
+            expect(wP.document.querySelector('#P')?.innerHTML).toContain('az-pip:C');
+            expect(wG.document.querySelector('#G')?.innerHTML).toContain('az-pip:P');
+            for (const w of wins) w.fire('pagehide');
+            expect(document.querySelector('#G > #P > #C > #K b')?.getAttribute('class')).toBe(
+                'two',
+            );
+        });
+
         it("patches the fresh copy of a re-rendered window's child view later in the batch", async () => {
             // K is a view inside C, not popped out itself: the stale C in w1 holds
             // a stale K too, and the fresh one is in w2 until the batch ends.
