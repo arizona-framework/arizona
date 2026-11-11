@@ -1355,7 +1355,10 @@ local_value_parts_follow_runtime_multiple(Config) when is_list(Config) ->
     Own = ssr_picked([~"a", ~"c", ~"ac"], M, #{m => true, x => [~"c", ~"ac"]}),
     ?assertEqual(~"[\"a\",\"c\",\"ac\"]", select_value(Own), Own),
     None = ssr_picked([~"a"], M, #{m => true, x => false}),
-    ?assertEqual(~"[\"a\"]", select_value(None), None).
+    ?assertEqual(~"[\"a\"]", select_value(None), None),
+    %% `multiple` is present whatever it holds but `false`, as the attribute renders.
+    Present = ssr_picked([~"a", ~"c"], M, #{m => ~"", x => ~"c"}),
+    ?assertEqual(~"[\"a\",\"c\"]", select_value(Present), Present).
 
 %% Whatever the shape of a `?local` value -- whole or interpolated, a select whose
 %% options are all marked in the template or one holding an option only the SSR
