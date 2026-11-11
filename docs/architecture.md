@@ -303,7 +303,8 @@ the select (`</select>`, a `select`/`input`/`keygen`/`textarea` start tag). An o
 its `value` attribute, else its text as its `text` property reads it, with character references
 decoded the way the tokenizer decodes them (`arizona_html_entities`, the standard's whole named
 table, legacy names and the attribute-value exception included), and it is marked when `Picked`
-accepts it. A page without such a chooser renders exactly as before, and one with it pays for that
+accepts it (a `selected` the markup carries is cut from an option `Picked` rejects, as the client
+clears it). A page without such a chooser renders exactly as before, and one with it pays for that
 child's bytes only. A live render and every diff see the child as written (`arizona_eval` and
 `peek_nodiff` unwrap it; an `?each` inside still diffs item by item), and `Picks` is never called
 there. In the live client the select's `value` is applied to its options' `selected` attributes

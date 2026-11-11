@@ -39,6 +39,7 @@ and the select keeps its value for the client to apply after.
     opaque_live_render_is_left_to_the_client/1,
     opaque_diff_ships_the_value/1,
     mark_choices_reads_the_fragment/1,
+    authored_selected_follows_the_value/1,
     opaque_child_compiles/1,
     opaque_child_is_marked_in_its_own_slot/1,
     opaque_each_keeps_its_item_diff/1,
@@ -77,7 +78,8 @@ groups() ->
             opaque_multiple_marks_every_listed_value,
             opaque_static_generation_marks_the_chosen_option,
             opaque_live_render_is_left_to_the_client,
-            mark_choices_reads_the_fragment
+            mark_choices_reads_the_fragment,
+            authored_selected_follows_the_value
         ]},
         {diff, [parallel], [
             diff_moves_selected_to_the_new_option,
@@ -467,10 +469,11 @@ mark_choices_reads_the_fragment(Config) when is_list(Config) ->
             {~"<option>a<style>b</style></option>", ~"ab"}
         ]
     ),
-    %% An option the page already marks keeps it; the first of a repeated attribute counts.
+    %% An option the page already marks and the value picks keeps it; the first of a
+    %% repeated attribute counts.
     ?assertEqual(
-        ~"<option SELECTED value=b>B</option><option value=a selected>A</option>",
-        Mark(~"<option SELECTED value=b>B</option><option value=a>A</option>", [~"a"])
+        ~"<option SELECTED value=a>A</option><option value=b>B</option>",
+        Mark(~"<option SELECTED value=a>A</option><option value=b>B</option>", [~"a"])
     ),
     Same(~"<option value=b value=a>A</option>", [~"a"]),
     ?assertEqual(~"<option value=\"a\"/ selected>", Mark(~"<option value=\"a\"/>", [~"a"])),
@@ -483,6 +486,28 @@ mark_choices_reads_the_fragment(Config) when is_list(Config) ->
             Mark(~"<option>a</option><option>b</option><option>c</option>", [~"a", ~"c"])
         )
     ).
+
+%% A `selected` the markup carries is the value's to decide, as the client decides it
+%% once it applies the value: kept on an option the value picks, taken off any other,
+%% every copy of it, so the page loads on the same option with or without the client.
+authored_selected_follows_the_value(Config) when is_list(Config) ->
+    Mark = fun(Fragment, Picks) ->
+        iolist_to_binary(arizona_html:mark_choices(Fragment, fun(T) -> lists:member(T, Picks) end))
+    end,
+    ?assertEqual(
+        ~"<option value=a selected>A<option value=b >B",
+        Mark(~"<option value=a>A<option value=b selected>B", [~"a"])
+    ),
+    ?assertEqual(
+        ~"<option value=\"b\"  >B<option SELECTED>a",
+        Mark(~"<option value=\"b\" SELECTED=\"\" selected>B<option SELECTED>a", [~"a"])
+    ),
+    %% End to end: a component's markup marking another option.
+    Mod = compile_module(
+        select_src_mod("sel_authored", "arizona_template:raw(~\"<option>a<option selected>b\")")
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a"}))),
+    ?assertEqual([~"a"], selected_values(HTML), HTML).
 
 %% --------------------------------------------------------------------
 %% Diff

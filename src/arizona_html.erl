@@ -407,13 +407,14 @@ selection_role(Tag) ->
 %% raw-text elements (raw_text_kind/2) and of `<template>`, and, in foreign content
 %% (content_context/2), CDATA sections; an `option` there is not an HTML option either.
 %% What closes the select (`</select>`, or a `select`/`input`/`keygen`/`textarea` start
-%% tag) ends the walk: an option after it is not this select's. An option already
-%% carrying `selected` keeps it.
+%% tag) ends the walk: an option after it is not this select's. A `selected` the
+%% markup already carries is the value's to decide, as the client decides it: kept on
+%% an option the value picks, cut from any other.
 mark_choices(Fragment, Picked) ->
     Bin = iolist_to_binary(Fragment),
     case choices(Bin, 0, {undefined, []}, Picked, []) of
         [] -> Fragment;
-        Marks -> splice_selected(Bin, lists:reverse(Marks), 0, [])
+        Marks -> splice_selected(Bin, lists:keysort(1, Marks), 0, [])
     end.
 
 choices(Bin, Pos, Ctx, Picked, Marks) ->
@@ -551,17 +552,19 @@ ends_name(_End) -> true.
 
 %% Mark the option whose start tag closes at `Close` when `Picked` accepts its value.
 mark_option(Bin, Attrs, Close, Picked, Marks) ->
-    case {lists:keymember(~"selected", 1, Attrs), lists:keyfind(~"value", 1, Attrs)} of
-        {true, _Value} ->
-            Marks;
-        {false, {_, Value}} ->
-            mark_if(Picked(Value), Close, Marks);
-        {false, false} ->
-            mark_if(Picked(collapse_ws(option_text(Bin, Close + 1, []))), Close, Marks)
+    Value =
+        case lists:keyfind(~"value", 1, Attrs) of
+            {_, V} -> V;
+            false -> collapse_ws(option_text(Bin, Close + 1, []))
+        end,
+    case {lists:keymember(~"selected", 1, Attrs), Picked(Value)} of
+        {false, true} -> [{Close, insert} | Marks];
+        {false, false} -> Marks;
+        {true, true} -> Marks;
+        %% A `selected` the value does not pick goes, every copy (the parser keeps the
+        %% first, so a later one would take its place): the client clears it too.
+        {true, false} -> [{Start, {cut, End}} || {selected_span, Start, End} <- Attrs] ++ Marks
     end.
-
-mark_if(true, Close, Marks) -> [Close | Marks];
-mark_if(false, _Close, Marks) -> Marks.
 
 %% An option's text, as its `text` property reads it: the text it holds up to what
 %% ends it, character references decoded, tags and comments left out, and a script's
@@ -722,24 +725,33 @@ tag_attrs(Bin, Pos0, Acc) ->
             case Bin of
                 <<_:AfterName/binary, "=", _/binary>> ->
                     {Value, After} = attr_value(Bin, skip_space(Bin, AfterName + 1)),
-                    tag_attrs(Bin, After, add_attr(Name, Value, Acc));
+                    tag_attrs(Bin, After, add_attr(Name, Value, {Pos, After}, Acc));
                 _NoValue ->
-                    tag_attrs(Bin, AfterName, add_attr(Name, <<>>, Acc))
+                    tag_attrs(Bin, AfterName, add_attr(Name, <<>>, {Pos, NameEnd}, Acc))
             end
     end.
 
-add_attr(Name, Value, Acc) when byte_size(Name) =:= 5; byte_size(Name) =:= 8 ->
+%% Every `selected` also leaves its byte span, for mark_option/5 to cut.
+add_attr(Name, Value, Span, Acc) when byte_size(Name) =:= 5; byte_size(Name) =:= 8 ->
     case fold_name(Name) of
-        Kept when Kept =:= ~"value"; Kept =:= ~"selected" ->
-            case lists:keymember(Kept, 1, Acc) of
-                true -> Acc;
-                false -> [{Kept, decode_refs(Value, attribute)} | Acc]
-            end;
+        ~"value" ->
+            first_attr(~"value", Value, Acc);
+        ~"selected" ->
+            [
+                {selected_span, element(1, Span), element(2, Span)}
+                | first_attr(~"selected", Value, Acc)
+            ];
         _Other ->
             Acc
     end;
-add_attr(_Name, _Value, Acc) ->
+add_attr(_Name, _Value, _Span, Acc) ->
     Acc.
+
+first_attr(Name, Value, Acc) ->
+    case lists:keymember(Name, 1, Acc) of
+        true -> Acc;
+        false -> [{Name, decode_refs(Value, attribute)} | Acc]
+    end.
 
 attr_value(Bin, Pos) ->
     case Bin of
@@ -935,8 +947,10 @@ alnum_run(_Rest, Acc) ->
 
 splice_selected(Bin, [], From, Acc) ->
     lists:reverse(Acc, [rest_from(Bin, From)]);
-splice_selected(Bin, [Gt | Marks], From, Acc) ->
-    splice_selected(Bin, Marks, Gt, [~" selected", binary_part(Bin, From, Gt - From) | Acc]).
+splice_selected(Bin, [{Gt, insert} | Marks], From, Acc) ->
+    splice_selected(Bin, Marks, Gt, [~" selected", binary_part(Bin, From, Gt - From) | Acc]);
+splice_selected(Bin, [{Start, {cut, End}} | Marks], From, Acc) ->
+    splice_selected(Bin, Marks, End, [binary_part(Bin, From, Start - From) | Acc]).
 
 rest_from(Bin, From) ->
     binary_part(Bin, From, byte_size(Bin) - From).
