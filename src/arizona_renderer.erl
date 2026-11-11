@@ -225,17 +225,6 @@ with nothing to imply returns `[]`.
 -callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
 
 -doc """
-Whether an attribute is one this backend's client does not read at first render on
-`Tag`, given its wire name (after `name/1`), so a page would load in a different
-state than an update of the same value leaves it. Asked by the parse transform at
-compile time for every attribute with a literal name (a static `false` excluded: it
-renders nothing), which rejects an inert one (`ssr_inert_attr`). `{inert, Hint}`
-carries the text telling the author what to write instead; a backend with nothing
-to reject returns `ok`. HTML rejects `value` on `<select>`.
-""".
--callback ssr_inert_attr(Tag :: tag(), Name :: binary()) -> ok | {inert, Hint :: binary()}.
-
--doc """
 Whether a whole document of this backend must be a single root node. `true` for
 JSON, whose document is one JSON value; `false` where a fragment is a valid
 document (an HTML doctype beside `<html>`, terminal lines). When `true`, the parse

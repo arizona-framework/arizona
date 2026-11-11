@@ -38,7 +38,6 @@ identical to the previous inlined emission.
 -export([supports_nodiff_keep/0]).
 -export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
--export([ssr_inert_attr/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -367,22 +366,6 @@ implied_attrs(Tag, Names) ->
             end;
         _Other ->
             []
-    end.
-
--spec ssr_inert_attr(arizona_renderer:tag(), binary()) -> ok | {inert, binary()}.
-%% `value` is no HTML attribute of `<select>`: the parser ignores it and selects the
-%% first option (or the `selected` one), while the client writes the `.value`
-%% property on an update, so the update selects what the page load did not.
-ssr_inert_attr(Tag, Name) ->
-    case {tag_name(Tag), ascii_lowercase(Name)} of
-        {~"select", ~"value"} ->
-            {inert, <<
-                "A <select> has no value attribute: the browser selects its first option "
-                "at page load and only an update applies the value. Mark the chosen option "
-                "instead, e.g. {option, [{value, V}, {selected, ?get(choice) =:= V}], [...]}"
-            >>};
-        _Other ->
-            ok
     end.
 
 boolean_attrs() -> presence.

@@ -91,12 +91,6 @@ A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?h
 (appended after its attributes), so a submit made before the client script runs never puts the
 fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 
-A `value` on a `select` (static or dynamic, any spelling) is a compile error in the `?html`
-target (`ssr_inert_attr`, from the backend's `ssr_inert_attr/2`): the HTML parser ignores it and
-selects the first option at page load, while an update writes the `.value` property, so the two
-disagree. Mark the chosen option instead:
-`{option, [{value, V}, {selected, ?get(choice) =:= V}], [...]}`. `?json` is unaffected.
-
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
 `bad_template_value`; a boolean belongs in a whole-value attribute (`{disabled, ?get(off)}`).

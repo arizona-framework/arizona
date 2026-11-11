@@ -430,7 +430,6 @@
     duplicate_attr_quotes_name_as_written/1,
     duplicate_attr_folds_ascii_case_only/1,
     duplicate_attr_message_target_neutral/1,
-    select_value_attr_rejected/1,
     az_view_attr_case_insensitive/1,
     nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
@@ -721,7 +720,6 @@ groups() ->
             duplicate_attr_quotes_name_as_written,
             duplicate_attr_folds_ascii_case_only,
             duplicate_attr_message_target_neutral,
-            select_value_attr_rejected,
             az_view_attr_case_insensitive,
             nodiff_directive_case_insensitive,
             static_after_dynamic_attr
@@ -4456,72 +4454,6 @@ duplicate_attr_message_target_neutral(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, string:find(Msg, "class")),
     ?assertEqual(nomatch, string:find(Msg, "browser")),
     ?assertEqual(nomatch, string:find(Msg, "dynamic one")).
-
-%% The HTML parser ignores `value` on a `<select>` and selects the first option, but
-%% the client writes the `.value` property on an update, so the page loads with one
-%% option and an update of the same value selects another. Rejected in any spelling
-%% of tag and name, static or dynamic; `?json` has no such attribute rule.
-select_value_attr_rejected(Config) when is_list(Config) ->
-    Src = fun(Mod, Tag, Attr) ->
-        lists:flatten([
-            "-module(",
-            Mod,
-            "). -export([render/1]). render(Bindings) -> _ = Bindings, "
-            "arizona_template:target(arizona_html, {",
-            Tag,
-            ", [",
-            Attr,
-            "], [{option, [{value, ~\"a\"}], [~\"A\"]}]}). "
-        ])
-    end,
-    Inert = fun(Name) ->
-        fun
-            ({ssr_inert_attr, {_Tag, N, Hint}}) when N =:= Name -> is_binary(Hint);
-            (_) -> false
-        end
-    end,
-    assert_parse_error(Src("pt_sel_static", "select", "{value, ~\"a\"}"), Inert(~"value")),
-    assert_parse_error(
-        Src("pt_sel_dyn", "select", "{value, arizona_template:get(v, Bindings)}"), Inert(~"value")
-    ),
-    assert_parse_error(Src("pt_sel_bare", "select", "value"), Inert(~"value")),
-    assert_parse_error(
-        Src("pt_sel_bin", "<<\"SELECT\">>", "{<<\"Value\">>, ~\"a\"}"), Inert(~"Value")
-    ),
-    assert_parse_error(Src("pt_sel_up", "'SELECT'", "{'VALUE', ~\"a\"}"), Inert(~"VALUE")),
-    %% Nested selects are checked too, not only a template root.
-    assert_parse_error(
-        "-module(pt_sel_nested). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:target(arizona_html, "
-        "{form, [], [{select, [{value, ~\"a\"}], []}]}). ",
-        Inert(~"value")
-    ),
-    {inert, Hint} = arizona_html:ssr_inert_attr(select, ~"value"),
-    Msg = arizona_parse_transform:format_error({ssr_inert_attr, {select, ~"value", Hint}}),
-    ?assertNotEqual(nomatch, string:find(Msg, "selected")),
-    %% Controls: `selected` on the option is the HTML form; a static `false` value
-    %% renders nothing; `value` on any other element, and every `?json` prop, is fine.
-    Ok = compile_module(
-        "-module(pt_sel_ok). -export([html/1, json/1]). "
-        "html(Bindings) -> arizona_template:target(arizona_html, "
-        "{select, [{name, ~\"s\"}, {value, false}], [{option, [{value, ~\"a\"}, "
-        "{selected, arizona_template:get(v, Bindings) =:= ~\"a\"}], [~\"A\"]}, "
-        "{option, [{value, ~\"b\"}, {selected, arizona_template:get(v, Bindings) =:= ~\"b\"}], "
-        "[~\"B\"]}]}). "
-        "json(Bindings) -> arizona_template:target(arizona_json, "
-        "{select, [{value, arizona_template:get(v, Bindings)}], []}). "
-    ),
-    {HTML, _} = arizona_render:render(Ok:html(#{v => ~"b"})),
-    ?assertMatch(
-        {match, _},
-        re:run(iolist_to_binary(HTML), ~"<option [^>]*value=\"b\" selected>B</option>"),
-        HTML
-    ),
-    ?assertEqual(nomatch, re:run(iolist_to_binary(HTML), ~"value=\"a\" selected")),
-    ?assertEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"<select value")),
-    ?assertMatch(#{}, Ok:json(#{v => ~"b"})),
-    ?assertEqual(ok, arizona_json:ssr_inert_attr(select, ~"value")),
-    ?assertEqual(ok, arizona_html:ssr_inert_attr(input, ~"value")).
 
 %% az-view is injected on a live root and rejected anywhere else, for the same
 %% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
