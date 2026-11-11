@@ -663,11 +663,12 @@ raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
         {arizona_raw, ~"x<\\/script>"},
         arizona_html:raw_text(script, <<>>, <<>>, {arizona_raw, ["x", ~"</script>"]})
     ),
-    %% Chardata that will not decode (invalid UTF-8) is handed back untouched rather
-    %% than swallowed here, so to_bin/1 stays the one place that names a bad value.
+    %% Chardata that will not decode (invalid UTF-8) is named by to_bin/1, called
+    %% here so the error is raised inside the slot's located evaluation.
     Undecodable = [<<255>>],
-    ?assertEqual(Undecodable, arizona_html:raw_text(script, <<>>, <<>>, Undecodable)),
-    ?assertError({non_utf8_render, 255, 0}, arizona_template:to_bin(Undecodable)).
+    ?assertError(
+        {non_utf8_render, 255, 0}, arizona_html:raw_text(script, <<>>, <<>>, Undecodable)
+    ).
 
 %% The template's own static text sits right beside a slot, so the `<` that starts
 %% a breakout can be the STATIC's last byte while the value supplies the rest. A

@@ -118,6 +118,9 @@
     raw_template_renders_on_diff/1,
     raw_wrapped_value_is_the_value/1,
     raw_template_in_raw_text_refused/1,
+    raw_text_end_tag_neutralized/1,
+    text_template_renders_text_in_raw_text/1,
+    raw_text_bad_list_located/1,
     raw_each_diffs_like_bare/1,
     raw_nodiff_skips_like_bare/1,
     literal_raw_template_refused/1,
@@ -297,6 +300,9 @@ groups() ->
             raw_template_renders_on_diff,
             raw_wrapped_value_is_the_value,
             raw_template_in_raw_text_refused,
+            raw_text_end_tag_neutralized,
+            text_template_renders_text_in_raw_text,
+            raw_text_bad_list_located,
             raw_each_diffs_like_bare,
             raw_nodiff_skips_like_bare,
             literal_raw_template_refused,
@@ -2210,14 +2216,98 @@ raw_template_in_raw_text_refused(Config) when is_list(Config) ->
         ]
     ].
 
+%% A `?raw` value in title/textarea cannot close the element: its end tag is written
+%% `&lt;`, which reads back as the same text, on SSR, the live render and the diff --
+%% a literal `?raw`, one around a helper's raw, and a helper's raw (escaped).
+raw_text_end_tag_neutralized(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Evil = ~"</title></textarea><img src=x onerror=alert(1)>",
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(#{v => Evil}))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(#{v => ~"a"}), #{}),
+            {LiveHTML, _, _} = arizona_render:render(M:Fun(#{v => Evil}), #{}),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(#{v => Evil}), S0, V0, #{v => true}),
+            ?assertEqual({Fun, 1}, {Fun, count(SSR, Close)}),
+            ?assertEqual({Fun, 1}, {Fun, count(iolist_to_binary(LiveHTML), Close)}),
+            ?assertEqual({Fun, 1}, {Fun, count(iolist_to_binary(HTML), Close)}),
+            ?assertNotEqual([], Ops),
+            ?assertEqual({Fun, 0}, {Fun, count(term_to_binary(Ops), Close)}),
+            <<"<", CloseName/binary>> = Close,
+            ?assertNotEqual({Fun, nomatch}, {Fun, binary:match(SSR, <<"&lt;", CloseName/binary>>)})
+        end
+     || {Fun, Close} <- [
+            {title_raw_value, ~"</title"},
+            {textarea_raw_value, ~"</textarea"},
+            {title_raw_helper_raw, ~"</title"},
+            {title_helper_raw_value, ~"</title"}
+        ]
+    ].
+
+count(Bin, Pattern) ->
+    length(binary:matches(Bin, Pattern)).
+
+%% A template with no element has one reading in title/textarea: its text, values
+%% escaped, the slot markers gone -- on SSR, the live render and the diff.
+text_template_renders_text_in_raw_text(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            B0 = #{page => ~"<x>"},
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B0))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+            ?assertEqual(SSR, iolist_to_binary(HTML)),
+            ?assertNotEqual(nomatch, binary:match(SSR, <<Open/binary, "Docs - &lt;x&gt;</">>)),
+            ?assertEqual(nomatch, binary:match(SSR, ~"Docs - <!--")),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(#{page => ~"y"}), S0, V0, #{page => true}),
+            Payload = term_to_binary(Ops),
+            ?assertNotEqual(nomatch, binary:match(Payload, ~"Docs - y")),
+            ?assertEqual(nomatch, binary:match(Payload, ~"<!--az"))
+        end
+     || {Fun, Open} <- [
+            {title_text_template_prop, ~">"},
+            {textarea_text_template_prop, ~">"}
+        ]
+    ],
+    Static = iolist_to_binary(
+        arizona_render:render_to_iolist(M:title_static_text_template(#{x => 1}))
+    ),
+    ?assertNotEqual(nomatch, binary:match(Static, ~">a &lt; b</title>")).
+
+%% A `?raw` list in a script holding a non-text term is a located bad_template_value.
+raw_text_bad_list_located(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, _}},
+        catch_error(fun() -> arizona_render:render_to_iolist(M:script_raw_bad_list(#{v => 1})) end)
+    ),
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, _}},
+        catch_error(fun() -> arizona_render:render(M:script_raw_bad_list(#{v => 1}), #{}) end)
+    ).
+
+catch_error(Fun) ->
+    try Fun() of
+        Result -> {no_error, Result}
+    catch
+        error:Reason -> Reason
+    end.
+
 assert_markup_in_raw_text(M, Fun) ->
     try Fun() of
         Result -> ct:fail({expected_markup_in_raw_text, Result})
     catch
         error:Reason:ST ->
-            ?assertMatch({arizona_loc, {M, _}, {markup_in_raw_text, #{s := _}}}, Reason),
+            ?assertMatch({arizona_loc, {M, _}, {markup_in_raw_text, _, #{s := _}}}, Reason),
+            {arizona_loc, _, {markup_in_raw_text, Element, _}} = Reason,
             Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
-            ?assertNotEqual(nomatch, binary:match(Msg, ~"raw-text element")),
+            Remedy =
+                case Element of
+                    ~"script" -> ~"json:encode";
+                    ~"style" -> ~"CSS";
+                    _TextElement -> ~"text-only template"
+                end,
+            ?assertNotEqual(nomatch, binary:match(Msg, Remedy)),
             ok
     end.
 

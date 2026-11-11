@@ -75,8 +75,10 @@ render(Bindings) ->
 -export([mark_esc/1]).
 -export([effect_in_content/1]).
 -export([raw_not_text/1]).
--export([markup_in_raw_text/1]).
--export([raw_text_value/1]).
+-export([markup_in_raw_text/2]).
+-export([text_markup/2]).
+-export([text_statics/3]).
+-export([has_tag_open/1]).
 -export([raw_to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -107,8 +109,6 @@ render(Bindings) ->
 -ignore_xref([raw/1]).
 %% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
 -ignore_xref([raw_attr/2]).
-%% Emitted by the parse transform around a title/textarea content value.
--ignore_xref([raw_text_value/1]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
 %% Emitted by the parse transform as the `selected` of an option under a valued select.
@@ -680,14 +680,12 @@ format_error({raw_template, V}) ->
             [V]
         )
     );
-format_error({markup_in_raw_text, V}) ->
+format_error({markup_in_raw_text, Element, V}) ->
     lists:flatten(
         io_lib:format(
-            "~0tp cannot render inside a raw-text element (script, style, textarea, "
-            "title): a template, component or ?local is markup, which there would run "
-            "as code or show as text. Render text, e.g. ?raw(json:encode(Data)) in a "
-            "script",
-            [V]
+            "~0tp cannot render inside <~ts>: its content is raw text, where markup ~ts. "
+            "~ts",
+            [V, Element, raw_text_effect(Element), raw_text_remedy(Element)]
         )
     );
 format_error({effect_in_content, V}) ->
@@ -745,7 +743,7 @@ format_error({bad_template_value, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error({raw_template, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
-format_error({markup_in_raw_text, _V} = Reason, _ST) ->
+format_error({markup_in_raw_text, _Element, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
@@ -781,9 +779,11 @@ helper's, one raw deep or a raw in a raw -- is redundant: the slot renders, moun
 and diffs it exactly as the bare value, on SSR, the live render and the diff alike
 (a `?local` renders as one arriving at runtime does: write it bare at the slot for
 its client binding); a raw-wrapped each or az-nodiff element diffs as the bare one.
-Inside a **raw-text element** (script, style, textarea, title) markup would run as
-code or show as text, so a raw around one there raises `{markup_in_raw_text, Map}`,
-located on every path. An **attribute value** must be text, so there a raw around one
+Inside a **raw-text element** markup would run as code or show as text: in script
+and style a raw around one raises `{markup_in_raw_text, Element, Map}`, located on
+every path; in title and textarea a template with no element renders its text
+(values escaped, slot markers gone), and one with elements, a component or a
+`?local` raises the same. An **attribute value** must be text, so there a raw around one
 -- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
 Map}` where the attribute is evaluated, located on every path. A command in a raw
 is refused as in content (`effect_in_content`). A map inside a list in the raw is
@@ -944,36 +944,142 @@ mark_raw_esc(V) -> mark_esc(V).
 raw_to_bin(V) when is_map(V) -> raw_not_text(V);
 raw_to_bin(V) -> to_bin(V).
 
-%% Internal: raises `{markup_in_raw_text, Map}` for a template, component or `?local`
-%% reaching raw-text content, where markup has no rendering.
+%% Internal: raises `{markup_in_raw_text, Element, Map}` for markup -- a template with
+%% elements, a component, a `?local` -- reaching the content of raw-text `Element`.
 -doc false.
--spec markup_in_raw_text(Value) -> no_return() when
+-spec markup_in_raw_text(Element, Value) -> no_return() when
+    Element :: binary(),
     Value :: map().
-markup_in_raw_text(V) ->
-    erlang:error({markup_in_raw_text, V}, [V], [{error_info, #{module => ?MODULE}}]).
+markup_in_raw_text(Element, V) ->
+    erlang:error({markup_in_raw_text, Element, V}, [Element, V], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
-%% Internal, emitted only by the parse transform around a title/textarea content
-%% value (inside a literal `raw/1`, around its argument). Those are ordinary slots, so
-%% a template a runtime value carries -- bare or in a raw -- would render as markup
-%% shown as text; it is refused, located, as the transform refuses a literal one. A
-%% template that renders as plain text (no dynamics, no tag) is a value, as it is at
-%% compile time, and so is a `?local`.
+raw_text_effect(~"script") -> "would run as code";
+raw_text_effect(~"style") -> "would be read as CSS";
+raw_text_effect(_TextElement) -> "would show as text".
+
+raw_text_remedy(~"script") ->
+    "Render the data the script needs as text, e.g. ?raw(json:encode(Data))";
+raw_text_remedy(~"style") ->
+    "Render the CSS as text";
+raw_text_remedy(_TextElement) ->
+    "Pass text: a binary, or a text-only template (text and values, no element), "
+    "which renders its text there".
+
+%% The text a template with no element reads as, for raw-text content (`<title>`,
+%% `<textarea>`) through `Backend` (an `arizona_renderer`): its statics with the slot
+%% markers the backend put around each dynamic removed, each value escaped as content
+%% escapes it (a nested text-only template read the same way, a literal `raw/1` part
+%% as written), and every `<` written `&lt;` -- none of them opens a tag, or this
+%% answers `markup`. A component, an each, a `?local` or an attribute is markup too.
+%% The values are evaluated here, inside the slot that holds the template, so their
+%% reads are that slot's.
 -doc false.
--spec raw_text_value(Value) -> Value when
-    Value :: term().
-raw_text_value({arizona_raw, V}) ->
-    raw(raw_text_value(V));
-raw_text_value(#{az_local := _} = Local) ->
-    Local;
-raw_text_value(#{s := Statics, d := []} = Tmpl) ->
-    case lists:any(fun(S) -> binary:match(S, ~"<") =/= nomatch end, Statics) of
-        true -> markup_in_raw_text(Tmpl);
-        false -> Tmpl
+-spec text_markup(Backend, Template) -> {ok, binary()} | markup when
+    Backend :: module(),
+    Template :: map().
+text_markup(Backend, #{s := Statics, d := Dynamics}) ->
+    try text_zip(Backend, text_statics(Backend, Statics, [dyn_az(D) || D <- Dynamics]), Dynamics) of
+        Parts ->
+            Bin = iolist_to_binary(Parts),
+            case has_tag_open(Bin) of
+                true -> markup;
+                false -> {ok, binary:replace(Bin, ~"<", ~"&lt;", [global])}
+            end
+    catch
+        throw:arizona_markup -> markup
     end;
-raw_text_value(V) when is_map(V) ->
-    markup_in_raw_text(V);
-raw_text_value(V) ->
-    V.
+text_markup(_Backend, _NotTemplate) ->
+    markup.
+
+text_zip(_Backend, [S], []) ->
+    [S];
+text_zip(Backend, [S | Statics], [Dyn | Dynamics]) ->
+    [S, dyn_text(Backend, dyn_spec(Dyn)) | text_zip(Backend, Statics, Dynamics)].
+
+dyn_spec({_Az, Spec}) -> Spec;
+dyn_spec({_Az, Spec, _Loc}) -> Spec.
+
+dyn_text(Backend, {esc, Fun}) when is_function(Fun, 0) ->
+    value_text(Backend, mark_esc(Fun()));
+dyn_text(Backend, Fun) when is_function(Fun, 0) ->
+    raw_value_text(Backend, Fun());
+dyn_text(_Backend, {attr, _Name, _Fun}) ->
+    throw(arizona_markup);
+dyn_text(Backend, Value) ->
+    raw_value_text(Backend, Value).
+
+value_text(Backend, {arizona_esc, V}) ->
+    Backend:escape(to_bin(V));
+value_text(Backend, V) ->
+    nested_text(Backend, V).
+
+%% A bare slot: a literal `raw/1` (its text as written) or a nested template.
+raw_value_text(Backend, {arizona_raw, V}) when is_map(V) ->
+    nested_text(Backend, V);
+raw_value_text(Backend, {arizona_raw, {arizona_raw, _} = V}) ->
+    raw_value_text(Backend, V);
+raw_value_text(_Backend, {arizona_raw, V}) ->
+    to_bin(V);
+raw_value_text(Backend, V) when is_map(V) ->
+    nested_text(Backend, V);
+raw_value_text(Backend, V) ->
+    Backend:escape(to_bin(V)).
+
+nested_text(Backend, #{s := _, d := _} = Tmpl) ->
+    case text_markup(Backend, Tmpl) of
+        {ok, Bin} -> Bin;
+        markup -> throw(arizona_markup)
+    end;
+nested_text(_Backend, _Markup) ->
+    throw(arizona_markup).
+
+%% `Statics` with the slot markers `Backend` puts around each dynamic removed: the
+%% opener ending the static before a dynamic whose `az` is in `Azs`, the closer
+%% starting the one after it. An az-nodiff dynamic (`undefined`) has none.
+-doc false.
+-spec text_statics(Backend, Statics, Azs) -> [binary()] when
+    Backend :: module(),
+    Statics :: [binary()],
+    Azs :: [az()].
+text_statics(_Backend, [S], []) ->
+    [S];
+text_statics(Backend, [S, Next | Statics], [undefined | Azs]) ->
+    [S | text_statics(Backend, [Next | Statics], Azs)];
+text_statics(Backend, [S, Next | Statics], [Az | Azs]) ->
+    [
+        strip_suffix(S, Backend:text_slot_open(Az))
+        | text_statics(Backend, [strip_prefix(Next, Backend:text_slot_close()) | Statics], Azs)
+    ].
+
+strip_suffix(Bin, Suffix) ->
+    Size = byte_size(Bin) - byte_size(Suffix),
+    case Bin of
+        <<Keep:Size/binary, Suffix/binary>> when Size >= 0 -> Keep;
+        _NoMarker -> Bin
+    end.
+
+strip_prefix(Bin, Prefix) ->
+    case Bin of
+        <<Prefix:(byte_size(Prefix))/binary, Rest/binary>> -> Rest;
+        _NoMarker -> Bin
+    end.
+
+%% Whether `Bin` holds a `<` that opens a tag as the HTML tokenizer reads one: followed
+%% by an ASCII letter, `/`, `!` or `?`. A `<` followed by anything else is text.
+-doc false.
+-spec has_tag_open(Bin) -> boolean() when
+    Bin :: binary().
+has_tag_open(<<$<, C, _/binary>>) when
+    (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z) orelse
+        C =:= $/ orelse C =:= $! orelse C =:= $?
+->
+    true;
+has_tag_open(<<_, Rest/binary>>) ->
+    has_tag_open(Rest);
+has_tag_open(<<>>) ->
+    false.
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
 %% `?local` -- held directly by a `raw/1` in an attribute value, which must be text.

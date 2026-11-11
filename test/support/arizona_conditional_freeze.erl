@@ -42,6 +42,14 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([helper_raw_template_json/1]).
 -export([literal_raw_template/1]).
 -export([raw_wrapped/1]).
+-export([title_raw_value/1]).
+-export([textarea_raw_value/1]).
+-export([title_raw_helper_raw/1]).
+-export([title_helper_raw_value/1]).
+-export([title_text_template_prop/1]).
+-export([textarea_text_template_prop/1]).
+-export([title_static_text_template/1]).
+-export([script_raw_bad_list/1]).
 -export([script_literal_raw_template/1]).
 -export([script_helper_raw_template/1]).
 -export([style_literal_raw_template/1]).
@@ -500,6 +508,51 @@ title_literal_raw_template(Bindings) ->
 -spec title_helper_raw_template(az:bindings()) -> az:template().
 title_helper_raw_template(Bindings) ->
     ?html({title, [], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+%% A `?raw` value in title/textarea content: the element's own end tag in it must
+%% not close the element.
+-spec title_raw_value(az:bindings()) -> az:template().
+title_raw_value(Bindings) ->
+    ?html({title, [], [?raw(?get(v))]}).
+
+-spec textarea_raw_value(az:bindings()) -> az:template().
+textarea_raw_value(Bindings) ->
+    ?html({textarea, [], [?raw(?get(v))]}).
+
+-spec title_raw_helper_raw(az:bindings()) -> az:template().
+title_raw_helper_raw(Bindings) ->
+    ?html({title, [], [?raw(wrap_raw(?get(v)))]}).
+
+-spec title_helper_raw_value(az:bindings()) -> az:template().
+title_helper_raw_value(Bindings) ->
+    ?html({title, [], [wrap_raw(?get(v))]}).
+
+%% A text-only template a runtime value carries into a title/textarea renders its
+%% text (`doc_title/2` is multi-clause, so it is a call, not inlined markup).
+-spec title_text_template_prop(az:bindings()) -> az:template().
+title_text_template_prop(Bindings) ->
+    ?html({head, [], [{title, [], [doc_title(docs, ?get(page))]}]}).
+
+-spec textarea_text_template_prop(az:bindings()) -> az:template().
+textarea_text_template_prop(Bindings) ->
+    ?html({'div', [], [{textarea, [], [doc_title(docs, ?get(page))]}]}).
+
+doc_title(docs, Page) -> ?html([~"Docs - ", Page]);
+doc_title(plain, Page) -> Page.
+
+text_titled(Bindings) ->
+    ?html({title, [], [?get(t)]}).
+
+-spec title_static_text_template(az:bindings()) -> az:template().
+title_static_text_template(Bindings) ->
+    ?html({head, [], [?stateless(fun text_titled/1, #{t => ?html(~"a < b"), x => ?get(x)})]}).
+
+%% A `?raw` list in a script holding a non-text term.
+-spec script_raw_bad_list(az:bindings()) -> az:template().
+script_raw_bad_list(Bindings) ->
+    ?html({script, [], [?raw(bad_list(?get(v)))]}).
+
+bad_list(V) -> [~"a", {bad, V}].
 
 %% A list and a stream `?each`, bare and under a literal `?raw`.
 -spec each_bare(az:bindings()) -> az:template().

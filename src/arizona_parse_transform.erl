@@ -5407,7 +5407,9 @@ compile_children([Child | Rest], ElemAz, State0, Slot, Index) ->
 
 %% The bytes the static children after a raw-text slot emit, up to the next child
 %% that is not static text. Only a `raw` element's slot reads them.
-static_run_after(Rest, #state{raw_text_kind = raw, backend = Backend}) ->
+static_run_after(Rest, #state{raw_text_kind = Kind, backend = Backend}) when
+    Kind =:= raw; Kind =:= escapable
+->
     After = iolist_to_binary(static_run(Rest, Backend)),
     binary_part(After, 0, min(?RAW_TEXT_NEIGHBOUR_BYTES, byte_size(After)));
 static_run_after(_Rest, _State) ->
@@ -5520,11 +5522,11 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             ValueStr = erl_pp:expr(Child),
             parse_error({invalid_child, ValueStr}, anno(Child));
         false ->
-            ok = reject_markup_in_raw_text(Child, State0#state.raw_text_kind),
+            ok = reject_markup_in_raw_text(
+                Child, State0#state.raw_text_kind, State0#state.backend
+            ),
             ok = reject_command_in_content(Child),
-            emit_child_dynamic(
-                guard_raw_text_value(Child, State0#state.raw_text_kind), ElemAz, State0, Slot
-            )
+            emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
 %% A content slot renders its value as text, and no client runs a command there.
@@ -5557,11 +5559,11 @@ reject_command_leaf(Leaf) ->
 %% tags, so markup there -- in the value itself or in any tail it can take -- would
 %% show as literal text (comment markers included). A script/style slot is
 %% already refused unless it is a literal ?raw (assert_raw_text_opt_out/1).
-reject_markup_in_raw_text(Child, escapable) ->
+reject_markup_in_raw_text(Child, escapable, Backend) ->
     _Walked = map_tail_exprs(
         Child,
         fun(Leaf) ->
-            case is_markup_leaf(Leaf) of
+            case is_markup_leaf(Leaf, Backend) of
                 true -> parse_error(markup_in_raw_text, anno(Leaf));
                 false -> Leaf
             end
@@ -5569,47 +5571,20 @@ reject_markup_in_raw_text(Child, escapable) ->
         fun(NonTail) -> NonTail end
     ),
     ok;
-reject_markup_in_raw_text(_Child, _RawKind) ->
+reject_markup_in_raw_text(_Child, _RawKind, _Backend) ->
     ok.
-
-%% A title/textarea slot is an ordinary slot, so a template a runtime value carries
-%% would render as markup shown as text; arizona_template:raw_text_value/1 refuses it
-%% where the slot is evaluated. Inside a literal `?raw` it goes around the argument,
-%% so the opt-out stays literal; a `?local` keeps its own compilation.
-guard_raw_text_value({cons, L, Head, Tail}, escapable) ->
-    %% A literal list keeps its compilation (a value list, its `?raw` items spliced),
-    %% so each item is guarded instead.
-    {cons, L, guard_raw_text_value(Head, escapable), guard_raw_text_value(Tail, escapable)};
-guard_raw_text_value({nil, _} = Nil, escapable) ->
-    Nil;
-guard_raw_text_value(Child, escapable) ->
-    case {is_local_marker(Child), Child} of
-        {true, _} ->
-            Child;
-        {false, {call, L, {remote, _, {atom, _, Mod}, {atom, _, raw}} = Raw, [Arg]}} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            {call, L, Raw, [raw_text_value_ast(Arg)]};
-        {false, _} ->
-            raw_text_value_ast(Child)
-    end;
-guard_raw_text_value(Child, _RawKind) ->
-    Child.
-
-raw_text_value_ast(Expr) ->
-    L = line(Expr),
-    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, raw_text_value}}, [Expr]}.
 
 %% A tail value that renders as markup: an element, an element list or a list holding
 %% one, or a constructor other than ?raw/?local (both are values here).
-is_markup_leaf({map, _, Fields} = Leaf) ->
-    %% A compiled template with no dynamics and no tag in its statics renders as
-    %% plain text (`?html(~"x")`), so it is a value here.
-    case is_compiled_template_map(Fields) andalso is_text_only_template(Fields) of
+is_markup_leaf({map, _, Fields} = Leaf, Backend) ->
+    %% A compiled template with no element renders its text there (`?html(~"x")`,
+    %% `?html([~"Docs - ", ?get(page)])`), so it is a value, as at runtime
+    %% (arizona_template:text_markup/2).
+    case is_compiled_template_map(Fields) andalso is_text_only_template(Fields, Backend) of
         true -> false;
         false -> is_markup_item(Leaf)
     end;
-is_markup_leaf(Leaf) ->
+is_markup_leaf(Leaf, _Backend) ->
     case classify_body(Leaf) of
         element_tuple -> true;
         element_list -> true;
@@ -5624,14 +5599,34 @@ list_has_markup_value({cons, _, Head, Tail}) ->
 list_has_markup_value(_) ->
     false.
 
-is_text_only_template(Fields) ->
-    case {template_map_field(d, Fields), template_map_field(s, Fields)} of
-        {{nil, _}, SAST} ->
-            Statics = [extract_binary_value(B) || B <- ast_list_to_list(SAST)],
-            not lists:any(fun(B) -> binary:match(B, ~"<") =/= nomatch end, Statics);
-        _ ->
+%% The compile-time half of arizona_template:text_markup/2: no tag in the statics once
+%% the slot markers are gone, and no attribute dynamic.
+is_text_only_template(Fields, Backend) ->
+    Statics = [extract_binary_value(B) || B <- ast_list_to_list(template_map_field(s, Fields))],
+    case dynamic_azs(template_map_field(d, Fields)) of
+        {ok, Azs} ->
+            Text = iolist_to_binary(arizona_template:text_statics(Backend, Statics, Azs)),
+            not arizona_template:has_tag_open(Text);
+        error ->
             false
     end.
+
+dynamic_azs(DAST) ->
+    try
+        {ok, [text_dynamic_az(D) || D <- ast_list_to_list(DAST)]}
+    catch
+        error:_NotTextDynamic -> error
+    end.
+
+text_dynamic_az({tuple, _, [{atom, _, undefined}, Spec | _]}) ->
+    ok = assert_not_attr_spec(Spec),
+    undefined;
+text_dynamic_az({tuple, _, [AzAST, Spec | _]}) ->
+    ok = assert_not_attr_spec(Spec),
+    extract_binary_value(AzAST).
+
+assert_not_attr_spec({tuple, _, [{atom, _, attr} | _]}) -> error(attr_dynamic);
+assert_not_attr_spec(_Spec) -> ok.
 
 is_value_constructor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _}) ->
     (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= raw orelse F =:= local);
@@ -5672,6 +5667,16 @@ emit_child_dynamic(
         Child, Tag, Neighbours, Module, line(Child), Backend, State0#state.content_ctx
     ),
     {flush(State0, DynAST), Slot};
+emit_child_dynamic(Child, ElemAz, #state{raw_text_kind = escapable} = State0, Slot) ->
+    %% textarea/title: escapable raw text. Comments are literal there, so the slot is
+    %% markerless and render-once; the backend renders the value for that context
+    %% (`raw_text/4`): a literal `?raw` spliced with the element's end tag defused, any
+    %% other value escaped (marked here, as a content value is), a text-only template
+    %% as its text. A `?local` keeps the value path its own markers need.
+    case is_local_marker(Child) of
+        true -> emit_escapable_local(Child, ElemAz, State0, Slot);
+        false -> emit_escapable_raw_text(Child, State0, Slot)
+    end;
 emit_child_dynamic(
     Child, ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
 ) ->
@@ -5686,22 +5691,59 @@ emit_child_dynamic(
             ),
             {flush(State0, with_choices(DynAST, State0)), Slot + 1}
     end;
-emit_child_dynamic(
+emit_child_dynamic(Child, ElemAz, State0, Slot) ->
+    emit_marked_child(Child, ElemAz, State0, Slot).
+
+emit_escapable_raw_text(
     Child,
-    _ElemAz,
-    #state{raw_text_kind = escapable, module = Module, backend = Backend} = State0,
+    #state{
+        raw_text_tag = Tag,
+        raw_text_after = After,
+        buf = Buf,
+        module = Module,
+        backend = Backend,
+        nodiff = Nodiff
+    } = State0,
     Slot
 ) ->
-    %% textarea/title: escapable raw text, the browser DOES decode character
-    %% references, so a scalar is HTML-escaped (make_nodiff_dynamic_ast's
-    %% esc_spec), but comments are still literal -- so the slot is markerless and
-    %% render-once, exactly like the layout/nodiff value path.
+    %% A literal list holding a `?raw` compiles as a fragment template (its items
+    %% slots of their own), which renders as its text like any text-only template.
+    Expanded = expand_block_element_tails(
+        Child, Module, Backend, false, State0#state.content_ctx
+    ),
+    Value =
+        case {is_raw_call(Child), Expanded} of
+            {true, _} ->
+                Child;
+            {false, {map, _, _}} ->
+                Expanded;
+            {false, _} ->
+                L = line(Child),
+                {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, mark_esc}}, [Child]}
+        end,
+    DynAST = make_raw_text_dynamic_ast(
+        Value,
+        Tag,
+        {static_run_before(Buf), After},
+        Module,
+        line(Child),
+        Backend,
+        State0#state.content_ctx
+    ),
+    %% A nodiff (layout) slot counts one, the numbering collect_content_locals/2 gives
+    %% the client.
+    case Nodiff of
+        true -> {flush(State0, DynAST), Slot + 1};
+        false -> {flush(State0, DynAST), Slot}
+    end.
+
+emit_escapable_local(Child, ElemAz, #state{nodiff = true} = State0, Slot) ->
+    emit_marked_child(Child, ElemAz, State0, Slot);
+emit_escapable_local(Child, _ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     DynAST = make_nodiff_dynamic_ast(
         Child, Module, line(Child), Backend, State0#state.content_ctx
     ),
-    {flush(State0, DynAST), Slot};
-emit_child_dynamic(Child, ElemAz, State0, Slot) ->
-    emit_marked_child(Child, ElemAz, State0, Slot).
+    {flush(State0, DynAST), Slot}.
 
 emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
