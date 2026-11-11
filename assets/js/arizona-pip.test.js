@@ -1129,5 +1129,33 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             expect(document.querySelector('#other > #C')?.textContent).toBe('new');
             delete hooks.H;
         });
+
+        it("patches the fresh copy of a re-rendered window's child view later in the batch", async () => {
+            // K is a view inside C, not popped out itself: the stale C in w1 holds
+            // a stale K too, and the fresh one is in w2 until the batch ends.
+            document.body.innerHTML =
+                '<div id="root" az-view az="0"><div id="P" az-view az="0">' +
+                '<div id="C" az-view az="0"><div id="K" az-view az="0"><b az="1">k</b></div></div></div></div>';
+            const w1 = makePipWindow();
+            stubPip(w1);
+            await requestPip('C');
+            const w2 = makePipWindow();
+            stubPip(w2);
+            await requestPip('P');
+
+            applyOps([
+                [
+                    OP.TEXT,
+                    'P:0',
+                    '<div id="C" az-view az="0"><div id="K" az-view az="0"><b az="1">k</b></div></div>',
+                    true,
+                ],
+                [OP.SET_ATTR, 'K:1', 'class', 'two'],
+            ]);
+
+            expect(w1.document.querySelector('#K b')?.getAttribute('class')).toBe('two');
+            w1.fire('pagehide');
+            w2.fire('pagehide');
+        });
     });
 });
