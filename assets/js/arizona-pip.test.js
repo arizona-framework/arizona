@@ -868,4 +868,31 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(document.querySelector('#root > p#player')?.textContent).toBe('just a paragraph');
         expect(pip.document.getElementById('player')).toBeNull();
     });
+
+    it('keeps a popped-out child in its window when its popped-out parent re-renders it', async () => {
+        // Child C in one window, its parent P in another: P's re-render renders C
+        // inside P's window, not in the page, and C's window takes it from there.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="P" az-view az="0"><div id="C" az-view az="0">c</div></div></div>';
+        const w1 = makePipWindow();
+        stubPip(w1);
+        await requestPip('C');
+        const w2 = makePipWindow();
+        stubPip(w2);
+        await requestPip('P');
+
+        applyOps([[OP.TEXT, 'P:0', '<div id="C" az-view az="0">c2</div>', true]]);
+
+        expect(w1.closed).toBe(false);
+        expect(w1.document.querySelectorAll('#C')).toHaveLength(1);
+        expect(w1.document.getElementById('C')?.textContent).toBe('c2');
+        expect(w2.document.getElementById('C')).toBeNull();
+        expect(resolveEl('C')?.ownerDocument).toBe(w1.document);
+
+        // Closing C's window brings it back into P, in P's window.
+        w1.fire('pagehide');
+        expect(w2.document.querySelector('#P > #C')?.textContent).toBe('c2');
+        w2.fire('pagehide');
+    });
 });
