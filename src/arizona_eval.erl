@@ -195,11 +195,16 @@ peek_spec(Fun) when is_function(Fun, 0) -> {false, Fun()};
 peek_spec(Spec) -> {false, Spec}.
 
 %% A `?stateless` descriptor is rendered here as eval_val_v/2 would, its body's
-%% own reads kept out of the slot's deps.
+%% own reads kept out of the slot's deps. A raw around a map is the map, as eval_val/1
+%% renders it, so it keeps the bare element's skip.
 peek_nodiff(#{callback := _, props := _} = Desc) ->
     with_saved_deps(fun() -> peek_nodiff(arizona_template:stateless_template(Desc)) end);
 peek_nodiff(#{choices := _, child := Child}) ->
     peek_nodiff(Child);
+peek_nodiff({arizona_raw, V}) when is_map(V) ->
+    peek_nodiff(V);
+peek_nodiff({arizona_raw, {arizona_raw, _} = V}) ->
+    peek_nodiff(V);
 peek_nodiff(Val) ->
     Val.
 
@@ -248,14 +253,22 @@ eval_each_def({Az, Spec}, Views0) ->
     end.
 
 each_def(Az, Spec, Outer, Views0) ->
-    case peek_spec(Spec) of
-        {_Esc, #{t := ?EACH, source := _, template := _} = Each} ->
-            {each, Az, Each, close_deps(Outer)};
-        {_Esc, #{choices := _, child := #{t := ?EACH, source := _, template := _} = Each}} ->
-            {each, Az, Each, close_deps(Outer)};
-        {Esc, Raw} ->
-            eval_peeked(Az, Esc, Raw, Outer, Views0)
-    end.
+    {Esc, Val} = peek_spec(Spec),
+    each_def_val(Az, Esc, Val, Outer, Views0).
+
+%% A raw around a map is the map (eval_val/1), and a live render sees a valued
+%% chooser's child as written, so either around an each container diffs per item
+%% like the bare one.
+each_def_val(Az, _Esc, #{t := ?EACH, source := _, template := _} = Each, Outer, _Views0) ->
+    {each, Az, Each, close_deps(Outer)};
+each_def_val(Az, Esc, #{choices := _, child := Child}, Outer, Views0) ->
+    each_def_val(Az, Esc, Child, Outer, Views0);
+each_def_val(Az, Esc, {arizona_raw, V}, Outer, Views0) when is_map(V) ->
+    each_def_val(Az, Esc, V, Outer, Views0);
+each_def_val(Az, Esc, {arizona_raw, {arizona_raw, _} = V}, Outer, Views0) ->
+    each_def_val(Az, Esc, V, Outer, Views0);
+each_def_val(Az, Esc, Val, Outer, Views0) ->
+    eval_peeked(Az, Esc, Val, Outer, Views0).
 
 -doc """
 Runs `Fun`, which renders items of an `?each` whose per-item template is
@@ -668,7 +681,7 @@ eval_one_triple({Az, _Spec} = Dyn) ->
     Dynamic :: arizona_template:dynamic().
 dyn_value({_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) ->
     try
-        {attr, Name, attr_val(Name, eval_val(Fun()))}
+        {attr, Name, attr_val(Name, eval_attr(Fun()))}
     catch
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
@@ -679,7 +692,7 @@ dyn_value({Az, Spec, Loc}) ->
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
 dyn_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    {attr, Name, attr_val(Name, eval_val(Fun()))};
+    {attr, Name, attr_val(Name, eval_attr(Fun()))};
 dyn_value({Az, Spec}) ->
     arizona_template:scope_slot(Az, eval_val(Spec)).
 
@@ -724,18 +737,44 @@ eval_val(#{az_local := _, v := V} = Local) when is_map(V) ->
     %% A template init renders as the template where the local is a value
     %% (arizona_template:mark_esc/1), so it is evaluated like one.
     Local#{v := eval_val(V)};
+eval_val(#{az_local := _, v := {arizona_raw, R} = V} = Local) when is_map(R) ->
+    %% A raw around a template is the template (eval_val/1).
+    Local#{v := eval_val(V)};
 eval_val(#{az_local := _, v := V} = Local) ->
     ok = refuse_effect(V),
     Local;
+%% A template, component or `?local` is markup already, so a raw around one in content
+%% is redundant: the slot gets the value itself, evaluated like any other. A raw
+%% inside the raw is the same raw. Attributes never come here (eval_attr/1).
+eval_val({arizona_raw, V}) when is_map(V) ->
+    eval_val(V);
+eval_val({arizona_raw, {arizona_raw, _} = V}) ->
+    eval_val(V);
 eval_val({arizona_raw, V} = Raw) ->
     ok = refuse_effect(V),
     Raw;
 eval_val(Val) ->
     Val.
 
+%% An attribute value. Only a raw needs anything: an attribute value is text, so a
+%% template, component or `?local` in one is refused here, located, rather than
+%% rendered (content renders it, eval_val/1); a command in one is refused as in
+%% content. Anything else is handed to the attribute renderer as it is -- nothing
+%% else evaluates to an attribute value.
+eval_attr({arizona_raw, V}) when is_map(V) ->
+    arizona_template:raw_not_text(V);
+eval_attr({arizona_raw, V} = Raw) ->
+    ok = refuse_effect(V),
+    Raw;
+eval_attr(Val) ->
+    Val.
+
 %% A content `?local` init and a `raw/1` value skip `mark_esc/1`, so a command in
 %% one would otherwise be refused only at output (`arizona_template:to_bin/1`),
 %% where the slot's location is gone. Refused here, inside the located evaluation.
+%% A raw inside is looked through for a command, as output would.
+refuse_effect({arizona_raw, V}) ->
+    refuse_effect(V);
 refuse_effect(V) ->
     case arizona_template:classify_trusted(V) of
         {effect, Cmd} -> arizona_template:effect_in_content(Cmd);
@@ -762,7 +801,7 @@ eval_one_v({Az, {attr, Name, Fun}, Loc}, Views) when is_function(Fun, 0) ->
     Outer = open_deps(),
     Val =
         try
-            attr_val(Name, eval_val(Fun()))
+            attr_val(Name, eval_attr(Fun()))
         catch
             Class:Reason:ST -> relocate(Class, Reason, ST, Loc, Outer)
         end,
@@ -782,7 +821,7 @@ eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->
     Outer = open_deps(),
     Val =
         try
-            attr_val(Name, eval_val(Fun()))
+            attr_val(Name, eval_attr(Fun()))
         catch
             Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
         end,
@@ -879,9 +918,16 @@ eval_val_v(#{az_local := _, target := {attr, Name}, v := V} = Local, Views) ->
 eval_val_v(#{az_local := _, v := V} = Local, Views0) when is_map(V) ->
     {Val, Views1} = eval_val_v(V, Views0),
     {Local#{v := Val}, Views1};
+eval_val_v(#{az_local := _, v := {arizona_raw, R} = V} = Local, Views0) when is_map(R) ->
+    {Val, Views1} = eval_val_v(V, Views0),
+    {Local#{v := Val}, Views1};
 eval_val_v(#{az_local := _, v := V} = Local, Views) ->
     ok = refuse_effect(V),
     {Local, Views};
+eval_val_v({arizona_raw, V}, Views) when is_map(V) ->
+    eval_val_v(V, Views);
+eval_val_v({arizona_raw, {arizona_raw, _} = V}, Views) ->
+    eval_val_v(V, Views);
 eval_val_v({arizona_raw, V} = Raw, Views) ->
     ok = refuse_effect(V),
     {Raw, Views};

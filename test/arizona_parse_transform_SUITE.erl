@@ -589,6 +589,7 @@
     raw_text_rejects_branch_markup/1,
     raw_text_keeps_values/1,
     raw_text_list_with_raw_is_text/1,
+    raw_text_inline_text_template/1,
     markup_var_in_content_list_rejected/1,
     markup_var_in_content_list_allowed/1,
     cond_begin_block_tail/1,
@@ -1013,6 +1014,7 @@ groups() ->
             raw_text_rejects_branch_markup,
             raw_text_keeps_values,
             raw_text_list_with_raw_is_text,
+            raw_text_inline_text_template,
             markup_var_in_content_list_rejected,
             markup_var_in_content_list_allowed,
             cond_begin_block_tail,
@@ -6517,8 +6519,9 @@ layout_mixed_list(Config) when is_list(Config) ->
     ?assertEqual([<<"<!DOCTYPE html><html><head><title>">>, <<"</title></head></html>">>], Statics),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, {esc, Fun}, {pt_layout_mixed, 1}}] = maps:get(d, T),
-    ?assertEqual(<<"Hello">>, Fun()).
+    %% A title value renders through the backend's raw-text path: markerless, escaped.
+    [{undefined, Fun, {pt_layout_mixed, 1}}] = maps:get(d, T),
+    ?assertEqual({arizona_raw, <<"Hello">>}, Fun()).
 
 %% Test 70: Layout with dynamic attribute -- plain fun, no az attr.
 layout_dynamic_attr(Config) when is_list(Config) ->
@@ -8821,8 +8824,8 @@ az_layout_mixed(Config) when is_list(Config) ->
     ?assertEqual([<<"<!DOCTYPE html><html><head><title>">>, <<"</title></head></html>">>], Statics),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, {esc, Fun}, {pt_az_layout_mixed, 1}}] = maps:get(d, T),
-    ?assertEqual(<<"Hello">>, Fun()).
+    [{undefined, Fun, {pt_az_layout_mixed, 1}}] = maps:get(d, T),
+    ?assertEqual({arizona_raw, <<"Hello">>}, Fun()).
 
 %% Test 115: az:html nested elements -- az counter threading at depth.
 az_html_nested(Config) when is_list(Config) ->
@@ -13699,6 +13702,27 @@ raw_text_list_with_raw_is_text(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{r => ~"&amp;"}))),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"a &amp;</title>")),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--")).
+
+%% A text-only template written in a title -- with dynamics, or a static one holding a
+%% `<` that opens no tag -- has one reading there, its text, so it compiles and
+%% renders that text on SSR, the live render and the diff.
+raw_text_inline_text_template(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_inline_text). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, {head, [], [{title, [], ["
+        "        arizona_template:target(arizona_html, [<<\"Docs - \">>, "
+        "            arizona_template:get(page, Bindings)]), "
+        "        arizona_template:target(arizona_html, <<\" | a < b\">>)]}]}). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{page => ~"<x>"}))),
+    ?assertNotEqual(nomatch, binary:match(SSR, ~">Docs - &lt;x&gt; | a &lt; b</title>")),
+    {HTML, S0, V0} = arizona_render:render(Mod:render(#{page => ~"<x>"}), #{}),
+    ?assertEqual(SSR, iolist_to_binary(HTML)),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(#{page => ~"y"}), S0, V0, #{page => true}),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), ~"Docs - y")),
+    ?assertEqual(nomatch, binary:match(term_to_binary(Ops), ~"<!--az")).
 
 %% A content-slot list item that is a variable bound to markup is a compile error
 %% naming the variable: only markup written in the list is compiled.

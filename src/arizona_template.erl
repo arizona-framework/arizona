@@ -74,6 +74,12 @@ render(Bindings) ->
 -export([escape_marked/2]).
 -export([mark_esc/1]).
 -export([effect_in_content/1]).
+-export([raw_not_text/1]).
+-export([markup_in_raw_text/2]).
+-export([text_markup/2]).
+-export([text_statics/3]).
+-export([has_tag_open/1]).
+-export([raw_to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
@@ -665,6 +671,23 @@ format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
     lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V]));
+format_error({raw_template, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "raw/1 around ~0tp in an attribute value: a template, component or ?local "
+            "is markup, not text, and an attribute value must be text. (In content a "
+            "raw around one is redundant and renders it.)",
+            [V]
+        )
+    );
+format_error({markup_in_raw_text, Element, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "~0tp cannot render inside <~ts>: its content is raw text, where markup ~ts. "
+            "~ts",
+            [V, Element, raw_text_effect(Element), raw_text_remedy(Element)]
+        )
+    );
 format_error({effect_in_content, V}) ->
     lists:flatten(
         io_lib:format(
@@ -718,6 +741,10 @@ format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
     };
 format_error({bad_template_value, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
+format_error({raw_template, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error({markup_in_raw_text, _Element, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
 format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(parse_transform_not_applied = Reason, _ST) ->
@@ -745,6 +772,22 @@ This is an **HTML-target** feature: on the live diff a `?raw` value is tagged so
 client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boundary).
 The `?json` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
 with no defined meaning; using it in a `?json`/`?terminal` template is unsupported.
+
+A template, a `?stateful`/`?stateless` component, `?inner_content` or a `?local` is
+markup already, never escaped, so in **content** a raw around one -- literal or a
+helper's, one raw deep or a raw in a raw -- is redundant: the slot renders, mounts
+and diffs it exactly as the bare value, on SSR, the live render and the diff alike
+(a `?local` renders as one arriving at runtime does: write it bare at the slot for
+its client binding); a raw-wrapped each or az-nodiff element diffs as the bare one.
+Inside a **raw-text element** markup would run as code or show as text: in script
+and style a raw around one raises `{markup_in_raw_text, Element, Map}`, located on
+every path; in title and textarea a template with no element renders its text
+(values escaped, slot markers gone), and one with elements, a component or a
+`?local` raises the same. An **attribute value** must be text, so there a raw around one
+-- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
+Map}` where the attribute is evaluated, located on every path. A command in a raw
+is refused as in content (`effect_in_content`). A map inside a list in the raw is
+not looked for and raises `bad_template_value` at output, located on SSR only.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -774,7 +817,9 @@ bool_attr(Value) -> Value.
 -doc """
 Classifies the trusted shapes: a `raw/1` opt-out (`{arizona_raw, V}`, returned
 unwrapped) and an effect command or command list (`{arizona_effect, _}`). Every
-other value is `value`.
+other value is `value`. A raw holding a map is still `{raw, Map}`: a caller that renders text
+refuses it in its raw arm (`raw_to_bin/1`), content renders it as the map before
+it gets here, and no other shape pays to test for it.
 
 The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
 the backends' attribute renderers dispatch on it. `to_bin/1` matches the raw
@@ -820,7 +865,7 @@ effect command is not text and raises `{effect_in_content, Cmd}`.
     Value :: term().
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> to_bin(V);
+        {raw, V} -> raw_to_bin(V);
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> Backend:escape(to_bin(V0))
     end.
@@ -858,7 +903,10 @@ the documented rule forbids ("the parse transform only recognizes the opt-out
 when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
-across the live diff).
+across the live diff). A map held by the raw -- a template, a descriptor, a
+`?local` -- is markup already, so it is returned as the map and rendered as that
+value, as a literal `?raw` around one is. A raw inside the raw is unwrapped the
+same way (see `raw/1`).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -868,7 +916,7 @@ mark_esc(V) when is_map(V) ->
     V;
 mark_esc(V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> mark_esc(V);
+        {raw, V} -> mark_raw_esc(V);
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> {arizona_esc, V0}
     end.
@@ -879,6 +927,172 @@ mark_esc(V0) ->
 %% init spliced, a template one rendered, any other escaped -- so it keeps diffing.
 mark_local_init({arizona_raw, _} = Raw) -> Raw;
 mark_local_init(Init) -> mark_esc(Init).
+
+%% A map in a raw is markup already (a template, component, `?local`): the slot
+%% renders it as that value, so the raw is dropped rather than its value escaped, and
+%% the map is marked as it would be bare (a `?local` stands for its init).
+mark_raw_esc(V) when is_map(V) -> mark_esc(V);
+mark_raw_esc(V) -> mark_esc(V).
+
+%% Internal: the raw arm of a `classify_trusted/1` caller, which renders text. A map
+%% held by the raw is not text and is refused here rather than in
+%% `classify_trusted/1`, where the raise would cost every caller's plain-value path a
+%% test of the returned shape. Content never gets here with one: its evaluation
+%% renders a raw around a map as the map.
+-doc false.
+-spec raw_to_bin(Value) -> binary() when
+    Value :: term().
+raw_to_bin(V) when is_map(V) -> raw_not_text(V);
+raw_to_bin(V) -> to_bin(V).
+
+%% Internal: raises `{markup_in_raw_text, Element, Map}` for markup -- a template with
+%% elements, a component, a `?local` -- reaching the content of raw-text `Element`.
+-doc false.
+-spec markup_in_raw_text(Element, Value) -> no_return() when
+    Element :: binary(),
+    Value :: map().
+markup_in_raw_text(Element, V) ->
+    erlang:error({markup_in_raw_text, Element, V}, [Element, V], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+raw_text_effect(~"script") -> "would run as code";
+raw_text_effect(~"style") -> "would be read as CSS";
+raw_text_effect(_TextElement) -> "would show as text".
+
+raw_text_remedy(~"script") ->
+    "Render the data the script needs as text, e.g. ?raw(json:encode(Data))";
+raw_text_remedy(~"style") ->
+    "Render the CSS as text";
+raw_text_remedy(_TextElement) ->
+    "Pass text: a binary, or a text-only template (text and values, no element), "
+    "which renders its text there".
+
+%% The text a template with no element reads as, for raw-text content (`<title>`,
+%% `<textarea>`) through `Backend` (an `arizona_renderer`): its statics with the slot
+%% markers the backend put around each dynamic removed, each value escaped as content
+%% escapes it (a nested text-only template read the same way, a literal `raw/1` part
+%% as written), and every `<` written `&lt;`. Only the statics decide whether it is
+%% markup: one opening a tag answers `markup`, as does a component, an each, a `?local`
+%% or an attribute; a value or `raw/1` part is text, whatever it holds.
+%% The values are evaluated here, inside the slot that holds the template, so their
+%% reads are that slot's.
+-doc false.
+-spec text_markup(Backend, Template) -> {ok, binary()} | markup when
+    Backend :: module(),
+    Template :: map().
+text_markup(Backend, #{s := Statics0, d := Dynamics}) ->
+    Statics = text_statics(Backend, Statics0, [dyn_az(D) || D <- Dynamics]),
+    case lists:any(fun has_tag_open/1, Statics) of
+        true ->
+            markup;
+        false ->
+            try text_zip(Backend, Statics, Dynamics) of
+                Parts ->
+                    {ok, binary:replace(iolist_to_binary(Parts), ~"<", ~"&lt;", [global])}
+            catch
+                throw:arizona_markup -> markup
+            end
+    end;
+text_markup(_Backend, _NotTemplate) ->
+    markup.
+
+text_zip(_Backend, [S], []) ->
+    [S];
+text_zip(Backend, [S | Statics], [Dyn | Dynamics]) ->
+    [S, dyn_text(Backend, dyn_spec(Dyn)) | text_zip(Backend, Statics, Dynamics)].
+
+dyn_spec({_Az, Spec}) -> Spec;
+dyn_spec({_Az, Spec, _Loc}) -> Spec.
+
+dyn_text(Backend, {esc, Fun}) when is_function(Fun, 0) ->
+    value_text(Backend, mark_esc(Fun()));
+dyn_text(Backend, Fun) when is_function(Fun, 0) ->
+    raw_value_text(Backend, Fun());
+dyn_text(_Backend, {attr, _Name, _Fun}) ->
+    throw(arizona_markup);
+dyn_text(Backend, Value) ->
+    raw_value_text(Backend, Value).
+
+value_text(Backend, {arizona_esc, V}) ->
+    Backend:escape(to_bin(V));
+value_text(Backend, V) ->
+    nested_text(Backend, V).
+
+%% A bare slot: a literal `raw/1` (its text as written) or a nested template.
+raw_value_text(Backend, {arizona_raw, V}) when is_map(V) ->
+    nested_text(Backend, V);
+raw_value_text(Backend, {arizona_raw, {arizona_raw, _} = V}) ->
+    raw_value_text(Backend, V);
+raw_value_text(_Backend, {arizona_raw, V}) ->
+    to_bin(V);
+raw_value_text(Backend, V) when is_map(V) ->
+    nested_text(Backend, V);
+raw_value_text(Backend, V) ->
+    Backend:escape(to_bin(V)).
+
+nested_text(Backend, #{s := _, d := _} = Tmpl) ->
+    case text_markup(Backend, Tmpl) of
+        {ok, Bin} -> Bin;
+        markup -> throw(arizona_markup)
+    end;
+nested_text(_Backend, _Markup) ->
+    throw(arizona_markup).
+
+%% `Statics` with the slot markers `Backend` puts around each dynamic removed: the
+%% opener ending the static before a dynamic whose `az` is in `Azs`, the closer
+%% starting the one after it. An az-nodiff dynamic (`undefined`) has none.
+-doc false.
+-spec text_statics(Backend, Statics, Azs) -> [binary()] when
+    Backend :: module(),
+    Statics :: [binary()],
+    Azs :: [az()].
+text_statics(_Backend, [S], []) ->
+    [S];
+text_statics(Backend, [S, Next | Statics], [undefined | Azs]) ->
+    [S | text_statics(Backend, [Next | Statics], Azs)];
+text_statics(Backend, [S, Next | Statics], [Az | Azs]) ->
+    [
+        strip_suffix(S, Backend:text_slot_open(Az))
+        | text_statics(Backend, [strip_prefix(Next, Backend:text_slot_close()) | Statics], Azs)
+    ].
+
+strip_suffix(Bin, Suffix) ->
+    Size = byte_size(Bin) - byte_size(Suffix),
+    case Bin of
+        <<Keep:Size/binary, Suffix/binary>> when Size >= 0 -> Keep;
+        _NoMarker -> Bin
+    end.
+
+strip_prefix(Bin, Prefix) ->
+    case Bin of
+        <<Prefix:(byte_size(Prefix))/binary, Rest/binary>> -> Rest;
+        _NoMarker -> Bin
+    end.
+
+%% Whether `Bin` holds a `<` that opens a tag as the HTML tokenizer reads one: followed
+%% by an ASCII letter, `/`, `!` or `?`. A `<` followed by anything else is text.
+-doc false.
+-spec has_tag_open(Bin) -> boolean() when
+    Bin :: binary().
+has_tag_open(<<$<, C, _/binary>>) when
+    (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z) orelse
+        C =:= $/ orelse C =:= $! orelse C =:= $?
+->
+    true;
+has_tag_open(<<_, Rest/binary>>) ->
+    has_tag_open(Rest);
+has_tag_open(<<>>) ->
+    false.
+
+%% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
+%% `?local` -- held directly by a `raw/1` in an attribute value, which must be text.
+%% Raised where the attribute is evaluated, so it carries the slot's location.
+-doc false.
+-spec raw_not_text(Value) -> no_return() when
+    Value :: map().
+raw_not_text(V) ->
+    erlang:error({raw_template, V}, [V], [{error_info, #{module => ?MODULE}}]).
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`

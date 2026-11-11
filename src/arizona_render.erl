@@ -996,6 +996,17 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     },
     arizona_template:maybe_propagate(Tmpl, Snap0);
 render_ssr_val(Backend, Val) ->
+    ssr_leaf(Backend, Val).
+
+%% A literal `?raw` is what reaches here. A map in it is markup already, so it renders
+%% as that map, as the live render does (arizona_eval); a raw in it is the same raw.
+%% Checked in this body, not a clause head of render_ssr_val/2, so a template or other
+%% map value is not made to test for a tuple first.
+ssr_leaf(Backend, {arizona_raw, V}) when is_map(V) ->
+    render_ssr_val(Backend, V);
+ssr_leaf(Backend, {arizona_raw, {arizona_raw, _} = V}) ->
+    render_ssr_val(Backend, V);
+ssr_leaf(Backend, Val) ->
     text_leaf(Backend, arizona_template:to_bin(Val)).
 
 %% A child of a chooser the parse transform could not see into (arizona_template:choices/3),
@@ -1014,8 +1025,9 @@ render_ssr_choices(Backend, #{choices := Picks, esc := Esc, child := Child}) ->
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`
-%% -- renders structurally with its own escaping, an effect is refused, and
-%% anything else is escaped once. Escaping whatever came back as a binary instead
+%% -- renders structurally with its own escaping, as does a map a helper's raw holds;
+%% an effect is refused, and anything else is escaped once. Escaping whatever came
+%% back as a binary instead
 %% escaped a `?local` init a second time. A binary or an integer
 %% is escaped directly, the answer the classification is certain to give.
 render_ssr_esc_val(Backend, V) when is_binary(V) ->
@@ -1031,7 +1043,6 @@ render_ssr_esc_val(Backend, V) when is_map(V) ->
 render_ssr_esc_val(Backend, V) ->
     case arizona_template:mark_esc(V) of
         {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
-        %% Only a helper's raw/1 around a map is left unmarked; live renders it whole.
         Map -> render_ssr_val(Backend, Map)
     end.
 

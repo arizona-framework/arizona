@@ -37,6 +37,43 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([raw_text/1]).
 -export([helper_raw/1]).
 -export([runtime_local_content/1]).
+-export([helper_raw_template/1]).
+-export([helper_raw_template_nodiff/1]).
+-export([helper_raw_template_json/1]).
+-export([literal_raw_template/1]).
+-export([raw_wrapped/1]).
+-export([title_raw_in_list/1]).
+-export([title_raw_in_inline_template/1]).
+-export([title_raw_in_helper_template/1]).
+-export([title_split_end_tag/1]).
+-export([title_raw_value/1]).
+-export([textarea_raw_value/1]).
+-export([title_raw_helper_raw/1]).
+-export([title_helper_raw_value/1]).
+-export([title_text_template_prop/1]).
+-export([textarea_text_template_prop/1]).
+-export([title_static_text_template/1]).
+-export([script_raw_bad_list/1]).
+-export([script_literal_raw_template/1]).
+-export([script_helper_raw_template/1]).
+-export([style_literal_raw_template/1]).
+-export([style_helper_raw_template/1]).
+-export([textarea_literal_raw_template/1]).
+-export([textarea_helper_raw_template/1]).
+-export([title_literal_raw_template/1]).
+-export([title_helper_raw_template/1]).
+-export([each_bare/1]).
+-export([each_raw/1]).
+-export([stream_bare/1]).
+-export([stream_raw/1]).
+-export([nodiff_pick/1]).
+-export([literal_raw_attr/1]).
+-export([helper_raw_attr/1]).
+-export([interp_raw_attr/1]).
+-export([helper_raw_attr_json/1]).
+-export([literal_raw_attr_json/1]).
+-export([raw_raw_effect/1]).
+-export([raw_raw_effect_attr/1]).
 -export([raw_in_list_item/1]).
 -export([raw_in_stream_item/1]).
 -export([raw_in_branch/1]).
@@ -392,15 +429,248 @@ wrap_raw(Value) ->
     arizona_template:raw(Value).
 
 %% A content slot whose value becomes a `?local` arriving at runtime (`kind` switches
-%% it from text to a local, to a local with a `raw/1` init, or a template init).
+%% it from text to a local, to a local with a `raw/1` init, or a template init, bare or
+%% in a raw, and to a raw around such a local).
 -spec runtime_local_content(az:bindings()) -> az:template().
 runtime_local_content(Bindings) ->
     ?html({'div', [{id, ~"x"}], [local_or_text(?get(kind), ?get(v))]}).
 
-local_or_text(text, V) -> V;
-local_or_text(local, V) -> arizona_template:local(k, V);
-local_or_text(raw_local, V) -> arizona_template:local(k, arizona_template:raw(V));
-local_or_text(template_local, V) -> arizona_template:local(k, ?html({b, [], [V]})).
+local_or_text(text, V) ->
+    V;
+local_or_text(local, V) ->
+    arizona_template:local(k, V);
+local_or_text(raw_local, V) ->
+    arizona_template:local(k, arizona_template:raw(V));
+local_or_text(template_local, V) ->
+    arizona_template:local(k, ?html({b, [], [V]}));
+local_or_text(raw_template_local, V) ->
+    arizona_template:local(k, arizona_template:raw(?html({b, [], [V]})));
+local_or_text(raw_of_local, V) ->
+    arizona_template:raw(arizona_template:local(k, V));
+local_or_text(raw_of_raw_local, V) ->
+    arizona_template:raw(arizona_template:local(k, arizona_template:raw(V)));
+local_or_text(raw_of_template_local, V) ->
+    arizona_template:raw(arizona_template:local(k, ?html({b, [], [V]}))).
+
+%% A helper's `raw/1` around a template, once `wrap` is true: redundant in content (a
+%% template is markup already), refused in an attribute value (which must be text).
+-spec helper_raw_template(az:bindings()) -> az:template().
+helper_raw_template(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+-spec helper_raw_template_nodiff(az:bindings()) -> az:template().
+helper_raw_template_nodiff(Bindings) ->
+    ?html({'div', [{id, ~"x"}, 'az-nodiff'], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+-spec helper_raw_template_json(az:bindings()) -> az:template().
+helper_raw_template_json(Bindings) ->
+    ?json({'Column', [], [maybe_raw_json(?get(wrap), ?get(name))]}).
+
+maybe_raw_template(true, Name) -> arizona_template:raw(?html({b, [], [Name]}));
+maybe_raw_template(false, Name) -> Name.
+
+maybe_raw_json(true, Name) -> arizona_template:raw(?json({'Text', [], [Name]}));
+maybe_raw_json(false, Name) -> Name.
+
+%% A component, template or `?local` under `raws` levels of a helper's `raw/1`: the
+%% raw is redundant, so every level renders and diffs as the bare value (`raws => 0`).
+-spec raw_wrapped(az:bindings()) -> az:template().
+raw_wrapped(Bindings) ->
+    ?html({'div', [], [wrapped_value(?get(raws), ?get(kind), ?get(v))]}).
+
+wrapped_value(0, stateful, V) ->
+    arizona_template:stateful(arizona_counter, #{id => ~"c1", count => V});
+wrapped_value(0, stateless, V) ->
+    arizona_template:stateless(fun italic/1, #{t => V});
+wrapped_value(0, template, V) ->
+    ?html({b, [], [V]});
+wrapped_value(0, local, V) ->
+    arizona_template:local(~"k", V);
+wrapped_value(N, Kind, V) ->
+    arizona_template:raw(wrapped_value(N - 1, Kind, V)).
+
+italic(Bindings) ->
+    ?html({i, [], [?get(t)]}).
+
+%% A template has no rendering inside a raw-text element: in a literal `?raw`, and a
+%% helper's raw (inside the literal `?raw` a script/style slot requires).
+-spec script_literal_raw_template(az:bindings()) -> az:template().
+script_literal_raw_template(Bindings) ->
+    ?html({script, [], [?raw(text_or_template(?get(wrap), ?get(name)))]}).
+
+-spec script_helper_raw_template(az:bindings()) -> az:template().
+script_helper_raw_template(Bindings) ->
+    ?html({script, [], [?raw(maybe_raw_template(?get(wrap), ?get(name)))]}).
+
+-spec style_literal_raw_template(az:bindings()) -> az:template().
+style_literal_raw_template(Bindings) ->
+    ?html({style, [], [?raw(text_or_template(?get(wrap), ?get(name)))]}).
+
+-spec style_helper_raw_template(az:bindings()) -> az:template().
+style_helper_raw_template(Bindings) ->
+    ?html({style, [], [?raw(maybe_raw_template(?get(wrap), ?get(name)))]}).
+
+-spec textarea_literal_raw_template(az:bindings()) -> az:template().
+textarea_literal_raw_template(Bindings) ->
+    ?html({textarea, [], [?raw(text_or_template(?get(wrap), ?get(name)))]}).
+
+-spec textarea_helper_raw_template(az:bindings()) -> az:template().
+textarea_helper_raw_template(Bindings) ->
+    ?html({textarea, [], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+-spec title_literal_raw_template(az:bindings()) -> az:template().
+title_literal_raw_template(Bindings) ->
+    ?html({title, [], [?raw(text_or_template(?get(wrap), ?get(name)))]}).
+
+-spec title_helper_raw_template(az:bindings()) -> az:template().
+title_helper_raw_template(Bindings) ->
+    ?html({title, [], [maybe_raw_template(?get(wrap), ?get(name))]}).
+
+%% A `?raw` value in title/textarea content: the element's own end tag in it must
+%% not close the element.
+-spec title_raw_value(az:bindings()) -> az:template().
+title_raw_value(Bindings) ->
+    ?html({title, [], [?raw(?get(v))]}).
+
+-spec textarea_raw_value(az:bindings()) -> az:template().
+textarea_raw_value(Bindings) ->
+    ?html({textarea, [], [?raw(?get(v))]}).
+
+-spec title_raw_helper_raw(az:bindings()) -> az:template().
+title_raw_helper_raw(Bindings) ->
+    ?html({title, [], [?raw(wrap_raw(?get(v)))]}).
+
+-spec title_helper_raw_value(az:bindings()) -> az:template().
+title_helper_raw_value(Bindings) ->
+    ?html({title, [], [wrap_raw(?get(v))]}).
+
+%% A text-only template a runtime value carries into a title/textarea renders its
+%% text (`doc_title/2` is multi-clause, so it is a call, not inlined markup).
+-spec title_text_template_prop(az:bindings()) -> az:template().
+title_text_template_prop(Bindings) ->
+    ?html({head, [], [{title, [], [doc_title(?get(kind, docs), ?get(page))]}]}).
+
+-spec textarea_text_template_prop(az:bindings()) -> az:template().
+textarea_text_template_prop(Bindings) ->
+    ?html({'div', [], [{textarea, [], [doc_title(?get(kind, docs), ?get(page))]}]}).
+
+doc_title(docs, Page) -> ?html([~"Docs - ", Page]);
+doc_title(plain, Page) -> Page.
+
+text_titled(Bindings) ->
+    ?html({title, [], [?get(t)]}).
+
+-spec title_static_text_template(az:bindings()) -> az:template().
+title_static_text_template(Bindings) ->
+    ?html({head, [], [?stateless(fun text_titled/1, #{t => ?html(~"a < b"), x => ?get(x)})]}).
+
+%% A `?raw` in a text-only template in a title: a list, an inline template, a template a
+%% helper returns. Its value is text there, `<` and all.
+-spec title_raw_in_list(az:bindings()) -> az:template().
+title_raw_in_list(Bindings) ->
+    ?html({title, [], [[~"a ", ?raw(?get(v))]]}).
+
+-spec title_raw_in_inline_template(az:bindings()) -> az:template().
+title_raw_in_inline_template(Bindings) ->
+    ?html({title, [], [?html([~"P - ", ?raw(?get(v))])]}).
+
+-spec title_raw_in_helper_template(az:bindings()) -> az:template().
+title_raw_in_helper_template(Bindings) ->
+    ?html({title, [], [raw_doc(?get(kind, raw), ?get(v))]}).
+
+raw_doc(raw, V) -> ?html([~"Raw - ", ?raw(V)]);
+raw_doc(plain, V) -> V.
+
+%% A static ending in part of the element's end tag, before a value that completes it.
+-spec title_split_end_tag(az:bindings()) -> az:template().
+title_split_end_tag(Bindings) ->
+    ?html({title, [], [~"x</tit", ?get(v)]}).
+
+%% A `?raw` list in a script holding a non-text term.
+-spec script_raw_bad_list(az:bindings()) -> az:template().
+script_raw_bad_list(Bindings) ->
+    ?html({script, [], [?raw(bad_list(?get(v)))]}).
+
+bad_list(V) -> [~"a", {bad, V}].
+
+%% A list and a stream `?each`, bare and under a literal `?raw`.
+-spec each_bare(az:bindings()) -> az:template().
+each_bare(Bindings) ->
+    ?html({ul, [], [?each(fun(I) -> {li, [], [I]} end, ?get(items))]}).
+
+-spec each_raw(az:bindings()) -> az:template().
+each_raw(Bindings) ->
+    ?html({ul, [], [?raw(?each(fun(I) -> {li, [], [I]} end, ?get(items)))]}).
+
+-spec stream_bare(az:bindings()) -> az:template().
+stream_bare(Bindings) ->
+    ?html({ul, [], [?each(fun(I, K) -> {li, [{az_key, K}], [maps:get(t, I)]} end, ?get(s))]}).
+
+-spec stream_raw(az:bindings()) -> az:template().
+stream_raw(Bindings) ->
+    ?html({ul, [], [?raw(?each(fun(I, K) -> {li, [{az_key, K}], [maps:get(t, I)]} end, ?get(s)))]}).
+
+%% An az-nodiff element chosen by `x`, under `raws` helper raws; its content reports
+%% each evaluation to the calling process.
+-spec nodiff_pick(az:bindings()) -> az:template().
+nodiff_pick(Bindings) ->
+    ?html({'div', [], [nodiff_value(?get(raws), ?get(x), ?get(y))]}).
+
+nodiff_value(0, _X, Y) -> ?html({section, ['az-nodiff'], [{span, [], [evaluated(Y)]}]});
+nodiff_value(N, X, Y) -> arizona_template:raw(nodiff_value(N - 1, X, Y)).
+
+evaluated(Y) ->
+    self() ! {nodiff_evaluated, Y},
+    Y.
+
+%% The same for a `?raw` literal at the template site, around a template
+%% once `wrap` is true.
+-spec literal_raw_template(az:bindings()) -> az:template().
+literal_raw_template(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [?raw(text_or_template(?get(wrap), ?get(name)))]}).
+
+text_or_template(true, Name) -> ?html({b, [], [Name]});
+text_or_template(false, Name) -> Name.
+
+%% The same in an attribute value, written literally and returned by a helper.
+-spec literal_raw_attr(az:bindings()) -> az:template().
+literal_raw_attr(Bindings) ->
+    ?html({'div', [{id, ~"x"}, {title, ?raw(text_or_template(?get(wrap), ?get(name)))}], []}).
+
+-spec helper_raw_attr(az:bindings()) -> az:template().
+helper_raw_attr(Bindings) ->
+    ?html({'div', [{id, ~"x"}, {title, maybe_raw_template(?get(wrap), ?get(name))}], []}).
+
+%% A literal `?raw` part of an interpolated attribute value.
+-spec interp_raw_attr(az:bindings()) -> az:template().
+interp_raw_attr(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}, {title, [~"t-", ?raw(text_or_template(?get(wrap), ?get(name)))]}], []}
+    ).
+
+%% A `?json` prop, from a helper and from a literal `?raw`.
+-spec helper_raw_attr_json(az:bindings()) -> az:template().
+helper_raw_attr_json(Bindings) ->
+    ?json({'Text', [{label, maybe_raw_json(?get(wrap), ?get(name))}], []}).
+
+-spec literal_raw_attr_json(az:bindings()) -> az:template().
+literal_raw_attr_json(Bindings) ->
+    ?json({'Text', [{label, ?raw(text_or_json(?get(wrap), ?get(name)))}], []}).
+
+text_or_json(true, Name) -> ?json({'Text', [], [Name]});
+text_or_json(false, Name) -> Name.
+
+%% A literal `?raw` around a helper's raw holding a command, once `wrap` is true.
+-spec raw_raw_effect(az:bindings()) -> az:template().
+raw_raw_effect(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [?raw(raw_command(?get(wrap)))]}).
+
+-spec raw_raw_effect_attr(az:bindings()) -> az:template().
+raw_raw_effect_attr(Bindings) ->
+    ?html({'div', [{id, ~"x"}, {title, ?raw(raw_command(?get(wrap)))}], []}).
+
+raw_command(true) -> arizona_template:raw(arizona_js:push_event(~"x"));
+raw_command(false) -> ~"a".
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

@@ -114,6 +114,20 @@
     runtime_local_content_diffs_like_render/1,
     runtime_local_content_keeps_diffing/1,
     runtime_local_template_init_renders/1,
+    runtime_local_raw_is_the_bare_value/1,
+    raw_template_renders/1,
+    raw_template_renders_on_diff/1,
+    raw_wrapped_value_is_the_value/1,
+    raw_template_in_raw_text_refused/1,
+    raw_text_end_tag_neutralized/1,
+    text_template_renders_text_in_raw_text/1,
+    raw_text_bad_list_located/1,
+    raw_in_title_text_template_is_text/1,
+    title_end_tag_split_by_static_neutralized/1,
+    raw_each_diffs_like_bare/1,
+    raw_nodiff_skips_like_bare/1,
+    literal_raw_template_refused/1,
+    raw_in_raw_effect_located/1,
     wire_raw_in_list_item/1,
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
@@ -285,6 +299,20 @@ groups() ->
             runtime_local_content_diffs_like_render,
             runtime_local_content_keeps_diffing,
             runtime_local_template_init_renders,
+            runtime_local_raw_is_the_bare_value,
+            raw_template_renders,
+            raw_template_renders_on_diff,
+            raw_wrapped_value_is_the_value,
+            raw_template_in_raw_text_refused,
+            raw_text_end_tag_neutralized,
+            text_template_renders_text_in_raw_text,
+            raw_text_bad_list_located,
+            raw_in_title_text_template_is_text,
+            title_end_tag_split_by_static_neutralized,
+            raw_each_diffs_like_bare,
+            raw_nodiff_skips_like_bare,
+            literal_raw_template_refused,
+            raw_in_raw_effect_located,
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
@@ -2095,6 +2123,383 @@ runtime_local_template_init_renders(Config) when is_list(Config) ->
         M:runtime_local_content(B), S1, V1, #{kind => true, v => true}
     ),
     ?assertMatch([[?OP_TEXT, ~"1S9L2GB-0", #{}]], Ops1).
+
+%% A raw around a template is the template, and a raw around a runtime `?local` is
+%% the local, so a template init in a raw, or a raw around a local, renders and diffs
+%% exactly as the bare form does: the same markup on SSR and the live render, and the
+%% same ops onto it and inside it.
+runtime_local_raw_is_the_bare_value(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Run = fun(Kind) ->
+        B = #{kind => Kind, v => ~"<i>"},
+        SSR = iolist_to_binary(arizona_render:render_to_iolist(M:runtime_local_content(B))),
+        {HTML, _, _} = arizona_render:render(M:runtime_local_content(B), #{}),
+        ?assertEqual(SSR, iolist_to_binary(HTML), Kind),
+        {_, S0, V0} = arizona_render:render(
+            M:runtime_local_content(#{kind => text, v => ~"a"}), #{}
+        ),
+        {Ops, S1, V1} = arizona_diff:diff(
+            M:runtime_local_content(B), S0, V0, #{kind => true, v => true}
+        ),
+        {Ops1, _, _} = arizona_diff:diff(
+            M:runtime_local_content(B#{v => ~"z"}), S1, V1, #{v => true}
+        ),
+        {SSR, Ops, Ops1}
+    end,
+    [
+        ?assertEqual({Bare, Run(Bare)}, {Bare, Run(Wrapped)})
+     || {Wrapped, Bare} <- [
+            {raw_template_local, template_local},
+            {raw_of_local, local},
+            {raw_of_raw_local, raw_local},
+            {raw_of_template_local, template_local}
+        ]
+    ].
+
+%% A template is markup already, so a raw around one in content -- a helper's or a
+%% literal `?raw` -- is redundant and renders as that template: the same markup on SSR
+%% and the live render (under an az-nodiff root and in `?json` too), and a value inside
+%% it diffs in place, at its own slot, like any nested template.
+raw_template_renders(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B0 = #{wrap => true, name => ~"<a>"},
+    B1 = B0#{name => ~"z"},
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B0))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+            ?assertEqual(SSR, iolist_to_binary(HTML)),
+            ?assertNotEqual(nomatch, binary:match(SSR, Want)),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(B1), S0, V0, #{name => true}),
+            ok = Check(Ops)
+        end
+     || {Fun, Want, Check} <- [
+            {helper_raw_template, ~"<b az=", fun in_place_text_op/1},
+            {literal_raw_template, ~"<b az=", fun in_place_text_op/1},
+            {helper_raw_template_nodiff, ~"<b az=", fun([]) -> ok end},
+            {helper_raw_template_json, ~"\"type\":\"Text\"", fun in_place_text_op/1}
+        ]
+    ],
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            iolist_to_binary(arizona_render:render_to_iolist(M:helper_raw_template(B0))),
+            ~"&lt;a&gt;"
+        )
+    ).
+
+%% Only the changed value ships, as a bare string at the nested template's slot -- no
+%% re-render of the template.
+in_place_text_op([[?OP_TEXT, _, ~"z"]]) -> ok.
+
+%% A raw around a template appearing in a diff cycle ships that template.
+raw_template_renders_on_diff(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            {_, S0, V0} = arizona_render:render(M:Fun(#{wrap => false, name => ~"a"}), #{}),
+            {Ops, _, _} = arizona_diff:diff(
+                M:Fun(#{wrap => true, name => ~"a"}), S0, V0, #{wrap => true}
+            ),
+            ?assertMatch([[?OP_TEXT, _, #{}]], Ops)
+        end
+     || Fun <- [helper_raw_template, literal_raw_template]
+    ].
+
+%% A raw around a stateful or stateless component, a template or a `?local` -- one
+%% raw or a raw in a raw -- renders, mounts and diffs exactly as the bare value does.
+raw_wrapped_value_is_the_value(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Run = fun(Raws, Kind) ->
+        B0 = #{raws => Raws, kind => Kind, v => 1},
+        SSR = iolist_to_binary(arizona_render:render_to_iolist(M:raw_wrapped(B0))),
+        {HTML, S0, V0} = arizona_render:render(M:raw_wrapped(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(M:raw_wrapped(B0#{v => 2}), S0, V0, #{v => true}),
+        {SSR, iolist_to_binary(HTML), Ops}
+    end,
+    [
+        ?assertEqual(Run(0, Kind), Run(Raws, Kind))
+     || Kind <- [stateful, stateless, template, local], Raws <- [1, 2]
+    ],
+    ?assertMatch({_, _, [[~"c1", [[?OP_TEXT, _, ~"2"]]]]}, Run(1, stateful)),
+    ?assertMatch({_, _, [[?OP_TEXT, _, ~"2"]]}, Run(2, template)).
+
+%% A template has no rendering inside a raw-text element -- in script/style its markup
+%% and slot markers would run as code, in textarea/title they would show as text -- so
+%% a raw around one there, literal or a helper's, is refused at the slot's line on
+%% SSR, the live render and the diff.
+raw_template_in_raw_text_refused(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, name => ~"</script><img src=x onerror=alert(1)>"},
+    [
+        begin
+            ok = assert_markup_in_raw_text(M, fun() ->
+                arizona_render:render_to_iolist(M:Fun(B))
+            end),
+            ok = assert_markup_in_raw_text(M, fun() -> arizona_render:render(M:Fun(B), #{}) end),
+            {_, S0, V0} = arizona_render:render(M:Fun(B#{wrap => false}), #{}),
+            ok = assert_markup_in_raw_text(M, fun() ->
+                arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
+            end)
+        end
+     || Fun <- [
+            script_literal_raw_template,
+            script_helper_raw_template,
+            style_literal_raw_template,
+            style_helper_raw_template,
+            textarea_literal_raw_template,
+            textarea_helper_raw_template,
+            title_literal_raw_template,
+            title_helper_raw_template
+        ]
+    ].
+
+%% A `?raw` value in title/textarea cannot close the element: its end tag is written
+%% `&lt;`, which reads back as the same text, on SSR, the live render and the diff --
+%% a literal `?raw`, one around a helper's raw, and a helper's raw (escaped).
+raw_text_end_tag_neutralized(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Evil = ~"</title></textarea><img src=x onerror=alert(1)>",
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(#{v => Evil}))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(#{v => ~"a"}), #{}),
+            {LiveHTML, _, _} = arizona_render:render(M:Fun(#{v => Evil}), #{}),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(#{v => Evil}), S0, V0, #{v => true}),
+            ?assertEqual({Fun, 1}, {Fun, count(SSR, Close)}),
+            ?assertEqual({Fun, 1}, {Fun, count(iolist_to_binary(LiveHTML), Close)}),
+            ?assertEqual({Fun, 1}, {Fun, count(iolist_to_binary(HTML), Close)}),
+            ?assertNotEqual([], Ops),
+            ?assertEqual({Fun, 0}, {Fun, count(term_to_binary(Ops), Close)}),
+            <<"<", CloseName/binary>> = Close,
+            ?assertNotEqual({Fun, nomatch}, {Fun, binary:match(SSR, <<"&lt;", CloseName/binary>>)})
+        end
+     || {Fun, Close} <- [
+            {title_raw_value, ~"</title"},
+            {textarea_raw_value, ~"</textarea"},
+            {title_raw_helper_raw, ~"</title"},
+            {title_helper_raw_value, ~"</title"}
+        ]
+    ].
+
+count(Bin, Pattern) ->
+    length(binary:matches(Bin, Pattern)).
+
+%% A template with no element has one reading in title/textarea: its text, values
+%% escaped, the slot markers gone -- on SSR, the live render and the diff.
+text_template_renders_text_in_raw_text(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            B0 = #{page => ~"<x>"},
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B0))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+            ?assertEqual(SSR, iolist_to_binary(HTML)),
+            ?assertNotEqual(nomatch, binary:match(SSR, <<Open/binary, "Docs - &lt;x&gt;</">>)),
+            ?assertEqual(nomatch, binary:match(SSR, ~"Docs - <!--")),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(#{page => ~"y"}), S0, V0, #{page => true}),
+            Payload = term_to_binary(Ops),
+            ?assertNotEqual(nomatch, binary:match(Payload, ~"Docs - y")),
+            ?assertEqual(nomatch, binary:match(Payload, ~"<!--az"))
+        end
+     || {Fun, Open} <- [
+            {title_text_template_prop, ~">"},
+            {textarea_text_template_prop, ~">"}
+        ]
+    ],
+    Static = iolist_to_binary(
+        arizona_render:render_to_iolist(M:title_static_text_template(#{x => 1}))
+    ),
+    ?assertNotEqual(nomatch, binary:match(Static, ~">a &lt; b</title>")).
+
+%% A `?raw` inside a text-only template in a title is text, as written: whatever its
+%% data holds -- a `<` before a letter, a comment, the end tag -- it renders with every
+%% `<` written `&lt;`, never closing the element, on SSR, the live render and the diff.
+raw_in_title_text_template_is_text(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(#{v => V}))),
+            {LiveHTML, _, _} = arizona_render:render(M:Fun(#{v => V}), #{}),
+            ?assertEqual(SSR, iolist_to_binary(LiveHTML)),
+            ?assertEqual({Fun, V, 1}, {Fun, V, count(SSR, ~"</title")}),
+            ?assertNotEqual({Fun, V, nomatch}, {Fun, V, binary:match(SSR, Want)}),
+            {_, S0, V0} = arizona_render:render(M:Fun(#{v => ~"x"}), #{}),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(#{v => V}), S0, V0, #{v => true}),
+            ?assertNotEqual([], Ops),
+            ?assertEqual({Fun, V, 0}, {Fun, V, count(term_to_binary(Ops), ~"</title")})
+        end
+     || Fun <- [title_raw_in_list, title_raw_in_inline_template, title_raw_in_helper_template],
+        {V, Want} <- [
+            {~"a<b", ~"a&lt;b"},
+            {~"<!-- c -->", ~"&lt;!-- c -->"},
+            {~"</title>", ~"&lt;/title>"}
+        ]
+    ].
+
+%% A static ending in part of the end tag cannot be completed by an escaped value.
+title_end_tag_split_by_static_neutralized(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(M:title_split_end_tag(#{v => ~"le x"}))),
+    {HTML, S0, V0} = arizona_render:render(M:title_split_end_tag(#{v => ~"le x"}), #{}),
+    ?assertEqual(1, count(SSR, ~"</title")),
+    ?assertEqual(1, count(iolist_to_binary(HTML), ~"</title")),
+    {Ops, _, _} = arizona_diff:diff(M:title_split_end_tag(#{v => ~"le y"}), S0, V0, #{v => true}),
+    ?assertNotEqual([], Ops),
+    ?assertEqual(0, count(term_to_binary(Ops), ~"</title")).
+
+%% A `?raw` list in a script holding a non-text term is a located bad_template_value.
+raw_text_bad_list_located(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, _}},
+        catch_error(fun() -> arizona_render:render_to_iolist(M:script_raw_bad_list(#{v => 1})) end)
+    ),
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, _}},
+        catch_error(fun() -> arizona_render:render(M:script_raw_bad_list(#{v => 1}), #{}) end)
+    ).
+
+catch_error(Fun) ->
+    try Fun() of
+        Result -> {no_error, Result}
+    catch
+        error:Reason -> Reason
+    end.
+
+assert_markup_in_raw_text(M, Fun) ->
+    try Fun() of
+        Result -> ct:fail({expected_markup_in_raw_text, Result})
+    catch
+        error:Reason:ST ->
+            ?assertMatch({arizona_loc, {M, _}, {markup_in_raw_text, _, #{s := _}}}, Reason),
+            {arizona_loc, _, {markup_in_raw_text, Element, _}} = Reason,
+            Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
+            Remedy =
+                case Element of
+                    ~"script" -> ~"json:encode";
+                    ~"style" -> ~"CSS";
+                    _TextElement -> ~"text-only template"
+                end,
+            ?assertNotEqual(nomatch, binary:match(Msg, Remedy)),
+            ok
+    end.
+
+%% A raw around a list or stream `?each` diffs exactly as the bare one: per item, not
+%% as a re-render of the whole container.
+raw_each_diffs_like_bare(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Run = fun(Fun, B0, B1, Changed) ->
+        {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(M:Fun(B1), S0, V0, Changed),
+        {iolist_to_binary(HTML), Ops}
+    end,
+    L0 = #{items => [~"a", ~"b"]},
+    L1 = #{items => [~"a", ~"c"]},
+    ?assertEqual(Run(each_bare, L0, L1, #{items => true}), Run(each_raw, L0, L1, #{items => true})),
+    ?assertMatch({_, [[?OP_LIST_PATCH | _]]}, Run(each_raw, L0, L1, #{items => true})),
+    KeyFun = fun(#{id := Id}) -> Id end,
+    St0 = arizona_stream:new(KeyFun, [#{id => 1, t => ~"a"}, #{id => 2, t => ~"b"}]),
+    St1 = arizona_stream:update(St0, 2, #{id => 2, t => ~"c"}),
+    ?assertEqual(
+        Run(stream_bare, #{s => St0}, #{s => St1}, #{s => true}),
+        Run(stream_raw, #{s => St0}, #{s => St1}, #{s => true})
+    ),
+    ?assertMatch(
+        {_, [[?OP_ITEM_PATCH | _]]}, Run(stream_raw, #{s => St0}, #{s => St1}, #{s => true})
+    ).
+
+%% A raw around an az-nodiff element keeps the bare element's O(1) skip: re-running
+%% the slot that chose the same element does not evaluate the element again.
+raw_nodiff_skips_like_bare(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            B0 = #{raws => Raws, x => 1, y => ~"a"},
+            {_, S0, V0} = arizona_render:render(M:nodiff_pick(B0), #{}),
+            ok = flush_nodiff_evaluated(),
+            {Ops, _, _} = arizona_diff:diff(M:nodiff_pick(B0#{x => 2}), S0, V0, #{x => true}),
+            ?assertEqual({Raws, []}, {Raws, Ops}),
+            ?assertEqual({Raws, 0}, {Raws, count_nodiff_evaluated(0)})
+        end
+     || Raws <- [0, 1, 2]
+    ].
+
+flush_nodiff_evaluated() ->
+    receive
+        {nodiff_evaluated, _} -> flush_nodiff_evaluated()
+    after 0 -> ok
+    end.
+
+count_nodiff_evaluated(N) ->
+    receive
+        {nodiff_evaluated, _} -> count_nodiff_evaluated(N + 1)
+    after 0 -> N
+    end.
+
+%% A template is not text, so a raw around one in an attribute value is refused at
+%% the slot's line on SSR, the live render and the diff alike -- in a whole or
+%% interpolated attribute value and in a `?json` prop, literal or from a helper.
+literal_raw_template_refused(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, name => ~"<a>"},
+    [
+        begin
+            ok = assert_raw_template_error(M, fun() ->
+                arizona_render:render_to_iolist(M:Fun(B))
+            end),
+            ok = assert_raw_template_error(M, fun() -> arizona_render:render(M:Fun(B), #{}) end),
+            {_, S0, V0} = arizona_render:render(M:Fun(#{wrap => false, name => ~"a"}), #{}),
+            ok = assert_raw_template_error(M, fun() ->
+                arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
+            end)
+        end
+     || Fun <- [
+            literal_raw_attr,
+            helper_raw_attr,
+            interp_raw_attr,
+            helper_raw_attr_json,
+            literal_raw_attr_json
+        ]
+    ].
+
+%% A command in a raw inside a literal `?raw` is refused at the slot's line on the
+%% live render and the diff too, not only on SSR, in content and in an attribute.
+raw_in_raw_effect_located(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true},
+    [
+        begin
+            ?assertError(
+                {arizona_loc, {M, _}, {effect_in_content, _}},
+                arizona_render:render_to_iolist(M:Fun(B))
+            ),
+            ?assertError(
+                {arizona_loc, {M, _}, {effect_in_content, _}},
+                arizona_render:render(M:Fun(B), #{})
+            ),
+            {_, S0, V0} = arizona_render:render(M:Fun(#{wrap => false}), #{}),
+            ?assertError(
+                {arizona_loc, {M, _}, {effect_in_content, _}},
+                arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
+            )
+        end
+     || Fun <- [raw_raw_effect, raw_raw_effect_attr]
+    ].
+
+%% Runs `Fun`, which must raise `{raw_template, Template}` located in module `M`,
+%% formatted with the remedy.
+assert_raw_template_error(M, Fun) ->
+    try Fun() of
+        Result -> ct:fail({expected_raw_template, Result})
+    catch
+        error:Reason:ST ->
+            ?assertMatch({arizona_loc, {M, _}, {raw_template, #{s := _}}}, Reason),
+            Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"in an attribute value")),
+            ?assertNotEqual(nomatch, binary:match(Msg, ~"an attribute value must be text")),
+            ok
+    end.
 
 %% The text/HTML distinction holds below the top level too: inside a plain-list item
 %% patch, a stream item patch and a same-statics branch, the `?get` value stays a bare

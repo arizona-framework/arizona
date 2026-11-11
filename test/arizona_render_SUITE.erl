@@ -118,7 +118,7 @@
     ssr_inner_content_macro_marks_layout_nodiff/1,
     ssr_inner_content_rejects_attribute_value/1,
     ssr_inner_content_rejects_being_measured/1,
-    ssr_inner_content_rejects_raw_wrapper/1,
+    ssr_inner_content_renders_through_raw/1,
     ssr_inner_content_beside_text_in_one_slot/1,
     ssr_inner_content_rejects_runtime_list/1,
     ssr_invalid_chardata_user_value_still_errors/1,
@@ -247,7 +247,7 @@ groups() ->
             ssr_inner_content_macro_marks_layout_nodiff,
             ssr_inner_content_rejects_attribute_value,
             ssr_inner_content_rejects_being_measured,
-            ssr_inner_content_rejects_raw_wrapper,
+            ssr_inner_content_renders_through_raw,
             ssr_inner_content_beside_text_in_one_slot,
             ssr_inner_content_rejects_runtime_list,
             ssr_invalid_chardata_user_value_still_errors,
@@ -663,11 +663,12 @@ raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
         {arizona_raw, ~"x<\\/script>"},
         arizona_html:raw_text(script, <<>>, <<>>, {arizona_raw, ["x", ~"</script>"]})
     ),
-    %% Chardata that will not decode (invalid UTF-8) is handed back untouched rather
-    %% than swallowed here, so to_bin/1 stays the one place that names a bad value.
+    %% Chardata that will not decode (invalid UTF-8) is named by to_bin/1, called
+    %% here so the error is raised inside the slot's located evaluation.
     Undecodable = [<<255>>],
-    ?assertEqual(Undecodable, arizona_html:raw_text(script, <<>>, <<>>, Undecodable)),
-    ?assertError({non_utf8_render, 255, 0}, arizona_template:to_bin(Undecodable)).
+    ?assertError(
+        {non_utf8_render, 255, 0}, arizona_html:raw_text(script, <<>>, <<>>, Undecodable)
+    ).
 
 %% The template's own static text sits right beside a slot, so the `<` that starts
 %% a breakout can be the STATIC's last byte while the value supplies the rest. A
@@ -1569,14 +1570,13 @@ ssr_inner_content_rejects_being_measured(Config) when is_list(Config) ->
     %% Not iodata: `iolist_size/1` (and anything else expecting iodata) raises.
     ?assertError(badarg, layout_html(arizona_inner_content_layouts, measure)).
 
-ssr_inner_content_rejects_raw_wrapper(Config) when is_list(Config) ->
-    %% `?raw(?inner_content)` has nothing to opt out of -- a content slot already
-    %% splices the page unescaped -- and the opaque value cannot be unwrapped, so
-    %% it raises rather than half-working.
-    ?assertError(
-        {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, _}},
-        layout_html(arizona_inner_content_layouts, raw)
-    ).
+ssr_inner_content_renders_through_raw(Config) when is_list(Config) ->
+    %% `?raw(?inner_content)` is redundant -- a content slot already splices the page
+    %% unescaped -- so it renders the page exactly as the bare `?inner_content` does.
+    HTML = layout_html(arizona_inner_content_layouts, raw),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<r><div az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;div")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE&lt;&amp;&gt;")).
 
 ssr_inner_content_beside_text_in_one_slot(Config) when is_list(Config) ->
     %% A content-slot list holding the page compiles as a fragment, so the page

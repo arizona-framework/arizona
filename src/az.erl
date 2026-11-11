@@ -171,15 +171,15 @@ page on to (the page renders as itself, unescaped, in all of them):
 ?html([?stateless(fun body/1, #{content => ?inner_content})])       %% a child's prop
 ```
 
+`?raw(?inner_content)` renders the page too: a content slot already splices it
+unescaped, so the raw is redundant.
+
 Placements that raise, because the value is opaque:
 
 - an **attribute** value -- `bad_template_value`, carrying the whole page in the
   error term (a rendered page inside an attribute has no meaning);
 - **measured or inspected** -- `iolist_size(az:inner_content(Bindings))` raises
   `badarg`, as does anything else expecting iodata;
-- wrapped in `?raw/1` -- `bad_template_value`. There is nothing to opt out of:
-  a content slot already splices the page unescaped, so `?raw(?inner_content)`
-  is redundant. Drop the wrapper;
 - **inside a list the template cannot see** -- a comprehension, or a list
   built at runtime, is one opaque value and raises. A literal content-slot list
   such as `[~"<hr>", ?inner_content]` is fine: it compiles as a fragment, so

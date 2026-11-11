@@ -1112,9 +1112,16 @@ escape_runs(Bin, Acc, _Run) ->
 %% `atom_to_binary`, so an atom carries arbitrary bytes just like a binary),
 %% **chardata**, and a `?raw` opt-out wrapping any of those. An integer and a float
 %% stringify to digits and a sign, so neither can spell a sequence below; both
-%% pass through untouched, as does a map (a nested template renders structurally
-%% through the escaping path, not as bytes). An effect command is refused: it is
-%% not text (`effect_in_content`).
+%% pass through untouched. In `<script>`/`<style>` a template, component or `?local`
+%% in the `?raw` is refused (`markup_in_raw_text`): it has no rendering there, its
+%% markup and slot markers would be read as the element's code. An effect command is
+%% refused too: it is not text (`effect_in_content`).
+%%
+%% `<title>` and `<textarea>` are escapable raw text (RCDATA): character references
+%% decode there, so a value comes escaped (`{arizona_esc, V}`, the transform marks
+%% it) and is HTML-escaped, a `?raw` one is spliced with its end tag written `&lt;`
+%% (which reads back as the same text), and a template with no element renders its
+%% text (`arizona_template:text_markup/2`); one with elements is refused.
 %%
 %% The template's own static text is not checked: it is the author's markup, so
 %% statics that spell a sequence around an EMPTY value (`</scr`, `<<>>`, `ipt>`) are
@@ -1126,6 +1133,12 @@ raw_text(Tag, Before, After, Value) ->
     %% match and no atom is built at render time.
     raw_text_1({raw_text_mode(Tag), Before, After}, Value).
 
+raw_text_1({{rcdata, _Name}, _, _} = Ctx, {arizona_esc, V}) ->
+    %% Escaped, the value holds no `<`, but a static before it may: `x</tit` then
+    %% `le x` would close the element.
+    arizona_template:raw(neutralize(Ctx, escape(arizona_template:to_bin(V))));
+raw_text_1({{rcdata, _Name}, _, _} = Ctx, V) when is_map(V) ->
+    arizona_template:raw(raw_text_markup(Ctx, V));
 raw_text_1(Ctx, Value) when is_binary(Value) ->
     neutralize(Ctx, Value);
 raw_text_1(Ctx, Value) when is_atom(Value) ->
@@ -1141,10 +1154,22 @@ raw_text_1(Ctx, Value) ->
     %% still spell a breakout. Unwrap it, neutralize the payload, and re-wrap, so the
     %% documented opt-out is not a hole around this check.
     case arizona_template:classify_trusted(Value) of
+        {raw, Raw} when is_map(Raw) -> arizona_template:raw(raw_text_markup(Ctx, Raw));
         {raw, Raw} -> arizona_template:raw(raw_text_1(Ctx, Raw));
         {effect, Cmd} -> arizona_template:effect_in_content(Cmd);
         value -> raw_text_chardata(Ctx, Value)
     end.
+
+%% A template in raw text: its text in title/textarea, refused in script/style.
+raw_text_markup({{rcdata, Name}, _, _} = Ctx, Tmpl) ->
+    case arizona_template:text_markup(?MODULE, Tmpl) of
+        {ok, Bin} -> neutralize(Ctx, Bin);
+        markup -> arizona_template:markup_in_raw_text(Name, Tmpl)
+    end;
+raw_text_markup({script, _, _}, Tmpl) ->
+    arizona_template:markup_in_raw_text(~"script", Tmpl);
+raw_text_markup({{rawtext, Name}, _, _}, Tmpl) ->
+    arizona_template:markup_in_raw_text(Name, Tmpl).
 
 %% How the tokenizer reads this element's content. `<script>` is read in the
 %% **script data** states; every other raw-text element (`<style>`, `<xmp>`,
@@ -1155,30 +1180,34 @@ raw_text_mode(Tag) when is_atom(Tag) ->
     raw_text_mode(atom_to_binary(Tag));
 raw_text_mode(Tag) ->
     case string:equal(Tag, ~"script", true) of
-        true -> script;
-        false -> {rawtext, rawtext_name(Tag, rawtext_names())}
+        true ->
+            script;
+        false ->
+            case rawtext_name(Tag, rawtext_names()) of
+                nomatch -> {rcdata, rawtext_name(Tag, [~"title", ~"textarea"])};
+                Name -> {rawtext, Name}
+            end
     end.
 
-%% The canonical lowercase name, found by a comparison that allocates nothing. Only
-%% a tag raw_text_kind/2 classified `raw` reaches here, so the list always holds it.
+%% The canonical lowercase name, found by a comparison that allocates nothing. Only a
+%% tag raw_text_kind/2 classified raw text reaches here, so one of the lists holds it.
 rawtext_name(Tag, [Name | Names]) ->
     case string:equal(Tag, Name, true) of
         true -> Name;
         false -> rawtext_name(Tag, Names)
-    end.
+    end;
+rawtext_name(_Tag, []) ->
+    nomatch.
 
 %% The documented remedy is `?raw(json:encode(Data))`, and `json:encode/1` returns
 %% **iodata** -- so matching only binaries above would wave a breakout through on the
 %% exact form this module's own error message recommends. Flatten chardata (a
 %% charlist and a nested iolist alike) and neutralize the result, which is what the
-%% render boundary would have produced anyway (`to_bin/1` flattens with the same
-%% call). A list that is not chardata is returned untouched, leaving `to_bin/1` the
-%% single place that names a bad template value.
+%% render boundary would have produced anyway. `to_bin/1` converts it, so a list
+%% that is not chardata is named there (`bad_template_value`, `non_utf8_render`),
+%% inside the slot's located evaluation.
 raw_text_chardata(Ctx, Value) when is_list(Value) ->
-    case unicode:characters_to_binary(Value) of
-        Bin when is_binary(Bin) -> neutralize(Ctx, Bin);
-        _NotChardata -> Value
-    end;
+    neutralize(Ctx, arizona_template:to_bin(Value));
 raw_text_chardata(_Ctx, Value) ->
     Value.
 
@@ -1236,12 +1265,21 @@ lead_break(_Mode, <<>>, _Bin, _After) ->
 %% otherwise have closed it. Every byte that can complete a sequence is ASCII.
 escape_byte(script, C) ->
     <<"\\u00", (binary:encode_hex(<<C>>, lowercase))/binary>>;
+escape_byte({rcdata, _Name}, C) ->
+    <<"&#", (integer_to_binary(C))/binary, ";">>;
 escape_byte({rawtext, ~"style"}, C) ->
     <<"\\", (binary:encode_hex(<<C>>, lowercase))/binary, " ">>;
 escape_byte({rawtext, _Name}, C) ->
     <<"\\", C>>.
 
 %% What a `<` inside the value becomes, given the text right after it.
+raw_text_breakout({rcdata, _Name} = Mode, R) ->
+    %% Character references decode in title/textarea, so the `<` itself is written
+    %% as one: the text reads the same and no longer closes the element.
+    case breakout(Mode, R) of
+        nomatch -> ~"<";
+        {close, _Span} -> ~"&lt;"
+    end;
 raw_text_breakout(Mode, R) ->
     case breakout(Mode, R) of
         nomatch -> ~"<";
@@ -1309,13 +1347,15 @@ breakout(script, R) ->
         nomatch -> nomatch;
         Len -> {escape, Len}
     end;
-%% A bare `<` ending the text: in RAWTEXT only an end tag follows it.
-breakout({rawtext, _Name}, <<>>) ->
+%% A bare `<` ending the text: in RAWTEXT and RCDATA only an end tag follows it.
+breakout({_RawOrRcdata, _Name}, <<>>) ->
     {close, 0};
-breakout({rawtext, _Name}, _R) ->
+breakout({_RawOrRcdata, _Name}, _R) ->
     nomatch.
 
 %% Which end tags close this element, as end_tag_name/2's bytes-taken or `nomatch`.
+end_tag_name({rcdata, Name}, R) ->
+    tag_name(R, Name);
 end_tag_name({rawtext, Name}, R) when Name =/= ~"style" ->
     tag_name(R, Name);
 end_tag_name(_ScriptOrStyle, R) ->
@@ -1356,7 +1396,7 @@ render_attr(Name, true) ->
 render_attr(Name, Value) ->
     case arizona_template:classify_trusted(Value) of
         {raw, V} ->
-            attr_unescaped(Name, arizona_template:to_bin(V));
+            attr_unescaped(Name, arizona_template:raw_to_bin(V));
         {effect, Cmd} ->
             %% A live render already observed this name where it evaluated the
             %% value (arizona_eval). The request-free SSR walk evaluates inline
