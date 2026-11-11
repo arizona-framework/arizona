@@ -24,6 +24,8 @@
 -export([attr_refuses_an_improper_list_value/1]).
 -export([set_attr_refuses_a_value_with_no_command/1]).
 -export([toggle_attr_refuses_a_value_with_no_command/1]).
+-export([set_attr_writes_no_command_as_an_empty_list/1]).
+-export([toggle_attr_toggles_between_a_command_and_none/1]).
 -export([attr_refuses_a_name_that_is_not_a_binary/1]).
 -export([attr_refuses_a_selector_that_is_not_a_binary/1]).
 
@@ -56,6 +58,8 @@ groups() ->
             attr_refuses_an_improper_list_value,
             set_attr_refuses_a_value_with_no_command,
             toggle_attr_refuses_a_value_with_no_command,
+            set_attr_writes_no_command_as_an_empty_list,
+            toggle_attr_toggles_between_a_command_and_none,
             attr_refuses_a_name_that_is_not_a_binary,
             attr_refuses_a_selector_that_is_not_a_binary
         ]}
@@ -289,20 +293,50 @@ attr_refuses_an_improper_list_value(Config) when is_list(Config) ->
     ].
 
 %% An empty charlist is `[]`, which flattens to no command. Under a plain name
-%% it is no command misplaced but no value; under an az-* name it would write a
-%% command list that runs nothing and proves the name for nothing.
+%% that is no command misplaced but no value at all.
 set_attr_refuses_a_value_with_no_command(Config) when is_list(Config) ->
     [
-        assert_no_command_error(fun() -> arizona_js:set_attr(~"#x", Attr, Value) end)
-     || Attr <- [~"class", ~"az-click"], Value <- ["", [[]], [[], [[]]]]
+        assert_no_command_error(fun() -> arizona_js:set_attr(~"#x", ~"class", Value) end)
+     || Value <- ["", [[]], [[], [[]]]]
     ].
 
 toggle_attr_refuses_a_value_with_no_command(Config) when is_list(Config) ->
     Cmd = arizona_js:push_event(~"a"),
     [
-        assert_no_command_error(fun() -> arizona_js:toggle_attr(~"#x", Attr, A, B) end)
-     || Attr <- [~"class", ~"az-click"], {A, B} <- [{"", ""}, {[], Cmd}, {Cmd, [[]]}]
+        assert_no_command_error(fun() -> arizona_js:toggle_attr(~"#x", ~"class", A, B) end)
+     || {A, B} <- [{"", ""}, {[], Cmd}, {Cmd, [[]]}]
     ].
+
+%% Under an az-* name no command clears the handler: it is written as the empty
+%% list, which runs nothing (and so the client proves no name from it).
+set_attr_writes_no_command_as_an_empty_list(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            [?EFFECT_SET_ATTR, ~"#x", ~"az-click", []],
+            arizona_effect:json_value(arizona_js:set_attr(~"#x", ~"az-click", Value))
+        )
+     || Value <- ["", [[]], [[], [[]]]]
+    ],
+    ?assertEqual(
+        ~"[7,\"#x\",\"az-click\",[]]",
+        arizona_effect:encode_json(arizona_js:set_attr(~"#x", ~"az-click", []))
+    ).
+
+%% Toggling between a command and none turns a handler on and off.
+toggle_attr_toggles_between_a_command_and_none(Config) when is_list(Config) ->
+    Cmd = arizona_js:push_event(~"a"),
+    ?assertEqual(
+        [?EFFECT_TOGGLE_ATTR, ~"#x", ~"az-click", [?EFFECT_PUSH_EVENT, ~"a"], []],
+        arizona_effect:json_value(arizona_js:toggle_attr(~"#x", ~"az-click", Cmd, [[]]))
+    ),
+    ?assertEqual(
+        [?EFFECT_TOGGLE_ATTR, ~"#x", ~"az-click", [], [?EFFECT_PUSH_EVENT, ~"a"]],
+        arizona_effect:json_value(arizona_js:toggle_attr(~"#x", ~"az-click", "", Cmd))
+    ),
+    ?assertEqual(
+        [?EFFECT_TOGGLE_ATTR, ~"#x", ~"az-click", [], []],
+        arizona_effect:json_value(arizona_js:toggle_attr(~"#x", ~"az-click", [], []))
+    ).
 
 %% The name is what the client writes and, under az-*, proves, so an atom or a
 %% charlist is refused whatever the value, binary values included.
@@ -369,7 +403,9 @@ top_frame(Fun) ->
 
 assert_no_command_error(Fun) ->
     assert_value_error(Fun),
-    ?assertNotEqual(nomatch, string:find(formatted_error(Fun), ~"holds no command")).
+    Message = formatted_error(Fun),
+    ?assertNotEqual(nomatch, string:find(Message, ~"an empty string is <<>>")),
+    ?assertEqual(nomatch, string:find(Message, ~"proves no name")).
 
 assert_target_error(Name, Expected, Fun) ->
     ?assertNotEqual(nomatch, string:find(formatted_error(Fun), Expected)),

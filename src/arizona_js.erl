@@ -222,13 +222,13 @@ toggle_class(Sel, Cls) -> {arizona_effect, [?EFFECT_TOGGLE_CLASS, Sel, Cls]}.
 Sets an attribute on all elements matching the selector.
 
 Under an `az-*` name the value may be a command (or a command list, flattened
-like any other, holding at least one: a list of none, such as `[]` or an empty
-charlist, runs nothing and is refused): it is written as the array an event
-attribute holds, and that is what proves the name to the client, so
-`set_attr(~"#x", ~"az-select", arizona_js:push_event(~"pick"))` makes `select`
-run there. A binary under an `az-*` name is data, as in a template, and proves
-nothing: on a page that does not otherwise use the name,
-`set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing.
+like any other): it is written as the array an event attribute holds, and that is
+what proves the name to the client, so `set_attr(~"#x", ~"az-select",
+arizona_js:push_event(~"pick"))` makes `select` run there. A list holding no
+command (`[]`) clears the handler: it is written as `[]`, which runs nothing and
+proves nothing; under any other name it is no value. A binary under an `az-*`
+name is data, as in a template, and proves nothing: on a page that does not
+otherwise use the name, `set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing.
 """.
 -spec set_attr(Selector, Attr, Value) -> arizona_effect:cmd() when
     Selector :: binary(),
@@ -241,7 +241,7 @@ set_attr(Sel, Attr, Val) when not is_binary(Sel); not is_binary(Attr) ->
 set_attr(Sel, Attr, Val) when is_binary(Val) ->
     {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]};
 set_attr(Sel, Attr, Val) ->
-    case {value_kind(Val), Attr} of
+    case {value_kind(Val, Attr), Attr} of
         {command, <<"az-", _/binary>>} ->
             {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Val)]};
         {command, _} ->
@@ -291,10 +291,12 @@ other current value resolves to `ValueA`). Useful for one-button toggles like a
 password field's `type` between `password` and `text`.
 
 Under an `az-*` name both values may be commands, as in `set_attr/3`, which
-proves the name; binaries there are data and prove nothing, and so does the
-presence toggle of `toggle_attr/2`. Commands match the current value by what
-they run, not by their text: a command and a list of just it (`Cmd`, `[Cmd]`,
-`[Cmd, []]`) are the same value.
+proves the name when the toggle writes one. `[]` is no command, so
+`toggle_attr(Sel, ~"az-click", Cmd, [])` turns a handler on and off. Binaries
+there are data and prove nothing, and so does the presence toggle of
+`toggle_attr/2`. Commands match the current value by what they run, not by their
+text: a command and a list of just it (`Cmd`, `[Cmd]`, `[Cmd, []]`) are the same
+value.
 """.
 -spec toggle_attr(Selector, Attr, ValueA, ValueB) -> arizona_effect:cmd() when
     Selector :: binary(),
@@ -309,7 +311,7 @@ toggle_attr(Sel, Attr, A, B) when is_binary(A), is_binary(B) ->
     {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr, A, B]};
 toggle_attr(Sel, Attr, A, B) ->
     Reason =
-        case {value_kind(A), value_kind(B), Attr} of
+        case {value_kind(A, Attr), value_kind(B, Attr), Attr} of
             {command, command, <<"az-", _/binary>>} ->
                 ok;
             {command, command, _} ->
@@ -696,7 +698,7 @@ format_error({command_needs_az_attr, Fun, Attr}, _Stacktrace) ->
 format_error({not_a_value, Fun, Attr, Value}, _Stacktrace) ->
     Hint =
         case cmds_kind(Value) of
-            empty -> ": a list that holds no command runs nothing and proves no name";
+            empty -> ": an empty list or charlist is no attribute value (an empty string is <<>>)";
             _ -> ""
         end,
     #{
@@ -733,16 +735,18 @@ target_error(Fun, _Sel, Attr) -> {not_a_name, Fun, Attr}.
 
 %% A command is a command or a command list as arizona_effect flattens it: lists
 %% nested to any depth whose leaves are commands, `[]` none. A list flattening to
-%% no command (`[]`, `[[]]`, an empty charlist) is none: it would run nothing and,
-%% under an az-* name, prove the name for nothing. Anything else that is not a
-%% binary (a charlist, an atom) is no value an attribute can take either.
--spec value_kind(Value) -> binary | command | other when
-    Value :: term().
-value_kind(Value) when is_binary(Value) -> binary;
-value_kind(Value) ->
-    case cmds_kind(Value) of
-        command -> command;
-        _ -> other
+%% no command (`[]`, `[[]]`, an empty charlist) is a command list under an az-*
+%% name, where it clears the handler, and no value anywhere else. Anything else
+%% that is not a binary (a charlist, an atom) is no value an attribute can take.
+-spec value_kind(Value, Attr) -> binary | command | other when
+    Value :: term(),
+    Attr :: binary().
+value_kind(Value, _Attr) when is_binary(Value) -> binary;
+value_kind(Value, Attr) ->
+    case {cmds_kind(Value), Attr} of
+        {command, _} -> command;
+        {empty, <<"az-", _/binary>>} -> command;
+        {_, _} -> other
     end.
 
 %% Walked by hand, not with lists:all/2: an improper list would crash there,

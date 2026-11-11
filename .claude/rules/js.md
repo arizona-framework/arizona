@@ -251,9 +251,10 @@ imply nothing.
   (`arizona_js:set_attr(Sel, ~"az-toggle", Cmd)`) uses a name no template contains. The server
   ships the command as a JSON array, and the effect records the name before writing it: the
   command that wrote it was itself proven (it ran under a proven name, or a handler returned it).
-  It is the only attribute write that proves a name, and only with an array value: a binary under
-  an `az-*` name (`set_attr(Sel, ~"az-select", ~"[1,2,3]")`) and a `toggle_attr/2` presence toggle
-  are data and record nothing (`noteAzAttr(name, false)` still reads `az-prevent-default`, which
+  It is the only attribute write that proves a name, and only with a non-empty array value (a
+  `toggle_attr/4` proving it per match, when it writes that value): a binary under an `az-*` name
+  (`set_attr(Sel, ~"az-select", ~"[1,2,3]")`), `[]` (no command, clearing a handler) and a
+  `toggle_attr/2` presence toggle record nothing (`noteAzAttr(name, false)` still reads `az-prevent-default`, which
   runs nothing). `applySetAttrOp` itself records nothing, so the diff path (`OP_SET_ATTR`, an
   `OP_ITEM_PATCH` inner op) and a `?local` attribute slot, which carry app data, never do.
 - **`?raw` markup and host-inserted DOM** declare nothing the compiler saw. Call the exported

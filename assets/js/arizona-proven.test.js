@@ -251,6 +251,50 @@ describe('an unproven az-* value is data on a live page', () => {
         ]);
     });
 
+    // `set_attr(Sel, ~"az-x", [])` clears the handler: an empty command list runs
+    // nothing, so it proves the name for nothing.
+    it('writes an empty set_attr command list without proving its name', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><input id="i">` + `<input id="d" az-select='[0,"evil"]'></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        mod.applyEffects([[7, '#i', 'az-select', []]]);
+        expect(document.getElementById('i')?.getAttribute('az-select')).toBe('[]');
+        document.getElementById('i')?.dispatchEvent(new Event('select', { bubbles: true }));
+        document.getElementById('d')?.dispatchEvent(new Event('select', { bubbles: true }));
+        expect(w.sent()).toEqual([]);
+    });
+
+    // A toggle between a command and none turns a handler on and off. Only the
+    // write of the command proves the name.
+    it('toggles between a command and none, proving the name only on the command', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><input id="i">` + `<input id="d" az-select='[0,"evil"]'></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        const el = document.getElementById('i');
+        const toggle = () => mod.applyEffects([[21, '#i', 'az-select', [], [0, 'a']]]);
+        const select = (/** @type {string} */ id) =>
+            document.getElementById(id)?.dispatchEvent(new Event('select', { bubbles: true }));
+        toggle();
+        expect(el?.getAttribute('az-select')).toBe('[]');
+        select('d');
+        expect(w.sent()).toEqual([]);
+        toggle();
+        expect(el?.getAttribute('az-select')).toBe('[0,"a"]');
+        select('i');
+        toggle();
+        expect(el?.getAttribute('az-select')).toBe('[]');
+        select('i');
+        toggle();
+        expect(el?.getAttribute('az-select')).toBe('[0,"a"]');
+        expect(w.sent()).toEqual([['v', 'a', { value: '' }]]);
+    });
+
     // Element ids can come from user input, and an earlier element with the
     // embed's id would win `getElementById`. Escaped content cannot create a
     // script element, and the server's embed comes after the page.
