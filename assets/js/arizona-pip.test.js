@@ -1073,5 +1073,61 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             expect(w1.closed).toBe(true);
             expect(document.querySelector('#other > #C')?.textContent).toBe('new');
         });
+
+        it('settles windows whose pagehide comes after close returns', async () => {
+            // A real window hides later: the windows a navigate closed are gone at
+            // once, and their pagehide, in either order, only discards their own.
+            const destroyed = vi.fn();
+            hooks.H = {
+                destroyed() {
+                    destroyed(this.el.ownerDocument === document ? 'page' : 'window');
+                },
+            };
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0">' +
+                '<div id="P" az-view az="P-0"><div id="C" az-view az="C-0" az-hook="H">c</div></div></div>';
+            mountHooks(document);
+            const w1 = makePipWindow();
+            const w2 = makePipWindow();
+            for (const w of [w1, w2]) {
+                w.close = function () {
+                    this.closed = true;
+                };
+            }
+            stubPip(w1);
+            await requestPip('C');
+            stubPip(w2);
+            await requestPip('P');
+
+            applyOps([
+                [
+                    OP.REPLACE,
+                    'root',
+                    '<div id="other" az-view az="O-0"><div id="C" az-view az="C-0">new</div></div>',
+                ],
+            ]);
+            applyOps([[OP.SET_ATTR, 'other', 'class', 'x']]);
+
+            expect([w1.closed, w2.closed]).toEqual([true, true]);
+            expect(document.querySelector('#other > #C')?.textContent).toBe('new');
+            // Nothing of the closed windows is left registered: the new page's C
+            // pops out, and the old windows hiding later leave its window alone.
+            const again = makePipWindow();
+            stubPip(again);
+            expect(await requestPip('C')).toBe(again);
+            // C's placeholder still sits in P's stale copy, in w2: C's own
+            // pagehide discards it rather than putting it back there.
+            w1.fire('pagehide');
+            expect(destroyed.mock.calls).toEqual([['window']]);
+            expect(w2.document.getElementById('C')).toBeNull();
+            w2.fire('pagehide');
+            expect(destroyed.mock.calls).toEqual([['window']]);
+            expect(w2.document.getElementById('C')).toBeNull();
+            expect(resolveEl('C')?.ownerDocument).toBe(again.document);
+            expect(again.document.getElementById('C')?.textContent).toBe('new');
+            again.fire('pagehide');
+            expect(document.querySelector('#other > #C')?.textContent).toBe('new');
+            delete hooks.H;
+        });
     });
 });

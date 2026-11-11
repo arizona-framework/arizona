@@ -168,12 +168,33 @@ export function reconcilePipWindows(navigated) {
             doc.body.append(fresh);
             continue;
         }
-        try {
-            entry.win.close();
-        } catch {
-            /* window already gone */
-        }
+        closeStale(entry);
     }
+}
+
+/**
+ * Close a stale window and forget it now: its pagehide may come after `close()`
+ * returns, and until then a later batch must neither hand it a view nor count
+ * it as a home for the placeholders in it.
+ * @param {PipEntry} entry
+ */
+function closeStale(entry) {
+    forget(entry);
+    try {
+        entry.win.close();
+    } catch {
+        /* window already gone */
+    }
+}
+
+/**
+ * Unregister `entry`, unless a newer window took its id since.
+ * @param {PipEntry} entry
+ */
+function forget(entry) {
+    if (_pipWindows.get(entry.id) !== entry) return;
+    _pipWindows.delete(entry.id);
+    _viewDocs.delete(entry.id);
 }
 
 /**
@@ -289,18 +310,17 @@ export async function requestPip(viewId, opts = {}) {
         'pagehide',
         () => {
             controller.abort();
-            _viewDocs.delete(entry.id);
-            _pipWindows.delete(entry.id);
+            forget(entry);
             _eventDocs.delete(pip.document);
             _passiveBound.delete(pip.document);
             // The views the window holds now, not the element moved out: a replace
             // there swaps it for a fresh one, under a new id when it navigates a
             // popped-out root to another page.
             const current = viewsIn(pip.document);
-            // isConnected, not parentNode: a replaced (navigate) outgoing
-            // subtree is detached wholesale, so the placeholder still HAS a
-            // parent -- inside a dead tree.
-            if (entry.placeholder.isConnected) {
+            // Not just isConnected: a replaced (navigate) outgoing subtree is
+            // detached wholesale, and a placeholder can sit in another window's
+            // stale copy, still connected there (see `homeChain`).
+            if (!isStale(entry)) {
                 entry.placeholder.replaceWith(...current);
             } else {
                 // The view's inline home was destroyed while it was popped out
