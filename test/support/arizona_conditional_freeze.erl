@@ -392,14 +392,15 @@ wrap_raw(Value) ->
     arizona_template:raw(Value).
 
 %% A content slot whose value becomes a `?local` arriving at runtime (`kind` switches
-%% it from text to a local, or to a local with a `raw/1` init).
+%% it from text to a local, to a local with a `raw/1` init, or a template init).
 -spec runtime_local_content(az:bindings()) -> az:template().
 runtime_local_content(Bindings) ->
     ?html({'div', [{id, ~"x"}], [local_or_text(?get(kind), ?get(v))]}).
 
 local_or_text(text, V) -> V;
 local_or_text(local, V) -> arizona_template:local(k, V);
-local_or_text(raw_local, V) -> arizona_template:local(k, arizona_template:raw(V)).
+local_or_text(raw_local, V) -> arizona_template:local(k, arizona_template:raw(V));
+local_or_text(template_local, V) -> arizona_template:local(k, ?html({b, [], [V]})).
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

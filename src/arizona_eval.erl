@@ -712,6 +712,10 @@ eval_val(#{s := Statics, d := Dynamics} = Tmpl) ->
 eval_val(#{az_local := _, target := {attr, Name}, v := V} = Local) ->
     ok = observe_command(Name, V),
     Local;
+eval_val(#{az_local := _, v := V} = Local) when is_map(V) ->
+    %% A template init renders as the template where the local is a value
+    %% (arizona_template:mark_esc/1), so it is evaluated like one.
+    Local#{v := eval_val(V)};
 eval_val(#{az_local := _, v := V} = Local) ->
     ok = refuse_effect(V),
     Local;
@@ -862,6 +866,9 @@ eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
 eval_val_v(#{az_local := _, target := {attr, Name}, v := V} = Local, Views) ->
     ok = observe_command(Name, V),
     {Local, Views};
+eval_val_v(#{az_local := _, v := V} = Local, Views0) when is_map(V) ->
+    {Val, Views1} = eval_val_v(V, Views0),
+    {Local#{v := Val}, Views1};
 eval_val_v(#{az_local := _, v := V} = Local, Views) ->
     ok = refuse_effect(V),
     {Local, Views};

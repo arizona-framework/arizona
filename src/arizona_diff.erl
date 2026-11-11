@@ -2177,10 +2177,6 @@ make_op(Az, remove, _Old) ->
 %% unsupported (see `arizona_template:raw/1`).
 make_op(Az, {arizona_raw, V}, _Old) ->
     [?OP_TEXT, Az, #{~"raw" => arizona_template:to_bin(V)}];
-%% A content `?local` arriving at runtime renders its init, as SSR and the live
-%% render show it: a text node, or the raw-tagged markup of a `raw/1` init.
-make_op(Az, #{az_local := _, v := V}, Old) ->
-    make_op(Az, V, Old);
 make_op(Az, New, _Old) ->
     [?OP_TEXT, Az, arizona_template:to_bin(New)].
 
