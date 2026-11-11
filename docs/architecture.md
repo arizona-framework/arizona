@@ -294,27 +294,31 @@ each, which then holds an unmarked option, is marked whole. The chooser keeps it
 its compiled children hold such a mark or a `choices/3` call (an `?each` item compiled before it).
 
 The SSR render (`render_ssr_val/2`) evaluates `Picks`, renders the child in place, and returns it
-tagged `{arizona_choices, Picked, Rendered}`; `scope_slot/2` scopes through the tag, and
-`render_dyn/2` hands only that child's output to the backend's optional
-`c:arizona_renderer:mark_choices/2`. For HTML, that pass tokenizes the fragment as the parser
-would: start tags with their attributes (values never read as markup), comments, bogus comments,
-the content of raw-text elements (`raw_text_kind/2`) and of `<template>`, CDATA in foreign content
-(`content_context/2`, where an `option` is not an HTML option either), and stops at what closes
-the select (`</select>`, a `select`/`input`/`keygen`/`textarea` start tag). An option's value is
-its `value` attribute, else its text as its `text` property reads it, with character references
-decoded the way the tokenizer decodes them (`arizona_html_entities`, the standard's whole named
-table, legacy names and the attribute-value exception included), and it is marked when `Picked`
-accepts it (a `selected` the markup carries is cut from an option `Picked` rejects, as the client
-clears it). A page without such a chooser renders exactly as before, and one with it pays for that
-child's bytes only. A live render and every diff see the child as written (`arizona_eval` and
-`peek_nodiff` unwrap it; an `?each` inside still diffs item by item), and `Picks` is never called
-there. In the live client the select's `value` is applied to its options' `selected` attributes
-(and, on a change, their selection): when the page starts, when an op writes it, and after any
-batch that rendered or changed an option (`applyChooser`, `arizona-attrs.js`). Options the
-transform reached keep their own `selected` diffs beside it; both compute the same choice. A
-backend without the callbacks keeps `value` as an ordinary attribute, which is what `?json` wants.
-Options sharing a value are all marked, by every path, so the browser selects the last of them,
-as the parser selects the last `selected` option (the `.value` setter would pick the first).
+tagged `{arizona_choices, Picks, Rendered}` (`Picks` the texts `arizona_template:picks/2` gives);
+`scope_slot/2` scopes through the tag, and `render_dyn/2` hands only that child's output to the
+backend's optional `c:arizona_renderer:mark_choices/2`. For HTML, that pass tokenizes the fragment
+as the parser would: start tags with their attributes (values never read as markup), comments, bogus
+comments, the content of raw-text elements (`raw_text_kind/2`) and of `<template>`, CDATA in foreign
+content (`content_context/2`, where an `option` is not an HTML option either), and stops at what
+closes the select (`</select>`, a `select`/`input`/`keygen`/`textarea` start tag). Raw text follows
+the in-body rules: classic in-select parsing ignores those start tags (it switches only for `script`
+and `template`), so an option inside one there is real and is left for the client; an option whose
+text runs past the fragment is valued by the part inside it. An option's value is its `value`
+attribute, else its text as its `text` property reads it, with the input preprocessed (CR LF and CR
+to LF, NUL to U+FFFD, picks alike) and character references decoded the way the tokenizer decodes
+them (`arizona_html_entities`, the standard's whole named table, legacy names and the
+attribute-value exception included), and it is marked when it is one of `Picks` (a `selected` the
+markup carries is cut from any other option, as the client clears it). A page without such a chooser
+renders exactly as before, and one with it pays for that child's bytes only. A live render and every
+diff see the child as written (`arizona_eval` and `peek_nodiff` unwrap it; an `?each` inside still
+diffs item by item), and `Picks` is never called there. In the live client the select's `value` is
+applied to its options' `selected` attributes (and, on a change, their selection): when the page
+starts, when an op writes it, and after any batch that rendered or changed an option
+(`applyChooser`, `arizona-attrs.js`). Options the transform reached keep their own `selected` diffs
+beside it; both compute the same choice. A backend without the callbacks keeps `value` as an
+ordinary attribute, which is what `?json` wants. Options sharing a value are all marked, by every
+path, so the browser selects the last of them, as the parser selects the last `selected` option (the
+`.value` setter would pick the first).
 
 ## API -- `arizona_diff.erl`
 

@@ -244,20 +244,21 @@ the transform also looks for in compiled markup to refuse a choice it cannot mar
     | {choice, #{value := binary(), selected := binary()}}.
 
 -doc """
-Marks picked the choices in `Fragment` whose value `Picked` accepts. `Fragment` is what
+Marks picked the choices in `Fragment` whose value is one of `Picks`, the texts the
+chooser's value picks (`arizona_template:picks/2`), compared as the backend's own
+parser would read both. `Fragment` is what
 one child of a chooser with a value rendered when the parse transform could not see the
 choices in it (a component, a remote helper, a runtime value, raw markup): the
 transform wraps such a child (`arizona_template:choices/3`), and the SSR render
 (a page served over HTTP, static generation) renders it in place and hands this
 callback only its own output, so the page loads on the right choice before any script
 runs; a live client applies the chooser's value after. For HTML: `selected` on every
-`<option>` in the fragment whose value (its `value`, else its text) `Picked` accepts,
-read as the parser reads it.
+`<option>` in the fragment whose value (its `value`, else its text) is a pick, read as
+the parser reads it (newlines and NUL preprocessed, references decoded).
 
 Optional, and required of a backend that implements `selection_role/1`.
 """.
--callback mark_choices(Fragment :: iodata(), Picked :: fun((binary()) -> boolean())) ->
-    iodata().
+-callback mark_choices(Fragment :: iodata(), Picks :: [binary()]) -> iodata().
 
 -doc """
 The text static markup of this backend shows, read at compile time: a choice valued by

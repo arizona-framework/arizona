@@ -405,12 +405,13 @@ static_text(Markup) ->
         _Tag -> error
     end.
 
--spec mark_choices(iodata(), fun((binary()) -> boolean())) -> iodata().
+-spec mark_choices(iodata(), [binary()]) -> iodata().
 %% `Fragment` is what a child the parse transform could not see into rendered under a
 %% `<select>` with a value (a component, a runtime value, raw markup). Mark `selected`
-%% every `<option>` in it whose value `Picked` accepts, so the page loads on it: its
+%% every `<option>` in it whose value is one of `Picks`, so the page loads on it: its
 %% `value` attribute, else its text with whitespace stripped and collapsed, both read
-%% as the parser reads them (character references decoded, the full named set).
+%% as the parser reads them (newlines and NUL preprocessed, character references
+%% decoded from the full named set), the picks preprocessed as attribute text too.
 %%
 %% The fragment is tokenized the way the parser would, so markup that only looks like
 %% an option is left alone: attribute values, comments, bogus comments, the content of
@@ -420,8 +421,18 @@ static_text(Markup) ->
 %% tag) ends the walk: an option after it is not this select's. A `selected` the
 %% markup already carries is the value's to decide, as the client decides it: kept on
 %% an option the value picks, cut from any other.
-mark_choices(Fragment, Picked) ->
+%%
+%% Raw text is told by the in-body rules (raw_text_kind/2). The classic in-select
+%% parsing switches tokenization only for `script` and `template` and ignores the other
+%% raw-text, `svg` and `math` start tags, so an option written inside one of those
+%% there is a real one this walk leaves unmarked; the client marks it once it applies
+%% the value. An option whose text runs on past the fragment (into the template's
+%% static markup after the slot) is valued by the part inside it.
+mark_choices(Fragment, Picks) ->
     Bin = iolist_to_binary(Fragment),
+    %% The picks render as the select's attribute, so they read as one would.
+    Texts = [preprocess(P) || P <- Picks],
+    Picked = fun(Text) -> lists:member(Text, Texts) end,
     case choices(Bin, 0, {undefined, []}, Picked, []) of
         [] -> Fragment;
         Marks -> splice_selected(Bin, lists:keysort(1, Marks), 0, [])
@@ -564,8 +575,11 @@ ends_name(_End) -> true.
 mark_option(Bin, Attrs, Close, Picked, Marks) ->
     Value =
         case lists:keyfind(~"value", 1, Attrs) of
-            {_, V} -> V;
-            false -> collapse_ws(option_text(Bin, Close + 1, []))
+            {_, V} ->
+                V;
+            %% The tree builder drops a NUL in text; collapsing folds CR away.
+            false ->
+                collapse_ws(binary:replace(option_text(Bin, Close + 1, []), <<0>>, <<>>, [global]))
         end,
     case {lists:keymember(~"selected", 1, Attrs), Picked(Value)} of
         {false, true} -> [{Close, insert} | Marks];
@@ -625,6 +639,9 @@ ends_option('end', Name) ->
 %% written, or decoded for escapable raw text), and any other tag adds nothing.
 option_child(Bin, ~"script", From, Acc) ->
     option_text(Bin, past_end_tag(Bin, ~"script", From), Acc);
+option_child(Bin, ~"template", From, Acc) ->
+    %% Inert content, no text node of the option.
+    option_text(Bin, past_template(Bin, From, 1), Acc);
 option_child(Bin, Name, From, Acc) ->
     case raw_text_kind_name(Name, undefined) of
         none ->
@@ -760,7 +777,20 @@ add_attr(_Name, _Value, _Span, Acc) ->
 first_attr(Name, Value, Acc) ->
     case lists:keymember(Name, 1, Acc) of
         true -> Acc;
-        false -> [{Name, decode_refs(Value, attribute)} | Acc]
+        false -> [{Name, decode_refs(preprocess(Value), attribute)} | Acc]
+    end.
+
+%% What the parser does to an attribute value before it decodes it: newlines
+%% normalized (CR LF and CR to LF), NUL replaced with U+FFFD.
+preprocess(Text) ->
+    case binary:match(Text, [~"\r", <<0>>]) of
+        nomatch ->
+            Text;
+        _Some ->
+            Lf = binary:replace(binary:replace(Text, ~"\r\n", ~"\n", [global]), ~"\r", ~"\n", [
+                global
+            ]),
+            binary:replace(Lf, <<0>>, <<16#FFFD/utf8>>, [global])
     end.
 
 attr_value(Bin, Pos) ->

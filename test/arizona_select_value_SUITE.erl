@@ -40,6 +40,7 @@ and the select keeps its value for the client to apply after.
     opaque_diff_ships_the_value/1,
     mark_choices_reads_the_fragment/1,
     authored_selected_follows_the_value/1,
+    fragment_reads_as_the_parser_preprocesses/1,
     opaque_child_compiles/1,
     opaque_child_is_marked_in_its_own_slot/1,
     opaque_each_keeps_its_item_diff/1,
@@ -80,7 +81,8 @@ groups() ->
             opaque_static_generation_marks_the_chosen_option,
             opaque_live_render_is_left_to_the_client,
             mark_choices_reads_the_fragment,
-            authored_selected_follows_the_value
+            authored_selected_follows_the_value,
+            fragment_reads_as_the_parser_preprocesses
         ]},
         {diff, [parallel], [
             diff_moves_selected_to_the_new_option,
@@ -363,7 +365,7 @@ opaque_live_render_is_left_to_the_client(Config) when is_list(Config) ->
 %% the select.
 mark_choices_reads_the_fragment(Config) when is_list(Config) ->
     Mark = fun(Fragment, Picks) ->
-        iolist_to_binary(arizona_html:mark_choices(Fragment, fun(T) -> lists:member(T, Picks) end))
+        iolist_to_binary(arizona_html:mark_choices(Fragment, Picks))
     end,
     Same = fun(Fragment, Picks) -> ?assertEqual(Fragment, Mark(Fragment, Picks), Fragment) end,
     ?assertEqual(
@@ -494,7 +496,7 @@ mark_choices_reads_the_fragment(Config) when is_list(Config) ->
 %% every copy of it, so the page loads on the same option with or without the client.
 authored_selected_follows_the_value(Config) when is_list(Config) ->
     Mark = fun(Fragment, Picks) ->
-        iolist_to_binary(arizona_html:mark_choices(Fragment, fun(T) -> lists:member(T, Picks) end))
+        iolist_to_binary(arizona_html:mark_choices(Fragment, Picks))
     end,
     ?assertEqual(
         ~"<option value=a selected>A<option value=b >B",
@@ -510,6 +512,20 @@ authored_selected_follows_the_value(Config) when is_list(Config) ->
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a"}))),
     ?assertEqual([~"a"], selected_values(HTML), HTML).
+
+%% The parser normalizes newlines (CR LF and CR to LF) and replaces NUL in attribute
+%% values with U+FFFD before anything compares; the picks render as an attribute too,
+%% so both sides are read alike. A `<template>` in an option holds no text of it.
+fragment_reads_as_the_parser_preprocesses(Config) when is_list(Config) ->
+    One = fun(Fragment, Picks) ->
+        count_selected(iolist_to_binary(arizona_html:mark_choices(Fragment, Picks)))
+    end,
+    ?assertEqual(1, One(~"<option value=\"a\nb\">x", [~"a\r\nb"])),
+    ?assertEqual(1, One(~"<option value=\"a\r\nb\">x", [~"a\rb"])),
+    ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 0>>])),
+    ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 16#FFFD/utf8>>])),
+    ?assertEqual(1, One(~"<option>a<template>b</template></option>", [~"a"])),
+    ?assertEqual(0, One(~"<option>a<template>b</template></option>", [~"ab"])).
 
 %% --------------------------------------------------------------------
 %% Diff

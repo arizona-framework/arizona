@@ -958,7 +958,7 @@ scope_slot(_Az, Value) ->
 %% something other than hand its argument back. Keep the two in step -- a shape that
 %% answers `false` here can never be prefixed, however `scope_val/2` treats it.
 scopable({arizona_esc, Val}) -> scopable(Val);
-scopable({arizona_choices, _Picked, Val}) -> scopable(Val);
+scopable({arizona_choices, _Picks, Val}) -> scopable(Val);
 scopable(#{view_id := _}) -> false;
 scopable(#{t := ?EACH}) -> false;
 scopable(#{az_local := _}) -> false;
@@ -1145,7 +1145,7 @@ scope_az(Prefix, Az) -> <<Prefix:(byte_size(Prefix))/binary, "-", Az/binary>>.
 %% their bodies are left alone -- only the container/element `az` in the enclosing
 %% statics (already scoped above) and this dynamic's own `az` are prefixed.
 scope_val(Prefix, {arizona_esc, V}) -> {arizona_esc, scope_val(Prefix, V)};
-scope_val(Prefix, {arizona_choices, Picked, V}) -> {arizona_choices, Picked, scope_val(Prefix, V)};
+scope_val(Prefix, {arizona_choices, Picks, V}) -> {arizona_choices, Picks, scope_val(Prefix, V)};
 scope_val(_Prefix, #{view_id := _} = Child) -> Child;
 scope_val(_Prefix, #{t := ?EACH} = Each) -> Each;
 scope_val(_Prefix, #{az_local := _} = Local) -> Local;

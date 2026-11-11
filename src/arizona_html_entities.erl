@@ -1,6 +1,7 @@
 -module(arizona_html_entities).
 -moduledoc """
-The HTML named character references, as the WHATWG HTML standard lists them: every name
+The HTML named character references, as the WHATWG HTML standard lists them (a frozen
+list: no name is ever added), every name
 the tokenizer decodes, the ones it also accepts without a trailing `;` (the legacy
 names) included, each with the text it stands for.
 
@@ -26,8 +27,8 @@ named(Name) ->
         #{} -> error
     end.
 
-% Generated from Python's html.entities.html5, which mirrors the standard's
-% entities.json.
+% The standard's entities.json, as Python's html.entities.html5 carries it. The list
+% is frozen (the standard adds no named references), so it never needs regenerating.
 table() ->
     #{
         ~"AElig" => <<16#C6/utf8>>,

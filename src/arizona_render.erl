@@ -385,10 +385,10 @@ render_dyn(Backend, #{s := InnerS, d := InnerD} = Nested) ->
     zip_d(NestedBackend, InnerS, InnerD);
 render_dyn(_Backend, V) when is_binary(V) ->
     V;
-render_dyn(Backend, {arizona_choices, Picked, Inner}) ->
+render_dyn(Backend, {arizona_choices, Picks, Inner}) ->
     %% A child of a chooser the parse transform could not see into, rendered at SSR
     %% (render_ssr_val/2): only its own output is searched for the choices to mark.
-    Backend:mark_choices(render_dyn(Backend, Inner), Picked);
+    Backend:mark_choices(render_dyn(Backend, Inner), Picks);
 render_dyn(Backend, V) ->
     text_leaf(Backend, arizona_template:to_bin(V)).
 
@@ -954,7 +954,7 @@ render_ssr_choices(Backend, #{choices := Picks, esc := Esc, child := Child}) ->
             true -> render_ssr_esc_val(Backend, Child);
             false -> render_ssr_val(Backend, Child)
         end,
-    {arizona_choices, fun(Text) -> lists:member(Text, Texts) end, Inner}.
+    {arizona_choices, Texts, Inner}.
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`
