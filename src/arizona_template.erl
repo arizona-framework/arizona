@@ -814,7 +814,7 @@ raw(Value) -> {arizona_raw, Value}.
 %% Internal, emitted only by the parse transform for an attribute value holding a
 %% literal `raw/1`, whole or as a part. The assembled value is markup: the literal raw
 %% parts verbatim, every other part escaped through `Backend` (the transform marks it
-%% with `mark_esc/1`, so a helper's raw in it is escaped too) -- a part means the same
+%% with `mark_attr_part/1`, so a helper's raw in it is escaped too) -- a part means the same
 %% text with or without a raw sibling. It comes back `{arizona_markup, Bin}`, the one
 %% attribute value an attribute renderer splices: a bare `{arizona_raw, _}` reaching
 %% one is a helper's, and the opt-out applies only to a raw literal at the template
