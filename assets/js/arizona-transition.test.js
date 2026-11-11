@@ -681,8 +681,26 @@ describe('view transitions -- frame order', () => {
 
     const value = () => document.querySelector('input').getAttribute('value');
 
+    // The error a frame's apply throws: a failing effect is caught and logged, so
+    // the log is made to throw, once per name, in order.
+    /** @type {import('vitest').MockInstance|null} */
+    let logSpy = null;
+    function throwOnErrorLog(...names) {
+        logSpy = vi.spyOn(console, 'error');
+        for (const name of names) {
+            logSpy.mockImplementationOnce(() => {
+                throw new Error(name);
+            });
+        }
+    }
+
     beforeEach(() => {
         document.body.innerHTML = '<div id="page" az-view><input az="0" value="x"></div>';
+    });
+
+    afterEach(() => {
+        logSpy?.mockRestore();
+        logSpy = null;
     });
 
     it('a later frame waits for a deferred earlier one', () => {
@@ -720,9 +738,10 @@ describe('view transitions -- frame order', () => {
     // A frame whose apply throws must not hold the frames behind it forever.
     it('a deferred frame that throws still releases the frames behind it', () => {
         const runPending = deferViewTransitions();
+        throwOnErrorLog('first');
         _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], [null], wrappedEvent('a'));
         _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
-        expect(runPending).toThrow();
+        expect(runPending).toThrow('first');
         expect(value()).toBe('ab');
     });
 
@@ -730,10 +749,11 @@ describe('view transitions -- frame order', () => {
     it('a held frame that throws still applies the held frames after it', () => {
         const runPending = deferViewTransitions();
         document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        throwOnErrorLog('first');
         _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], null, wrappedEvent('a'));
         _mock.simulateMessage(null, [null]);
         _mock.simulateMessage([[OP.TEXT, 'page:1', 'b']]);
-        expect(runPending).toThrow();
+        expect(runPending).toThrow('first');
         expect(document.querySelector('[az="0"]').innerHTML).toBe('a');
         expect(document.querySelector('[az="1"]').innerHTML).toBe('b');
     });
@@ -743,11 +763,13 @@ describe('view transitions -- frame order', () => {
     it('a throwing held frame keeps the order behind a held frame that defers again', () => {
         const runPending = deferViewTransitions();
         document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
-        _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], null, wrappedEvent('a'));
+        throwOnErrorLog('first', 'second');
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], [null], wrappedEvent('a'));
         _mock.simulateMessage(null, [null]);
         _mock.simulateMessage([[OP.TEXT, 'page:0', 'ab']], null, wrappedEvent('b'));
         _mock.simulateMessage([[OP.TEXT, 'page:1', 'b']]);
-        expect(runPending).toThrow();
+        expect(runPending).toThrow('first');
+        expect(logSpy).toHaveBeenCalledTimes(2);
         expect(document.querySelector('[az="0"]').innerHTML).toBe('a');
         expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
         runPending();

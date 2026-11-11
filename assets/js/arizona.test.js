@@ -1651,6 +1651,21 @@ describe('applyEffects', () => {
         expect(err).toHaveBeenCalled();
         err.mockRestore();
     });
+
+    // The failure log reads the effect's op code; on a null effect that read must
+    // not throw past the isolation itself.
+    it('isolates a null effect so the rest of the batch still runs', () => {
+        document.title = 'before';
+        const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+        expect(() => applyEffects([null, [14, 'after']])).not.toThrow();
+        expect(document.title).toBe('after');
+        expect(err).toHaveBeenCalledWith(
+            '[arizona] effect %s failed; skipping',
+            undefined,
+            expect.any(TypeError),
+        );
+        err.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------
