@@ -670,9 +670,9 @@ format_error({bad_template_value, V}) ->
 format_error({raw_template, V}) ->
     lists:flatten(
         io_lib:format(
-            "raw/1 around ~0tp: raw opts text out of escaping, and a template, component "
-            "or ?local is not text. In content, drop the raw: a template is markup "
-            "already. An attribute value must be text",
+            "raw/1 around ~0tp in an attribute value: a template, component or ?local "
+            "is markup, not text, and an attribute value must be text. (In content a "
+            "raw around one is redundant and renders it.)",
             [V]
         )
     );
@@ -759,14 +759,16 @@ client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boun
 The `?json` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
 with no defined meaning; using it in a `?json`/`?terminal` template is unsupported.
 
-`Value` is text. A template, component or `?local` held directly by the raw -- in
-content, a whole or interpolated attribute value, or a `?json` prop -- raises
-`{raw_template, Map}` where its slot is evaluated, located on every path. In
-content, drop the raw (a template is markup already); an attribute value must be
-text. A helper's raw around such a raw in content is unwrapped and refused the
-same way. A map the slot evaluation does not see -- in a list inside the raw, or in
-a raw inside a literal `?raw` -- raises `bad_template_value` at output, located on
-SSR only.
+A template, a `?stateful`/`?stateless` component, `?inner_content` or a `?local` is
+markup already, never escaped, so in **content** a raw around one -- literal or a
+helper's, one raw deep or a raw in a raw -- is redundant: the slot renders, mounts
+and diffs it exactly as the bare value, on SSR, the live render and the diff alike
+(a `?local` renders as one arriving at runtime does: write it bare at the slot for
+its client binding). An **attribute value** must be text, so there a raw around one
+-- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
+Map}` where the attribute is evaluated, located on every path. A command in a raw
+is refused as in content (`effect_in_content`). A map inside a list in the raw is
+not looked for and raises `bad_template_value` at output, located on SSR only.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -881,10 +883,10 @@ the documented rule forbids ("the parse transform only recognizes the opt-out
 when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
-across the live diff). A map held directly by the raw -- a template, a descriptor,
-a `?local` -- is not text, so it raises `{raw_template, Map}`, as a literal `?raw`
-around one does. A raw inside the raw is unwrapped the same way; a map in a list is
-refused only at output (see `raw/1`).
+across the live diff). A map held by the raw -- a template, a descriptor, a
+`?local` -- is markup already, so it is returned as the map and rendered as that
+value, as a literal `?raw` around one is. A raw inside the raw is unwrapped the
+same way (see `raw/1`).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -906,12 +908,16 @@ mark_esc(V0) ->
 mark_local_init({arizona_raw, _} = Raw) -> Raw;
 mark_local_init(Init) -> mark_esc(Init).
 
-mark_raw_esc(V) when is_map(V) -> raw_not_text(V);
+%% A map in a raw is markup already (a template, component, `?local`): the slot
+%% renders it as that value, so the raw is dropped rather than its value escaped.
+mark_raw_esc(V) when is_map(V) -> V;
 mark_raw_esc(V) -> mark_esc(V).
 
-%% Internal: the raw arm of a `classify_trusted/1` caller. A map held by the raw is
-%% refused here rather than in `classify_trusted/1`, where the raise would cost every
-%% caller's plain-value path a test of the returned shape.
+%% Internal: the raw arm of a `classify_trusted/1` caller, which renders text. A map
+%% held by the raw is not text and is refused here rather than in
+%% `classify_trusted/1`, where the raise would cost every caller's plain-value path a
+%% test of the returned shape. Content never gets here with one: its evaluation
+%% renders a raw around a map as the map.
 -doc false.
 -spec raw_to_bin(Value) -> binary() when
     Value :: term().
@@ -919,11 +925,8 @@ raw_to_bin(V) when is_map(V) -> raw_not_text(V);
 raw_to_bin(V) -> to_bin(V).
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
-%% `?local` -- held directly by a `raw/1`, which opts text out of escaping. Raised
-%% where the slot is evaluated, so it carries the slot's location. A map in a list in
-%% the raw, or in a raw inside a literal `?raw`, is not walked for, which would cost
-%% every raw value; output refuses it as `bad_template_value`, unlocated on the live
-%% render.
+%% `?local` -- held directly by a `raw/1` in an attribute value, which must be text.
+%% Raised where the attribute is evaluated, so it carries the slot's location.
 -doc false.
 -spec raw_not_text(Value) -> no_return() when
     Value :: map().

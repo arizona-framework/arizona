@@ -4,7 +4,7 @@
 opacity rules documented at `az:inner_content/1` are pinned by tests.
 
 `branch/1` and `prop/1` are the placements that hand the page to a sub-context;
-`raw/1` and `sibling/1` are the placements the opaque value rejects.
+`raw/1` and `sibling/1` render it through a redundant `?raw` and beside static text.
 """.
 -include("arizona_stateless.hrl").
 
@@ -59,7 +59,7 @@ measure(Bindings) ->
     Size = iolist_size(az:inner_content(Bindings)),
     ?html([~"<m>", integer_to_binary(Size), ~"</m>"]).
 
-%% The escape opt-out around an already-opaque value: nothing to unwrap.
+%% The escape opt-out around the page: redundant, so it renders the page.
 -spec raw(az:bindings()) -> az:template().
 raw(Bindings) ->
     ?html([~"<r>", ?raw(?inner_content), ~"</r>"]).

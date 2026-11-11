@@ -41,6 +41,7 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([helper_raw_template_nodiff/1]).
 -export([helper_raw_template_json/1]).
 -export([literal_raw_template/1]).
+-export([raw_wrapped/1]).
 -export([literal_raw_attr/1]).
 -export([helper_raw_attr/1]).
 -export([interp_raw_attr/1]).
@@ -413,8 +414,8 @@ local_or_text(local, V) -> arizona_template:local(k, V);
 local_or_text(raw_local, V) -> arizona_template:local(k, arizona_template:raw(V));
 local_or_text(template_local, V) -> arizona_template:local(k, ?html({b, [], [V]})).
 
-%% A helper's `raw/1` around a template rather than text, once `wrap` is true: `raw`
-%% opts a value out of escaping, and a template is not a value.
+%% A helper's `raw/1` around a template, once `wrap` is true: redundant in content (a
+%% template is markup already), refused in an attribute value (which must be text).
 -spec helper_raw_template(az:bindings()) -> az:template().
 helper_raw_template(Bindings) ->
     ?html({'div', [{id, ~"x"}], [maybe_raw_template(?get(wrap), ?get(name))]}).
@@ -433,7 +434,27 @@ maybe_raw_template(false, Name) -> Name.
 maybe_raw_json(true, Name) -> arizona_template:raw(?json({'Text', [], [Name]}));
 maybe_raw_json(false, Name) -> Name.
 
-%% The same refusal for a `?raw` literal at the template site, around a template
+%% A component, template or `?local` under `raws` levels of a helper's `raw/1`: the
+%% raw is redundant, so every level renders and diffs as the bare value (`raws => 0`).
+-spec raw_wrapped(az:bindings()) -> az:template().
+raw_wrapped(Bindings) ->
+    ?html({'div', [], [wrapped_value(?get(raws), ?get(kind), ?get(v))]}).
+
+wrapped_value(0, stateful, V) ->
+    arizona_template:stateful(arizona_counter, #{id => ~"c1", count => V});
+wrapped_value(0, stateless, V) ->
+    arizona_template:stateless(fun italic/1, #{t => V});
+wrapped_value(0, template, V) ->
+    ?html({b, [], [V]});
+wrapped_value(0, local, V) ->
+    arizona_template:local(~"k", V);
+wrapped_value(N, Kind, V) ->
+    arizona_template:raw(wrapped_value(N - 1, Kind, V)).
+
+italic(Bindings) ->
+    ?html({i, [], [?get(t)]}).
+
+%% The same for a `?raw` literal at the template site, around a template
 %% once `wrap` is true.
 -spec literal_raw_template(az:bindings()) -> az:template().
 literal_raw_template(Bindings) ->

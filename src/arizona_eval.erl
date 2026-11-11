@@ -668,7 +668,7 @@ eval_one_triple({Az, _Spec} = Dyn) ->
     Dynamic :: arizona_template:dynamic().
 dyn_value({_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) ->
     try
-        {attr, Name, attr_val(Name, eval_val(Fun()))}
+        {attr, Name, attr_val(Name, eval_attr(Fun()))}
     catch
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
@@ -679,7 +679,7 @@ dyn_value({Az, Spec, Loc}) ->
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
 dyn_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    {attr, Name, attr_val(Name, eval_val(Fun()))};
+    {attr, Name, attr_val(Name, eval_attr(Fun()))};
 dyn_value({Az, Spec}) ->
     arizona_template:scope_slot(Az, eval_val(Spec)).
 
@@ -727,19 +727,36 @@ eval_val(#{az_local := _, v := V} = Local) when is_map(V) ->
 eval_val(#{az_local := _, v := V} = Local) ->
     ok = refuse_effect(V),
     Local;
+%% A template, component or `?local` is markup already, so a raw around one in content
+%% is redundant: the slot gets the value itself, evaluated like any other. A raw
+%% inside the raw is the same raw. Attributes never come here (eval_attr/1).
 eval_val({arizona_raw, V}) when is_map(V) ->
-    arizona_template:raw_not_text(V);
+    eval_val(V);
+eval_val({arizona_raw, {arizona_raw, _} = V}) ->
+    eval_val(V);
 eval_val({arizona_raw, V} = Raw) ->
     ok = refuse_effect(V),
     Raw;
 eval_val(Val) ->
     Val.
 
+%% An attribute value. Only a raw needs anything: an attribute value is text, so a
+%% template, component or `?local` in one is refused here, located, rather than
+%% rendered (content renders it, eval_val/1); a command in one is refused as in
+%% content. Anything else is handed to the attribute renderer as it is -- nothing
+%% else evaluates to an attribute value.
+eval_attr({arizona_raw, V}) when is_map(V) ->
+    arizona_template:raw_not_text(V);
+eval_attr({arizona_raw, V} = Raw) ->
+    ok = refuse_effect(V),
+    Raw;
+eval_attr(Val) ->
+    Val.
+
 %% A content `?local` init and a `raw/1` value skip `mark_esc/1`, so a command in
-%% one, or a map in a raw, would otherwise be refused only at output
-%% (`arizona_template:to_bin/1`), where the slot's location is gone. Refused here,
-%% inside the located evaluation. A raw inside is looked through for a command, as
-%% output would; a map in it is left to output, where SSR refuses it too.
+%% one would otherwise be refused only at output (`arizona_template:to_bin/1`),
+%% where the slot's location is gone. Refused here, inside the located evaluation.
+%% A raw inside is looked through for a command, as output would.
 refuse_effect({arizona_raw, V}) ->
     refuse_effect(V);
 refuse_effect(V) ->
@@ -768,7 +785,7 @@ eval_one_v({Az, {attr, Name, Fun}, Loc}, Views) when is_function(Fun, 0) ->
     Outer = open_deps(),
     Val =
         try
-            attr_val(Name, eval_val(Fun()))
+            attr_val(Name, eval_attr(Fun()))
         catch
             Class:Reason:ST -> relocate(Class, Reason, ST, Loc, Outer)
         end,
@@ -788,7 +805,7 @@ eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->
     Outer = open_deps(),
     Val =
         try
-            attr_val(Name, eval_val(Fun()))
+            attr_val(Name, eval_attr(Fun()))
         catch
             Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
         end,
@@ -888,8 +905,10 @@ eval_val_v(#{az_local := _, v := V} = Local, Views0) when is_map(V) ->
 eval_val_v(#{az_local := _, v := V} = Local, Views) ->
     ok = refuse_effect(V),
     {Local, Views};
-eval_val_v({arizona_raw, V}, _Views) when is_map(V) ->
-    arizona_template:raw_not_text(V);
+eval_val_v({arizona_raw, V}, Views) when is_map(V) ->
+    eval_val_v(V, Views);
+eval_val_v({arizona_raw, {arizona_raw, _} = V}, Views) ->
+    eval_val_v(V, Views);
 eval_val_v({arizona_raw, V} = Raw, Views) ->
     ok = refuse_effect(V),
     {Raw, Views};

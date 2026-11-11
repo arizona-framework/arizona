@@ -118,7 +118,7 @@
     ssr_inner_content_macro_marks_layout_nodiff/1,
     ssr_inner_content_rejects_attribute_value/1,
     ssr_inner_content_rejects_being_measured/1,
-    ssr_inner_content_rejects_raw_wrapper/1,
+    ssr_inner_content_renders_through_raw/1,
     ssr_inner_content_beside_text_in_one_slot/1,
     ssr_inner_content_rejects_runtime_list/1,
     ssr_invalid_chardata_user_value_still_errors/1,
@@ -247,7 +247,7 @@ groups() ->
             ssr_inner_content_macro_marks_layout_nodiff,
             ssr_inner_content_rejects_attribute_value,
             ssr_inner_content_rejects_being_measured,
-            ssr_inner_content_rejects_raw_wrapper,
+            ssr_inner_content_renders_through_raw,
             ssr_inner_content_beside_text_in_one_slot,
             ssr_inner_content_rejects_runtime_list,
             ssr_invalid_chardata_user_value_still_errors,
@@ -1569,14 +1569,13 @@ ssr_inner_content_rejects_being_measured(Config) when is_list(Config) ->
     %% Not iodata: `iolist_size/1` (and anything else expecting iodata) raises.
     ?assertError(badarg, layout_html(arizona_inner_content_layouts, measure)).
 
-ssr_inner_content_rejects_raw_wrapper(Config) when is_list(Config) ->
-    %% `?raw(?inner_content)` has nothing to opt out of -- a content slot already
-    %% splices the page unescaped -- and the opaque value cannot be unwrapped, so
-    %% it raises rather than half-working.
-    ?assertError(
-        {arizona_loc, {arizona_inner_content_layouts, _}, {raw_template, #{s := _}}},
-        layout_html(arizona_inner_content_layouts, raw)
-    ).
+ssr_inner_content_renders_through_raw(Config) when is_list(Config) ->
+    %% `?raw(?inner_content)` is redundant -- a content slot already splices the page
+    %% unescaped -- so it renders the page exactly as the bare `?inner_content` does.
+    HTML = layout_html(arizona_inner_content_layouts, raw),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<r><div az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;div")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE&lt;&amp;&gt;")).
 
 ssr_inner_content_beside_text_in_one_slot(Config) when is_list(Config) ->
     %% A content-slot list holding the page compiles as a fragment, so the page
