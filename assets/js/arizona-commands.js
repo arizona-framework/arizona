@@ -538,9 +538,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,
             // can't set cookies), the response can carry a real Set-Cookie, applied
             // natively by the browser. The controller returns the {e:[...]} effects
-            // wire payload; we apply it against the enclosing view element below, so a
-            // push_event in the response resolves to (and re-renders) the submitting
-            // view without scraping the form -- pubsub is for broadcasting to other views.
+            // wire payload; we apply it against a stand-in for the trigger below, so a
+            // push_event in the response resolves to (and re-renders) the view the
+            // trigger's events go to without scraping the form -- pubsub is for
+            // broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
@@ -588,11 +589,11 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         later(() => {
                             // Apply the effects body whenever it parses -- even on a 4xx, so
                             // the server can drive inline validation with a real status. The
-                            // effects run against the enclosing view element (not the form or
-                            // a field, not document), so a `push_event` in the response resolves
-                            // to the submitting view and re-renders it via handle_event (no
-                            // pubsub) -- without scraping the form's fields into the event
-                            // payload (the trigger is never a form or a field, so autoPayload is
+                            // effects run against a stand-in for the trigger that names the view
+                            // its own events go to (its az-target, else its enclosing view), so a
+                            // `push_event` in the response re-renders that view via handle_event
+                            // (no pubsub) -- without scraping the form's fields into the event
+                            // payload (the stand-in is no form or field, so autoPayload is
                             // empty; the controller passes any result explicitly). An empty 2xx
                             // body (a cookie-only response) applies nothing. on_error runs only
                             // when there is no usable effects body: a non-JSON page or an empty
@@ -613,15 +614,13 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             // flow into the .catch would fire on_error/arizona:fetch-error
                             // as a phantom network failure, after effects partially applied.
                             if (effects !== null) {
-                                // Never the form or a field: as a push_event trigger
-                                // either would put what was typed in the payload. With
-                                // no enclosing view the trigger would be `el` itself
-                                // (a form, or a field fetching on az-change), and a
-                                // view can be the form; a detached stand-in names the
-                                // same target instead.
-                                const view = el?.closest?.('[az-view]') ?? null;
-                                let trigger = view ?? el;
-                                if (el && (!view || view === form)) {
+                                // A detached stand-in carrying the trigger's target, never
+                                // a live element: as a push_event trigger a form or a field
+                                // would put what was typed in the payload, and any element
+                                // inside a <form> (a view nested in one too) would hand a
+                                // fetch in the response that form's fields to post.
+                                let trigger = el;
+                                if (el) {
                                     const id = resolveTarget(el);
                                     trigger = el.ownerDocument.createElement('div');
                                     if (id) trigger.setAttribute('az-target', id);

@@ -330,14 +330,16 @@ The endpoint is a controller route (e.g. `{post, ...}`) returning the `{"e": [..
 effects wire payload -- `arizona_controller:reply_effects/1` for the success leg
 (200; a form with `az-form-reset` clears) or `reply_effects/2` with a non-2xx
 (e.g. `422`) for a validation error (the typed fields survive). The effects are
-applied on **any** status, against the submitting view's element. `on_error` (and
+applied on **any** status, as if raised by the trigger but with none of its fields:
+they go to the view the trigger's own events go to (its `az-target`, else its
+enclosing view), and a `fetch` among them posts no form. `on_error` (and
 an `arizona:fetch-error` DOM event) runs only when there is no usable effects body
 -- a non-JSON page, an empty non-2xx, or a network failure.
 
 To re-render the live view, return an `arizona_js:push_event` in the response: the
 client relays it over the existing WebSocket and the view re-renders through its
-normal `handle_event/3` (no subscription; it targets the submitting view and does
-not echo the form fields). Use `arizona_pubsub` from the controller instead to reach
+normal `handle_event/3` (no subscription; it targets that view and does not echo
+the form fields). Use `arizona_pubsub` from the controller instead to reach
 *other* views (broadcast). To send the user elsewhere, return `arizona_js:navigate/1`
 (e.g. via `reply_redirect/1`), not an HTTP 3xx -- a fetch-followed redirect can't
 drive a SPA navigation.
