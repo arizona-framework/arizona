@@ -906,9 +906,9 @@ handle_event(~"inc", _P, B) ->
 - `add_class/2`, `remove_class/2`, `toggle_class/2` -- CSS class manipulation
 - `set_attr/3`, `remove_attr/2`, `toggle_attr/2,4` -- attribute manipulation (`toggle_attr/2`
   presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values).
-  Under an `az-*` name `set_attr/3` and `toggle_attr/4` also take a command (or list), written as
-  the JSON array an event attribute holds; only that proves the name to the client, a binary
-  there being data
+  Under an `az-*` name `set_attr/3` and `toggle_attr/4` also take a command (or a list holding
+  at least one; one holding none, `[]` included, is refused), written as the JSON array an event
+  attribute holds; only that proves the name to the client, a binary there being data
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation, replaces the root view (opts: `#{replace => true}`)
 - `patch/1,2` -- in-place SPA navigation, keeps the root view and re-renders it via

@@ -22,6 +22,8 @@
 -export([toggle_attr_refuses_a_value_neither_binary_nor_command/1]).
 -export([attr_errors_name_the_public_function/1]).
 -export([attr_refuses_an_improper_list_value/1]).
+-export([set_attr_refuses_a_value_with_no_command/1]).
+-export([toggle_attr_refuses_a_value_with_no_command/1]).
 
 all() ->
     [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
@@ -49,7 +51,9 @@ groups() ->
             set_attr_refuses_a_value_neither_binary_nor_command,
             toggle_attr_refuses_a_value_neither_binary_nor_command,
             attr_errors_name_the_public_function,
-            attr_refuses_an_improper_list_value
+            attr_refuses_an_improper_list_value,
+            set_attr_refuses_a_value_with_no_command,
+            toggle_attr_refuses_a_value_with_no_command
         ]}
     ].
 
@@ -280,6 +284,22 @@ attr_refuses_an_improper_list_value(Config) when is_list(Config) ->
         ]
     ].
 
+%% An empty charlist is `[]`, which flattens to no command. Under a plain name
+%% it is no command misplaced but no value; under an az-* name it would write a
+%% command list that runs nothing and proves the name for nothing.
+set_attr_refuses_a_value_with_no_command(Config) when is_list(Config) ->
+    [
+        assert_no_command_error(fun() -> arizona_js:set_attr(~"#x", Attr, Value) end)
+     || Attr <- [~"class", ~"az-click"], Value <- ["", [[]], [[], [[]]]]
+    ].
+
+toggle_attr_refuses_a_value_with_no_command(Config) when is_list(Config) ->
+    Cmd = arizona_js:push_event(~"a"),
+    [
+        assert_no_command_error(fun() -> arizona_js:toggle_attr(~"#x", Attr, A, B) end)
+     || Attr <- [~"class", ~"az-click"], {A, B} <- [{"", ""}, {[], Cmd}, {Cmd, [[]]}]
+    ].
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -310,3 +330,7 @@ top_frame(Fun) ->
             [Frame | _] = Stacktrace,
             Frame
     end.
+
+assert_no_command_error(Fun) ->
+    assert_value_error(Fun),
+    ?assertNotEqual(nomatch, string:find(formatted_error(Fun), ~"holds no command")).

@@ -222,11 +222,13 @@ toggle_class(Sel, Cls) -> {arizona_effect, [?EFFECT_TOGGLE_CLASS, Sel, Cls]}.
 Sets an attribute on all elements matching the selector.
 
 Under an `az-*` name the value may be a command (or a command list, flattened
-like any other): it is written as the array an event attribute holds, and that is
-what proves the name to the client, so `set_attr(~"#x", ~"az-select",
-arizona_js:push_event(~"pick"))` makes `select` run there. A binary under an
-`az-*` name is data, as in a template, and proves nothing: on a page that does not
-otherwise use the name, `set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing.
+like any other, holding at least one: a list of none, such as `[]` or an empty
+charlist, runs nothing and is refused): it is written as the array an event
+attribute holds, and that is what proves the name to the client, so
+`set_attr(~"#x", ~"az-select", arizona_js:push_event(~"pick"))` makes `select`
+run there. A binary under an `az-*` name is data, as in a template, and proves
+nothing: on a page that does not otherwise use the name,
+`set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing.
 """.
 -spec set_attr(Selector, Attr, Value) -> arizona_effect:cmd() when
     Selector :: binary(),
@@ -674,11 +676,16 @@ format_error({command_needs_az_attr, Fun, Attr}, _Stacktrace) ->
         )
     };
 format_error({not_a_value, Fun, Attr, Value}, _Stacktrace) ->
+    Hint =
+        case cmds_kind(Value) of
+            empty -> ": a list that holds no command runs nothing and proves no name";
+            _ -> ""
+        end,
     #{
         general => io_lib:format(
             "~ts: a value must be a binary, or under an az-* name a command, got ~tp "
-            "(attribute ~tp)",
-            [Fun, Value, Attr]
+            "(attribute ~tp)~ts",
+            [Fun, Value, Attr, Hint]
         )
     };
 format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
@@ -695,23 +702,37 @@ format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
 %% --------------------------------------------------------------------
 
 %% A command is a command or a command list as arizona_effect flattens it: lists
-%% nested to any depth whose leaves are commands, `[]` none. Anything else that is
-%% not a binary (a charlist, an atom) is no value an attribute can take.
+%% nested to any depth whose leaves are commands, `[]` none. A list flattening to
+%% no command (`[]`, `[[]]`, an empty charlist) is none: it would run nothing and,
+%% under an az-* name, prove the name for nothing. Anything else that is not a
+%% binary (a charlist, an atom) is no value an attribute can take either.
 -spec value_kind(Value) -> binary | command | other when
     Value :: term().
 value_kind(Value) when is_binary(Value) -> binary;
 value_kind(Value) ->
-    case is_cmds(Value) of
-        true -> command;
-        false -> other
+    case cmds_kind(Value) of
+        command -> command;
+        _ -> other
     end.
 
 %% Walked by hand, not with lists:all/2: an improper list would crash there,
 %% outside this module, with no error_info.
-is_cmds({arizona_effect, Cmd}) when is_list(Cmd) -> true;
-is_cmds([]) -> true;
-is_cmds([Cmds | Rest]) -> is_cmds(Cmds) andalso is_cmds(Rest);
-is_cmds(_) -> false.
+-spec cmds_kind(Value) -> command | empty | other when
+    Value :: term().
+cmds_kind({arizona_effect, Cmd}) when is_list(Cmd) -> command;
+cmds_kind([]) ->
+    empty;
+cmds_kind([Cmds | Rest]) ->
+    case cmds_kind(Cmds) of
+        other -> other;
+        Kind -> join_cmds_kind(Kind, cmds_kind(Rest))
+    end;
+cmds_kind(_) ->
+    other.
+
+join_cmds_kind(_, other) -> other;
+join_cmds_kind(command, _) -> command;
+join_cmds_kind(empty, Kind) -> Kind.
 
 encode_key(Key) when is_atom(Key) -> [Key];
 encode_key(Keys) when is_list(Keys) -> Keys;
