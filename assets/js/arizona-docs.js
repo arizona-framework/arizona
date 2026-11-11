@@ -163,22 +163,27 @@ export async function requestPip(viewId, opts = {}) {
             _pipWindows.delete(viewId);
             _eventDocs.delete(pip.document);
             _passiveBound.delete(pip.document);
-            // The view as it is now: a replace in the window (a reconnect's resync)
-            // swapped the element moved out for a fresh one.
-            const current = pip.document.getElementById(viewId) ?? view;
+            // The views the window holds now, not the element moved out: a replace
+            // there swaps it for a fresh one, under a new id when it navigates a
+            // popped-out root to another page.
+            const current = Array.from(pip.document.body.children).filter((e) =>
+                e.hasAttribute('az-view'),
+            );
             // isConnected, not parentNode: a replaced (navigate) outgoing
             // subtree is detached wholesale, so the placeholder still HAS a
             // parent -- inside a dead tree.
             if (placeholder.isConnected) {
-                placeholder.replaceWith(current);
+                placeholder.replaceWith(...current);
             } else {
                 // The view's inline home was destroyed while it was popped out
-                // (a navigate OP_REPLACE swapped the page): the new page has its
-                // own content, so discard the stale element -- appending it to
-                // the new page's body would resurrect dead server state. Tear
-                // its hooks down like any removed subtree.
-                destroyHooks(current);
-                current.remove();
+                // (a navigate swapped the page, a re-render or removal took it):
+                // the page has its own content there now, so discard the stale
+                // element -- appending it to the body would resurrect dead
+                // server state. Tear its hooks down like any removed subtree.
+                for (const e of current) {
+                    destroyHooks(e);
+                    e.remove();
+                }
             }
             if (opts.onClose) opts.onClose();
         },

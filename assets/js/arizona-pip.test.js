@@ -182,6 +182,27 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(pip.document.getElementById('v20')).toBeNull();
     });
 
+    // A navigate of a popped-out ROOT view lands in its window (the root is
+    // resolved there) under the new page's id, while the placeholder stays inline:
+    // closing the window brings back the new page, not the stale element moved out.
+    it('brings back the page a navigate replaced a popped-out root with', async () => {
+        document.body.innerHTML = '<div id="r1" az-view az="0"><span>old</span></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('r1');
+        applyOps([[OP.REPLACE, 'r1', '<div id="r2" az-view az="0"><span>new</span></div>']]);
+        expect(pip.closed).toBe(false);
+        // A node a hook put in the window is not a view: it stays there.
+        pip.document.body.append(pip.document.createElement('aside'));
+
+        pip.fire('pagehide');
+
+        expect(document.getElementById('r1')).toBeNull();
+        expect(document.querySelector('aside')).toBeNull();
+        expect(document.querySelector('#r2 span')?.textContent).toBe('new');
+        expect(resolveEl('r2')?.ownerDocument).toBe(document);
+    });
+
     it("preserves a popped-out form's typed values across a reconnect", async () => {
         document.body.innerHTML =
             '<div id="v7" az-view az="0"><form id="pf"><input name="note" /></form></div>';
