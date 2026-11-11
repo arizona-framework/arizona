@@ -1089,9 +1089,11 @@ its key, and `ap` (present only for interpolated attributes) carries the
 static prefix/suffix. The client scans `[az-local]` live (no persistent index): for a content
 slot it reconstructs the marker `az` from the element's runtime `az` + the slot index
 (mirroring `arizona_html:text_az/2`); for an interpolated attribute it recomposes
-`prefix ++ value ++ suffix` on set and strips them on read. An interpolated attribute's
-composed initial value is baked into the bind-map's `v` (`[Prefix, to_bin(Init), Suffix]`), so
-SSR render and diff-skip reuse the whole-value attribute path unchanged.
+`prefix ++ value ++ suffix` on set and strips them on read (from the live property for a
+control's `value` -- what the user typed or picked -- and `null` when it no longer carries
+them). An interpolated attribute's composed initial value is baked into the bind-map's `v`
+(`[Prefix, to_bin(Init), Suffix]`), so SSR render and diff-skip reuse the whole-value attribute
+path unchanged.
 
 A `?local` `value` on a `<select>` is the one place the rendered attribute is not the local's
 text as written: the transform rewrites it to one whole local whose init is

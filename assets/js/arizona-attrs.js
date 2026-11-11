@@ -85,7 +85,7 @@ export function applyRemAttrOp(el, name) {
  * @param {string} name
  * @returns {boolean}
  */
-export function isChooserValue(el, name) {
+function isChooserValue(el, name) {
     return (
         name === 'value' &&
         el.localName === 'select' &&

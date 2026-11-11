@@ -3987,6 +3987,41 @@ describe('?local -- interpolated attribute', () => {
         expect(input.value).toBe('$50');
     });
 
+    // A control's live value is what the user typed: an interpolated binding reads it,
+    // as a whole-value one does, its affixes stripped. A value the user edited out of
+    // its affixes holds no value of the local's.
+    it('reads what the user typed into an interpolated value', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local='{"a":{"value":"amt"},"ap":{"value":["$",".00"]}}' value="$0.00" />` +
+                `<textarea az="1" az-local='{"a":{"value":"note"},"ap":{"value":["> ",""]}}' value="> hi"></textarea>`,
+        );
+        const input = document.querySelector('input');
+        const area = document.querySelector('textarea');
+        area.value = '> hi';
+        expect(get('v', 'amt')).toBe('0');
+        input.value = '$12.00';
+        expect(get('v', 'amt')).toBe('12');
+        input.value = '12';
+        expect(get('v', 'amt')).toBe(null);
+        input.value = '$.0';
+        expect(get('v', 'amt')).toBe(null);
+        area.value = '> typed';
+        expect(get('v', 'note')).toBe('typed');
+        area.value = 'typed';
+        expect(get('v', 'note')).toBe(null);
+    });
+
+    // An input whose `value` is not live (a hidden one reflects the attribute) reads
+    // the attribute as before.
+    it('reads the attribute of an interpolated value that is not live', () => {
+        setupView(
+            'v',
+            `<input type="hidden" az="0" az-local='{"a":{"value":"id"},"ap":{"value":["u-",""]}}' value="u-1" />`,
+        );
+        expect(get('v', 'id')).toBe('1');
+    });
+
     it('null or undefined interpolates as empty, never the text "null"', () => {
         setupView(
             'v',

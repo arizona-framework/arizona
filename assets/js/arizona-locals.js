@@ -2,7 +2,6 @@ import {
     applyRemAttrOp,
     applySetAttrOp,
     attrInput,
-    isChooserValue,
     isMultipleChooser,
     syncsProp,
 } from './arizona-attrs.js';
@@ -120,12 +119,13 @@ function readLocalValue(el, target) {
     }
     if (target.length === 4) {
         // Interpolated: strip the known prefix/suffix to recover the local value. A
-        // select's is the option the user sees picked; one the affixes cannot compose
-        // holds no value of the local's.
+        // control's live `value` (`syncsProp`) is what the user sees -- typed, or the
+        // option they picked -- read as a whole-value binding reads it; one the
+        // affixes cannot compose holds no value of the local's.
         const pre = affix(target[2]);
         const suf = affix(target[3]);
-        if (isChooserValue(el, name)) {
-            const v = /** @type {HTMLSelectElement} */ (el).value;
+        if (name === 'value' && syncsProp(el, name)) {
+            const v = /** @type {HTMLInputElement} */ (el).value;
             const fits =
                 v.length >= pre.length + suf.length && v.startsWith(pre) && v.endsWith(suf);
             return fits ? v.slice(pre.length, v.length - suf.length) : null;
