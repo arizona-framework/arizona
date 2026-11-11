@@ -983,4 +983,95 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide');
         delete hooks.W;
     });
+
+    describe('nested pop-outs', () => {
+        // root > P > C: C popped out first, then P, so C's placeholder sits inside
+        // P's copy in P's window.
+        const nested = () => {
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0"><!--az:R-1-->' +
+                '<div id="P" az-view az="P-0"><div id="C" az-view az="C-0"><b az="C-1">c</b></div></div>' +
+                '<!--/az--></div>';
+        };
+        const freshP =
+            '<div id="P" az-view az="P-0"><div id="C" az-view az="C-0"><b az="C-1">c2</b></div></div>';
+        const popBoth = async () => {
+            nested();
+            const w1 = makePipWindow();
+            stubPip(w1);
+            await requestPip('C');
+            const w2 = makePipWindow();
+            stubPip(w2);
+            await requestPip('P');
+            return { w1, w2 };
+        };
+        /** @param {Document[]} docs */
+        const copiesOfC = (docs) => docs.flatMap((d) => [...d.querySelectorAll('#C')]);
+
+        it('keeps both windows live when a re-render above the parent renders both again', async () => {
+            const { w1, w2 } = await popBoth();
+
+            applyOps([[OP.TEXT, 'root:R-1', freshP, true]]);
+
+            expect([w1.closed, w2.closed]).toEqual([false, false]);
+            expect(copiesOfC([document, w1.document, w2.document])).toHaveLength(1);
+            expect(w1.document.getElementById('C')?.textContent).toBe('c2');
+            // C's placeholder now sits in the fresh P, in P's window.
+            expect(w2.document.querySelector('#P')?.innerHTML).toContain('az-pip:C');
+            expect(resolveEl('C')?.ownerDocument).toBe(w1.document);
+            w1.fire('pagehide');
+            expect(w2.document.querySelector('#P > #C')?.textContent).toBe('c2');
+            w2.fire('pagehide');
+        });
+
+        it('keeps both windows live across a reconnect', async () => {
+            const { w1, w2 } = await popBoth();
+
+            applyOps(
+                [
+                    [
+                        OP.REPLACE,
+                        'root',
+                        `<div id="root" az-view az="R-0"><!--az:R-1-->${freshP}<!--/az--></div>`,
+                    ],
+                ],
+                true,
+            );
+
+            expect([w1.closed, w2.closed]).toEqual([false, false]);
+            expect(copiesOfC([document, w1.document, w2.document])).toHaveLength(1);
+            expect(w1.document.getElementById('C')?.textContent).toBe('c2');
+            w1.fire('pagehide');
+            w2.fire('pagehide');
+            expect(document.querySelector('#root > #P > #C')?.textContent).toBe('c2');
+        });
+
+        it('closes both windows on a navigate, though a closed window hides later', async () => {
+            const { w1, w2 } = await popBoth();
+            // A real window's pagehide comes after close() returns.
+            w2.close = function () {
+                this.closed = true;
+            };
+
+            applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="O-0">new page</div>']]);
+
+            expect([w1.closed, w2.closed]).toEqual([true, true]);
+        });
+
+        it('does not hand a closed window to a view the new page renders under its id', async () => {
+            const { w1 } = await popBoth();
+
+            applyOps([
+                [
+                    OP.REPLACE,
+                    'root',
+                    '<div id="other" az-view az="O-0"><div id="C" az-view az="C-0">new</div></div>',
+                ],
+            ]);
+            applyOps([[OP.SET_ATTR, 'other', 'class', 'x']]);
+
+            expect(w1.closed).toBe(true);
+            expect(document.querySelector('#other > #C')?.textContent).toBe('new');
+        });
+    });
 });

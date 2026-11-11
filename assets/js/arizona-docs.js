@@ -50,6 +50,63 @@ function viewsIn(doc) {
 }
 
 /**
+ * The window whose document is `doc`, or null for the main document or a window
+ * no longer registered.
+ * @param {Document} doc
+ * @returns {PipEntry|null}
+ */
+function windowOf(doc) {
+    for (const e of _pipWindows.values()) if (e.win.document === doc) return e;
+    return null;
+}
+
+/**
+ * The windows `entry`'s placeholder sits under: each window's placeholder can lie
+ * inside another window's copy (a child popped out before its parent), up to the
+ * main document. Null when the chain is broken -- a placeholder gone, or lying
+ * in a window no longer registered -- so the view is stale: the copy in its
+ * window no longer stands for anything the page holds.
+ * @param {PipEntry} entry
+ * @returns {PipEntry[]|null}
+ */
+function homeChain(entry) {
+    const chain = [];
+    for (let e = entry; ; ) {
+        if (!e.placeholder.isConnected || chain.length > _pipWindows.size) return null;
+        const home = e.placeholder.ownerDocument;
+        if (home === document) return chain;
+        const up = windowOf(home);
+        if (!up) return null;
+        chain.push(up);
+        e = up;
+    }
+}
+
+/**
+ * Whether the view in `entry`'s window is stale: see `homeChain`.
+ * @param {PipEntry} entry
+ * @returns {boolean}
+ */
+function isStale(entry) {
+    return homeChain(entry) === null;
+}
+
+/**
+ * How many windows lie between `entry`'s placeholder and the main document,
+ * stopping where the chain breaks: a window is reconciled after the ones its
+ * placeholder lies in.
+ * @param {PipEntry} entry
+ * @returns {number}
+ */
+function depth(entry) {
+    let n = 0;
+    for (let e = windowOf(entry.placeholder.ownerDocument); e && n < _pipWindows.size; n++) {
+        e = windowOf(e.placeholder.ownerDocument);
+    }
+    return n;
+}
+
+/**
  * The view `id` a batch rendered again outside `own` (its window): in the page,
  * or in another window when its parent is popped out too. A view, not just an
  * element under its id: anything else stays where it was rendered.
@@ -70,20 +127,26 @@ function renderedAgain(id, own) {
  * Bring each popped-out (PiP) window in line with the op batch just applied:
  * - A replace in the window under a new id (a navigate of a popped-out root)
  *   re-keys it, so `exit_pip`/`request_pip` from the new page name it.
- * - A placeholder the batch took with a re-render that renders the view again
- *   (a reconnect's resync, a parent's wholesale re-render) leaves the fresh
- *   element in the page, or in its parent's window: it moves into the window in
- *   place of the stale one and leaves a new placeholder, as a pop-out does.
+ * - A stale window (see `homeChain`) whose view the batch rendered again (a
+ *   reconnect's resync, a wholesale re-render of an ancestor) gets the fresh
+ *   element, found in the page or in an ancestor's window: it moves in place of
+ *   the stale one and leaves a new placeholder, as a pop-out does.
  * - Otherwise the view is gone (removed, or the page navigated: a new page's
  *   views are new, whatever their ids), so the window closes; its pagehide
  *   handler discards the stale view.
+ * Windows go outermost first: a child's placeholder lies in its parent's copy,
+ * which must be settled -- re-adopted or closed -- before the child can tell
+ * whether its own view is stale and where its fresh copy is.
  * @param {boolean} navigated -- the batch replaced the page (a navigate)
  */
 export function reconcilePipWindows(navigated) {
     if (_pipWindows.size === 0) return;
-    for (const entry of [..._pipWindows.values()]) {
+    const order = [..._pipWindows.values()]
+        .map((e) => /** @type {[number, PipEntry]} */ ([depth(e), e]))
+        .sort((a, b) => a[0] - b[0]);
+    for (const [, entry] of order) {
         const doc = entry.win.document;
-        if (entry.placeholder.isConnected) {
+        if (!isStale(entry)) {
             if (doc.getElementById(entry.id)) continue;
             const id = viewsIn(doc)[0]?.id;
             if (!id) continue;
