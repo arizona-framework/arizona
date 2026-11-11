@@ -219,7 +219,8 @@ render_attr(Name, Value) ->
 %% The prop as the client receives it, before it JSON-encodes it: an effect
 %% command as its array, so a tap prop reads the same dynamic or folded, a typed
 %% boolean (`arizona_template:bool_attr/1`) as itself, and any other value
-%% stringified (to_bin/1 classifies out a `?raw`).
+%% stringified: to_bin/1 unwraps a `?raw` and the markup a literal one assembles, as
+%% JSON has no escaping to opt out of.
 -spec wire_attr(binary(), term()) -> json:encode_value().
 wire_attr(_Name, {arizona_bool, Bool}) ->
     Bool;

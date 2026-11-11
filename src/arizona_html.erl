@@ -1152,7 +1152,8 @@ raw_text_1(Ctx, Value) ->
     %% parse transform rejects an unmarked one), and it opts out of HTML *escaping*,
     %% not out of the raw-text tokenizer: a trusted JSON blob's own string data can
     %% still spell a breakout. Unwrap it, neutralize the payload, and re-wrap, so the
-    %% documented opt-out is not a hole around this check.
+    %% documented opt-out is not a hole around this check. No `{markup, _}` arm: that
+    %% shape is an attribute value only, never raw-text content.
     case arizona_template:classify_trusted(Value) of
         {raw, Raw} when is_map(Raw) -> arizona_template:raw(raw_text_markup(Ctx, Raw));
         {raw, Raw} -> arizona_template:raw(raw_text_1(Ctx, Raw));

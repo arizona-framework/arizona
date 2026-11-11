@@ -790,7 +790,15 @@ every path; in title and textarea a template with no element renders its text
 -- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
 Map}` where the attribute is evaluated, located on every path. A command in a raw
 is refused as in content (`effect_in_content`). A map inside a list in the raw is
-not looked for and raises `bad_template_value` at output, located on SSR only.
+not looked for and raises `bad_template_value`: in content at output, located on
+SSR only; in an attribute value inside its evaluation, located on every path (as
+does a raw in a literal attribute `?raw`).
+
+Only a `raw/1` literal at the template site opts out. Text in a raw that arrives
+any other way as the whole value -- from a helper, a `case`/`begin`, a prop a child
+reads -- is escaped, in content and attribute values alike; one inside a list value
+raises `bad_template_value`. A `?local` attribute init is always text, as the client
+sets it; a content `?local` raw init is spliced.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -875,6 +883,8 @@ effect command is not text and raises `{effect_in_content, Cmd}`.
 -spec escape_value(Backend, Value) -> binary() when
     Backend :: module(),
     Value :: term().
+%% No `{markup, _}` arm: `raw_attr/2` builds that shape only as an attribute value,
+%% and content never receives one.
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
         {raw, V} -> raw_to_bin(V);
@@ -908,9 +918,9 @@ treatment a directly-slotted stateless child gets.
 
 `mark_esc/1` is reached only for an **escape-tagged** content slot (`{esc, Fun}`),
 which the parse transform emits for every content interpolation that is not a
-literal block -- a literal `raw/1` at the template site compiles to a bare
-(un-esc-tagged) slot and never reaches here. So a `{arizona_raw, V}` arriving
-here was produced by a **helper** returning `raw/1` into an escaping slot, which
+literal block, and for each part of a `raw_attr/2` attribute value that is not a
+literal `raw/1` -- a literal `raw/1` at the template site never reaches here. So a
+`{arizona_raw, V}` arriving here was produced by a **helper** returning `raw/1`, which
 the documented rule forbids ("the parse transform only recognizes the opt-out
 when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
@@ -926,6 +936,7 @@ mark_esc(#{az_local := _, v := Init}) ->
     mark_local_init(Init);
 mark_esc(V) when is_map(V) ->
     V;
+%% No `{markup, _}` arm, as in escape_value/2: the shape is attribute-only.
 mark_esc(V0) ->
     case classify_trusted(V0) of
         {raw, V} -> mark_raw_esc(V);

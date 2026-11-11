@@ -135,6 +135,10 @@
     raw_interp_attr_ssr/1,
     wire_raw_interp_attr_tagged/1,
     helper_raw_attr_escaped/1,
+    non_literal_raw_attr_escaped/1,
+    literal_raw_attr_whole_spliced/1,
+    local_raw_init_text_in_attr/1,
+    raw_raw_template_attr_located/1,
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
@@ -320,7 +324,11 @@ groups() ->
             wire_raw_attr_tagged,
             raw_interp_attr_ssr,
             wire_raw_interp_attr_tagged,
-            helper_raw_attr_escaped
+            helper_raw_attr_escaped,
+            non_literal_raw_attr_escaped,
+            literal_raw_attr_whole_spliced,
+            local_raw_init_text_in_attr,
+            raw_raw_template_attr_located
         ]},
         {markerless_slots, [parallel], [
             markerless_stream_item_update_no_dangling_op,
@@ -2643,6 +2651,96 @@ helper_raw_attr_escaped(Config) when is_list(Config) ->
     {Ops1, _, _} = arizona_diff:diff(M:helper_raw_interp_attr(B1), S1, V1, #{h => true}),
     ?assertMatch(
         [[?OP_SET_ATTR, _, ~"title", #{~"raw" := ~"<b>&quot;&gt;&lt;s&gt;"}]], Ops1
+    ).
+
+%% A raw not literal at the attribute site -- in a conditional, a block, a prop read
+%% by a child, a helper's under az-nodiff or in an `?each` item -- is escaped on SSR
+%% and the live render and sent as a bare string, like content escapes one; a `?json`
+%% prop gets the bare string too.
+non_literal_raw_attr_escaped(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    Esc = ~"title=\"&lt;b&gt;\"",
+    [
+        begin
+            {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B0))),
+            ?assertNotEqual(nomatch, binary:match(SSR, Want)),
+            ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), Want)),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(B1), S0, V0, Changed),
+            ok = Check(Ops)
+        end
+     || {Fun, B0, B1, Changed, Want, Check} <- [
+            {cond_raw_attr, #{on => true, h => ~"<b>"}, #{on => true, h => ~"<s>"}, #{h => true},
+                Esc, fun bare_title_op/1},
+            {block_raw_attr, #{h => ~"<b>"}, #{h => ~"<s>"}, #{h => true}, Esc,
+                fun bare_title_op/1},
+            {prop_raw_attr, #{h => ~"<b>"}, #{h => ~"<s>"}, #{h => true}, Esc, fun bare_title_op/1},
+            {nodiff_helper_raw_attr, #{h => ~"<b>"}, #{h => ~"<s>"}, #{h => true}, Esc, fun(Ops) ->
+                [] = Ops,
+                ok
+            end},
+            {each_helper_raw_attr, #{items => [~"<b>"]}, #{items => [~"<s>"]}, #{items => true},
+                Esc, fun each_title_op/1},
+            {json_helper_raw_attr, #{h => ~"<b>"}, #{h => ~"<s>"}, #{h => true},
+                ~"\"label\":\"<b>\"", fun([[?OP_SET_ATTR, _, ~"label", ~"<s>"]]) -> ok end}
+        ]
+    ].
+
+bare_title_op([[?OP_SET_ATTR, _, ~"title", ~"<s>"]]) -> ok.
+
+each_title_op([[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, ItemOps]]]]) ->
+    bare_title_op(ItemOps).
+
+%% A whole literal `?raw` attribute value is still trusted markup: spliced on SSR and
+%% the live render, sent raw-tagged on the diff.
+literal_raw_attr_whole_spliced(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B0 = #{h => ~"<b>"},
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(M:literal_raw_attr_whole(B0))),
+    ?assertNotEqual(nomatch, binary:match(SSR, ~"title=\"<b>\"")),
+    {HTML, S0, V0} = arizona_render:render(M:literal_raw_attr_whole(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"title=\"<b>\"")),
+    {Ops, _, _} = arizona_diff:diff(M:literal_raw_attr_whole(#{h => ~"<s>"}), S0, V0, #{h => true}),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"title", #{~"raw" := ~"<s>"}]], Ops).
+
+%% A `?local` init is the client's value, which it sets as text (`setAttribute`): in
+%% an attribute a raw init is escaped like one; in content it is still spliced.
+local_raw_init_text_in_attr(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{h => ~"<b>"},
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B))),
+            {HTML, _, _} = arizona_render:render(M:Fun(B), #{}),
+            ?assertNotEqual(nomatch, binary:match(SSR, Want)),
+            ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), Want))
+        end
+     || {Fun, Want} <- [
+            {local_raw_attr, ~"title=\"&lt;b&gt;\""},
+            {local_raw_content, ~"--><b><!--/az-->"}
+        ]
+    ].
+
+%% A literal `?raw` around a helper's raw around a template, in an attribute value,
+%% is refused inside the attribute's evaluation: located on every path, though as
+%% `bad_template_value` (the template sits one raw deeper than the check).
+raw_raw_template_attr_located(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, h => ~"a"},
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        catch_error(fun() -> arizona_render:render_to_iolist(M:raw_raw_template_attr(B)) end)
+    ),
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        catch_error(fun() -> arizona_render:render(M:raw_raw_template_attr(B), #{}) end)
+    ),
+    {_, S0, V0} = arizona_render:render(M:raw_raw_template_attr(B#{wrap => false}), #{}),
+    ?assertMatch(
+        {arizona_loc, {M, _}, {bad_template_value, #{s := _}}},
+        catch_error(fun() ->
+            arizona_diff:diff(M:raw_raw_template_attr(B), S0, V0, #{wrap => true})
+        end)
     ).
 
 raw_items() ->

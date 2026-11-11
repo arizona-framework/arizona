@@ -82,6 +82,16 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([helper_raw_attr_value/1]).
 -export([helper_raw_interp_attr/1]).
 -export([helper_raw_template_interp_attr/1]).
+-export([cond_raw_attr/1]).
+-export([block_raw_attr/1]).
+-export([prop_raw_attr/1]).
+-export([nodiff_helper_raw_attr/1]).
+-export([each_helper_raw_attr/1]).
+-export([json_helper_raw_attr/1]).
+-export([literal_raw_attr_whole/1]).
+-export([local_raw_attr/1]).
+-export([local_raw_content/1]).
+-export([raw_raw_template_attr/1]).
 -export([attr_name_swap/1]).
 -export([event_attr_name_swap/1]).
 -export([json_attr_name_swap/1]).
@@ -733,6 +743,74 @@ helper_raw_template_interp_attr(Bindings) ->
 -spec helper_raw_interp_attr(az:bindings()) -> az:template().
 helper_raw_interp_attr(Bindings) ->
     ?html({span, [{title, [?raw(~"<b>"), wrap_raw(?get(h))]}], []}).
+
+%% A `?raw` that is not literal at the attribute site -- in a conditional, a block, or
+%% handed down as a prop -- is a runtime raw, escaped like a helper's.
+-spec cond_raw_attr(az:bindings()) -> az:template().
+cond_raw_attr(Bindings) ->
+    ?html(
+        {span,
+            [
+                {title,
+                    case ?get(on) of
+                        true -> ?raw(?get(h));
+                        false -> ~""
+                    end}
+            ],
+            []}
+    ).
+
+-spec block_raw_attr(az:bindings()) -> az:template().
+block_raw_attr(Bindings) ->
+    ?html(
+        {span,
+            [
+                {title, begin
+                    ?raw(?get(h))
+                end}
+            ],
+            []}
+    ).
+
+-spec prop_raw_attr(az:bindings()) -> az:template().
+prop_raw_attr(Bindings) ->
+    ?html({'div', [], [?stateless(fun titled/1, #{t => ?raw(?get(h))})]}).
+
+titled(Bindings) ->
+    ?html({span, [{title, ?get(t)}], []}).
+
+%% A helper's raw in an attribute under an az-nodiff root and in an `?each` item.
+-spec nodiff_helper_raw_attr(az:bindings()) -> az:template().
+nodiff_helper_raw_attr(Bindings) ->
+    ?html({span, ['az-nodiff', {title, wrap_raw(?get(h))}], []}).
+
+-spec each_helper_raw_attr(az:bindings()) -> az:template().
+each_helper_raw_attr(Bindings) ->
+    ?html({ul, [], [?each(fun(H) -> {li, [{title, wrap_raw(H)}], []} end, ?get(items))]}).
+
+%% A helper's raw in a `?json` prop.
+-spec json_helper_raw_attr(az:bindings()) -> az:template().
+json_helper_raw_attr(Bindings) ->
+    ?json({'Text', [{label, wrap_raw(?get(h))}], []}).
+
+%% A whole literal `?raw` attribute value: still trusted markup.
+-spec literal_raw_attr_whole(az:bindings()) -> az:template().
+literal_raw_attr_whole(Bindings) ->
+    ?html({span, [{title, ?raw(?get(h))}], []}).
+
+%% A `?local` init is the client's value: text in an attribute, spliced in content.
+-spec local_raw_attr(az:bindings()) -> az:template().
+local_raw_attr(Bindings) ->
+    ?html({span, [{title, ?local(~"k", ?raw(?get(h)))}], []}).
+
+-spec local_raw_content(az:bindings()) -> az:template().
+local_raw_content(Bindings) ->
+    ?html({span, [], [?local(~"k", ?raw(?get(h)))]}).
+
+%% A literal `?raw` around a helper raw around a template, in an attribute value.
+-spec raw_raw_template_attr(az:bindings()) -> az:template().
+raw_raw_template_attr(Bindings) ->
+    ?html({span, [{title, ?raw(maybe_raw_template(?get(wrap), ?get(h)))}], []}).
 
 %% Two branches whose only difference is the NAME of a dynamic attribute: switching
 %% `mode` must replace the branch, not patch the shared value under the new name and
