@@ -379,6 +379,11 @@ function armPendingTransition(t) {
 /** @type {Array<() => void>|null} */
 let _heldFrames = null;
 
+// Bumped by `disconnect()`. A held frame can tear the connection down while the
+// held frames are being applied (an effect whose listener reconnects), and the
+// frames after it belong to the torn-down connection.
+let _frameGen = 0;
+
 /**
  * Apply a server frame in arrival order, wrapped in a view transition when
  * `transition` is set.
@@ -404,6 +409,7 @@ function applyFrame(apply, transition) {
         // error is rethrown after the rest have run.
         /** @type {unknown[]} */
         const errors = [];
+        const gen = _frameGen;
         try {
             apply();
         } catch (err) {
@@ -411,6 +417,7 @@ function applyFrame(apply, transition) {
         }
         _heldFrames = null;
         for (const f of held) {
+            if (_frameGen !== gen) break;
             try {
                 f();
             } catch (err) {
@@ -1467,6 +1474,7 @@ export function connect(endpoint, params = {}) {
         _unloadingToOtherPage = false;
         armPendingTransition(null);
         _heldFrames = null;
+        _frameGen++;
         _navRefs.clear();
         _navAwaitResync = false;
         _connectQs = '';

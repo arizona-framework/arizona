@@ -5,6 +5,7 @@ import { connect, executeJS, OP } from './arizona.js';
 const JS_PUSH_EVENT = 0;
 const JS_TOGGLE = 1;
 const JS_ADD_CLASS = 4;
+const JS_DISPATCH_EVENT = 9;
 const JS_NAVIGATE = 10;
 const JS_PATCH = 24;
 const JS_SET_TITLE = 14;
@@ -769,5 +770,42 @@ describe('view transitions -- frame order', () => {
         expect(document.querySelector('[az="0"]').innerHTML).toBe('x');
         expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
         expect(document.querySelector('[az="2"]').innerHTML).toBe('new');
+    });
+
+    // A held frame can tear the connection down itself (an effect whose listener
+    // reconnects); the frames held after it belong to the torn-down connection.
+    it('a disconnect while held frames apply drops the ones after it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        const reconnect = () => {
+            _mock.restore();
+            _mock = setupMockWorker();
+        };
+        document.addEventListener('reconnect-now', reconnect, { once: true });
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'old']], null, wrappedEvent('a'));
+        _mock.simulateMessage(null, [[JS_DISPATCH_EVENT, 'reconnect-now']]);
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'old-after-disconnect']]);
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('old');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
+    });
+
+    it('a disconnect by the deferred frame drops the frames held behind it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        const reconnect = () => {
+            _mock.restore();
+            _mock = setupMockWorker();
+        };
+        document.addEventListener('reconnect-now', reconnect, { once: true });
+        _mock.simulateMessage(
+            [[OP.TEXT, 'page:0', 'old']],
+            [[JS_DISPATCH_EVENT, 'reconnect-now']],
+            wrappedEvent('a'),
+        );
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'old-after-disconnect']]);
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('old');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
     });
 });
