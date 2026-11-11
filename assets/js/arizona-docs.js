@@ -13,12 +13,13 @@ import { destroyHooks } from './arizona-hooks.js';
 /** @type {Map<string, Document>} */
 export const _viewDocs = new Map();
 
-// The PiP window and inline placeholder per popped-out view, so an op batch
-// that destroys the placeholder (a navigate's OP_REPLACE, a parent re-render, a
-// removal) can close the now-orphaned window instead of leaving it floating
-// over dead server state. Entries live and die with `_viewDocs` (set in
+// The PiP window and inline placeholder per popped-out view, keyed by the id of
+// the view the window shows, so each op batch can bring the window in line with
+// what it did (`reconcilePipWindows`). An entry is mutable: a navigate inside
+// the window re-keys it. Entries live and die with `_viewDocs` (set in
 // requestPip, removed by the window's pagehide handler).
-/** @type {Map<string, {win: Window, placeholder: Comment}>} */
+/** @typedef {{id: string, win: Window, placeholder: Comment}} PipEntry */
+/** @type {Map<string, PipEntry>} */
 export const _pipWindows = new Map();
 
 /**
@@ -38,22 +39,42 @@ export function closeAllPip() {
 }
 
 /**
- * Close any popped-out (PiP) window whose inline placeholder is no longer in
- * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page, a
- * parent re-render or removal took it), so the floating view shows dead server
- * state. Closing fires the window's pagehide handler, which discards the stale
- * view and unregisters the maps. Same reconciliation `disconnect` performs,
- * driven here by each op batch.
+ * The views a PiP document holds: the `az-view` elements of its body, not
+ * whatever else a hook may have put there.
+ * @param {Document} doc
+ * @returns {Element[]}
  */
-export function closeOrphanedPipWindows() {
+function viewsIn(doc) {
+    return Array.from(doc.body.children).filter((e) => e.hasAttribute('az-view'));
+}
+
+/**
+ * Bring each popped-out (PiP) window in line with the op batch just applied:
+ * - A replace in the window under a new id (a navigate of a popped-out root)
+ *   re-keys it, so `exit_pip`/`request_pip` from the new page name it.
+ * - A placeholder the batch took (a navigate swapped the page, a parent
+ *   re-render or removal took it) means the floating view shows dead server
+ *   state, so the window closes; its pagehide handler discards the stale view.
+ */
+export function reconcilePipWindows() {
     if (_pipWindows.size === 0) return;
-    for (const pip of [..._pipWindows.values()]) {
-        if (!pip.placeholder.isConnected) {
-            try {
-                pip.win.close();
-            } catch {
-                /* window already gone */
-            }
+    for (const entry of [..._pipWindows.values()]) {
+        const doc = entry.win.document;
+        if (entry.placeholder.isConnected) {
+            if (doc.getElementById(entry.id)) continue;
+            const id = viewsIn(doc)[0]?.id;
+            if (!id) continue;
+            _viewDocs.delete(entry.id);
+            _pipWindows.delete(entry.id);
+            entry.id = id;
+            _viewDocs.set(id, doc);
+            _pipWindows.set(id, entry);
+            continue;
+        }
+        try {
+            entry.win.close();
+        } catch {
+            /* window already gone */
         }
     }
 }
@@ -151,7 +172,9 @@ export async function requestPip(viewId, opts = {}) {
     copyStyles(document, pip.document);
     pip.document.body.append(view);
     _viewDocs.set(viewId, pip.document);
-    _pipWindows.set(viewId, { win: pip, placeholder });
+    /** @type {PipEntry} */
+    const entry = { id: viewId, win: pip, placeholder };
+    _pipWindows.set(viewId, entry);
 
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
@@ -161,27 +184,25 @@ export async function requestPip(viewId, opts = {}) {
         'pagehide',
         () => {
             controller.abort();
-            _viewDocs.delete(viewId);
-            _pipWindows.delete(viewId);
+            _viewDocs.delete(entry.id);
+            _pipWindows.delete(entry.id);
             _eventDocs.delete(pip.document);
             _passiveBound.delete(pip.document);
             // The views the window holds now, not the element moved out: a replace
             // there swaps it for a fresh one, under a new id when it navigates a
             // popped-out root to another page.
-            const current = Array.from(pip.document.body.children).filter((e) =>
-                e.hasAttribute('az-view'),
-            );
+            const current = viewsIn(pip.document);
             // isConnected, not parentNode: a replaced (navigate) outgoing
             // subtree is detached wholesale, so the placeholder still HAS a
             // parent -- inside a dead tree.
-            if (placeholder.isConnected) {
-                placeholder.replaceWith(...current);
+            if (entry.placeholder.isConnected) {
+                entry.placeholder.replaceWith(...current);
             } else {
                 // The view's inline home was destroyed while it was popped out
-                // (a navigate swapped the page, a re-render or removal took it):
-                // the page has its own content there now, so discard the stale
-                // element -- appending it to the body would resurrect dead
-                // server state. Tear its hooks down like any removed subtree.
+                // (a navigate swapped the page, a removal took it): the page has
+                // its own content there now, so discard the stale element --
+                // appending it to the body would resurrect dead server state.
+                // Tear its hooks down like any removed subtree.
                 for (const e of current) {
                     destroyHooks(e);
                     e.remove();

@@ -35,6 +35,23 @@ test('a navigate of a popped-out root comes back inline as the new page', async 
     await expect(page.locator('#pip_demo')).toHaveCount(0);
 });
 
+const exitPip = (page, id) =>
+    page.evaluate(async (id) => (await import('/priv/arizona.min.js')).exitPip(id), id);
+
+test('exit_pip from the page a navigate swapped into the window closes it', async ({ page }) => {
+    await page.goto('/pip');
+    await wsReady(page);
+    await page.locator('#pip_demo').getByRole('button', { name: 'Pop out', exact: true }).click();
+    await inPip(page, 'pip_demo');
+    await page.getByRole('link', { name: 'About' }).click();
+    await inPip(page, 'about-page');
+
+    await exitPip(page, 'about-page');
+
+    await expect.poll(() => pipOpen(page)).toBe(false);
+    await expect(page.locator('#about-page')).toBeVisible();
+});
+
 test('a parent re-render that brings a popped-out child back inline closes its window', async ({
     page,
 }) => {

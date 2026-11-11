@@ -203,6 +203,24 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(resolveEl('r2')?.ownerDocument).toBe(document);
     });
 
+    it('re-keys the window to the page a navigate swapped into it', async () => {
+        // exit_pip/request_pip from the new page name the new view id.
+        document.body.innerHTML = '<div id="r1" az-view az="0"><span>old</span></div>';
+        const pip = makePipWindow();
+        Object.defineProperty(pip.document, 'defaultView', { value: pip });
+        stubPip(pip);
+        await requestPip('r1');
+        applyOps([[OP.REPLACE, 'r1', '<div id="r2" az-view az="0"><span>new</span></div>']]);
+
+        expect(await requestPip('r2')).toBeNull();
+        expect(resolveEl('r2')?.ownerDocument).toBe(pip.document);
+        exitPip('r1');
+        expect(pip.closed).toBe(false);
+        exitPip('r2');
+        expect(pip.closed).toBe(true);
+        expect(document.querySelector('#r2 span')?.textContent).toBe('new');
+    });
+
     it("preserves a popped-out form's typed values across a reconnect", async () => {
         document.body.innerHTML =
             '<div id="v7" az-view az="0"><form id="pf"><input name="note" /></form></div>';
