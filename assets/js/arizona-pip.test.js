@@ -219,6 +219,13 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         exitPip('r2');
         expect(pip.closed).toBe(true);
         expect(document.querySelector('#r2 span')?.textContent).toBe('new');
+
+        // Closing forgot the window under the new id: the page pops out again.
+        const again = makePipWindow();
+        stubPip(again);
+        expect(await requestPip('r2')).toBe(again);
+        expect(again.document.getElementById('r2')).not.toBeNull();
+        again.fire('pagehide');
     });
 
     it("preserves a popped-out form's typed values across a reconnect", async () => {
