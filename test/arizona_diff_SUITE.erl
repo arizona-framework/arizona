@@ -111,6 +111,7 @@
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
     wire_helper_raw_value_escaped/1,
+    runtime_local_content_diffs_like_render/1,
     wire_raw_in_list_item/1,
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
@@ -279,6 +280,7 @@ groups() ->
             wire_get_value_raw,
             wire_raw_value_tagged_html,
             wire_helper_raw_value_escaped,
+            runtime_local_content_diffs_like_render,
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
@@ -2022,6 +2024,32 @@ wire_helper_raw_value_escaped(Config) when is_list(Config) ->
         M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}
     ),
     ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
+
+%% A `?local` that reaches a content slot at runtime renders its init on SSR and the
+%% live render -- escaped, or spliced for a `raw/1` init -- and a diff that lands on
+%% it ships the same: a bare string the client text-nodes, or the raw-tagged markup.
+runtime_local_content_diffs_like_render(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            B = #{kind => Kind, v => ~"<i>"},
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:runtime_local_content(B))),
+            {HTML, _, _} = arizona_render:render(M:runtime_local_content(B), #{}),
+            ?assertEqual(SSR, iolist_to_binary(HTML)),
+            ?assertNotEqual(nomatch, binary:match(SSR, Rendered)),
+            {_, S0, V0} = arizona_render:render(
+                M:runtime_local_content(#{kind => text, v => ~"a"}), #{}
+            ),
+            {Ops, _, _} = arizona_diff:diff(
+                M:runtime_local_content(B), S0, V0, #{kind => true, v => true}
+            ),
+            ?assertEqual({Kind, [[?OP_TEXT, ~"1S9L2GB-0", Wire]]}, {Kind, Ops})
+        end
+     || {Kind, Rendered, Wire} <- [
+            {local, ~"-->&lt;i&gt;<!--", ~"<i>"},
+            {raw_local, ~"--><i><!--", #{~"raw" => ~"<i>"}}
+        ]
+    ].
 
 %% The text/HTML distinction holds below the top level too: inside a plain-list item
 %% patch, a stream item patch and a same-statics branch, the `?get` value stays a bare
