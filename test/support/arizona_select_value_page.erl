@@ -3,7 +3,8 @@
 A live page whose selects take their choice from a `value`: written literally, from a
 list `?each`, from a stream `?each`, `multiple`, from a component, from a child
 view (`arizona_select_value_child`), from a `?local` under `multiple`, whole and
-interpolated, and from a `?local` whose initial is a binding. Buttons move the choice
+interpolated, and from a `?local` whose initial is a binding (an option added later
+leaves the user's pick there alone). Buttons move the choice
 and add an option to the child, so the e2e can check the page loads on the chosen
 option and every update follows.
 """.
@@ -96,6 +97,23 @@ render(Bindings) ->
             ]},
             {select, [{class, ~"local-bound"}, {value, ?local(bound, ?get(v))}], [
                 ?each(fun(O) -> {option, [{value, O}], [O]} end, ?get(opts))
+            ]},
+            {select,
+                [{class, ~"local-bound-many"}, multiple, {value, ?local(bound_many, ?get(vs))}], [
+                    ?each(fun(O) -> {option, [{value, O}], [O]} end, ?get(opts))
+                ]},
+            {select, [{class, ~"local-bound-stream"}, {value, ?local(bound_stream, ?get(v))}], [
+                ?each(
+                    fun(O, Key) ->
+                        {option, [{az_key, Key}, {value, arizona_template:get(id, O)}], [
+                            arizona_template:get(label, O)
+                        ]}
+                    end,
+                    ?get(items)
+                )
+            ]},
+            {button, [{class, ~"add-opt"}, {az_click, arizona_js:push_event(~"add_opt")}], [
+                ~"add option"
             ]}
         ]}
     ).
@@ -106,5 +124,13 @@ handle_event(~"pick", #{~"v" := V}, Bindings) ->
     {Bindings#{v => V}, #{}, []};
 handle_event(~"add_d", _Payload, Bindings) ->
     {Bindings#{child_opts => [~"a", ~"b", ~"c", ~"d"]}, #{}, []};
+handle_event(~"add_opt", _Payload, Bindings) ->
+    %% A new option the new values name, under selects whose value is a `?local`.
+    Items = arizona_stream:insert(maps:get(items, Bindings), #{id => ~"d", label => ~"D"}),
+    {
+        Bindings#{opts => [~"a", ~"b", ~"c", ~"d"], items => Items, v => ~"d", vs => [~"d"]},
+        #{},
+        []
+    };
 handle_event(~"pick_many", _Payload, Bindings) ->
     {Bindings#{vs => [~"b"]}, #{}, []}.

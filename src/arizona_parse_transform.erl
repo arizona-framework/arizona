@@ -192,8 +192,8 @@ render(Bindings) ->
 
 %% Wraps the `selected` test a choice under a chooser whose value is a `?local` gets
 %% (rewrite_choice/4): the selection is the client's, so the attribute compiles as a
-%% browser-owned slot (compile_dynamic_attr/5) -- rendered, never diffed. One left
-%% over is `undef` at render.
+%% browser-owned slot the page alone renders (compile_dynamic_attr/5) -- never diffed,
+%% and empty in every later render. One left over is `undef` at render.
 -define(CHOSEN_ONCE_MARK, '$arizona_chosen_once').
 
 %% Stands in for an az-nodiff element's fingerprint in its `az-nodiff` token call until the
@@ -5114,12 +5114,15 @@ compile_dynamic_attr(
     ElemAz,
     State0
 ) ->
-    %% A browser-owned slot (arizona_template:local/2) the client never reads by key:
-    %% the descriptor is built from the `?local` calls written in the template.
-    Once =
+    %% A browser-owned slot (arizona_template:local/2) the client never reads by key
+    %% (the descriptor is built from the `?local` calls written in the template), which
+    %% only the page renders (`ssr_only`, arizona_render): a later render or an inserted
+    %% choice leaves the selection to the client, which marks it from the value it owns.
+    Local =
         {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, local}}, [
             ast_binary(<<>>), Chosen
         ]},
+    Once = {map, L, Local, [{map_field_assoc, L, {atom, L, ssr_only}, {atom, L, true}}]},
     compile_local_attr(Backend, NameBin, Once, ElemAz, State0);
 compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     case attr_local_spec(ValueAST, anno(ValueAST)) of
@@ -7820,15 +7823,12 @@ collapse_ws(Text) ->
     iolist_to_binary(lists:join(~" ", Words)).
 
 %% The `selected` a choice gets. Under a `?local` value the selection is the client's:
-%% the page loads on the initial, and the server never moves it again, so a test it
-%% cannot decide here renders once (?CHOSEN_ONCE_MARK) instead of tracking the reads
-%% the initial makes.
-chosen_attr_ast(Value, #{local := Local} = Sel, L) ->
-    case chosen_ast(Value, Sel, L) of
-        {atom, _, _} = Folded -> Folded;
-        Chosen when Local -> chosen_once(Chosen);
-        Chosen -> Chosen
-    end.
+%% the page loads on the initial, and the server never marks a choice again, so the
+%% test, decided here or not, renders on the page alone (?CHOSEN_ONCE_MARK).
+chosen_attr_ast(Value, #{local := true} = Sel, L) ->
+    chosen_once(chosen_ast(Value, Sel, L));
+chosen_attr_ast(Value, Sel, L) ->
+    chosen_ast(Value, Sel, L).
 
 chosen_once(Chosen) ->
     L = anno(Chosen),

@@ -221,7 +221,9 @@ the value names it -- the value, or under `multiple` the JSON array of values th
 parts those parts stay picks around the local's own; the descriptor's `ap` for a select value holds
 them as lists, `[[before...], [after...]]`, joined into affixes without `multiple`) --
 and when the value itself changes (a `SET_ATTR`/`REM_ATTR` `value` on the select, a `?local` `set`)
-the live selection follows too, the user's pick included. It runs on every such select when the page
+the live selection follows too, the user's pick included. Under a `?local` value the server marks
+only the page, so an option a later batch inserts there arrives unmarked and this pass is the only
+one that marks it, from the value the client owns. It runs on every such select when the page
 starts (`connect` and the static `start`), on the select an op writes the value of, and after any
 batch in which an op, at any depth (an item or list patch's inner ops, a child view's batch inside
 an item), targeted a select/option/optgroup or carried markup holding one (`noteChoices`,

@@ -1109,10 +1109,14 @@ anything else one), or join them as affixes without `multiple`. `get` reads the 
 selection: under `multiple` the selected values but those a static part names, else the
 selected value with the affixes stripped.
 
-The options under such a select are marked from the initial where they render, but their
-`selected` compiles as a browser-owned slot (the same `az_local` map a `?local` attribute is,
-never re-evaluated or patched), since the selection is the client's: a server change of a
-binding the initial reads must not move it.
+The options under such a select are marked from the initial by the page alone: their
+`selected`, decided at compile time or not, compiles as a browser-owned slot (the `az_local`
+map a `?local` attribute is, never re-evaluated or patched) flagged `ssr_only`, which the SSR
+render renders and every live render (`render_dyn/2`, the wire payloads of `render_fp_val/2`)
+renders empty. The selection is the client's: a server change of a binding the initial reads
+must not move it, neither by a `selected` op nor by an option it inserts marked, which in a
+single select would take the user's pick. The client marks an inserted option from the value
+it owns (`applyChoosers` after the batch).
 
 Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
 op `?EFFECT_SET_LOCAL`):

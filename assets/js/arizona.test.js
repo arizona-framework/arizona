@@ -3871,6 +3871,46 @@ describe('?local -- a select value', () => {
         expect(sel.getAttribute('value')).toBe('[""]');
     });
 
+    // The server renders an option inserted under a `?local` value unmarked (only the
+    // page is marked); the client marks it from the value it owns, so a new option the
+    // server's binding names leaves the user's pick alone.
+    const streamSelect = (attrs) => {
+        setupView(
+            'v',
+            `<select az="0" az-local='${whole}' ${attrs}><!--az:0-->` +
+                '<option az-key="a">a</option><option az-key="c" selected>c</option>' +
+                '<option az-key="ac">ac</option><!--/az--></select>',
+        );
+        return /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+    };
+    const insert = (html) => applyOps([[OP.INSERT, 'v:0', 'aa', -1, html]]);
+
+    it('keeps the user pick of a single select across a server insert', () => {
+        const sel = streamSelect('value="c"');
+        sel.value = 'a';
+        insert('<option az-key="aa">aa</option>');
+        expect(sel.value).toBe('a');
+        expect(marked(sel)).toEqual(['c']);
+    });
+
+    it('keeps the user picks of a multiple select across a server insert', () => {
+        const sel = streamSelect(`multiple value='["c"]'`);
+        sel.options[1].selected = false;
+        sel.options[0].selected = true;
+        insert('<option az-key="aa">aa</option>');
+        expect(picked(sel)).toEqual(['a']);
+        expect(marked(sel)).toEqual(['c']);
+    });
+
+    // The value the client owns does name an inserted option: marked from it.
+    it('marks an inserted option the local value names', () => {
+        const sel = streamSelect(`multiple value='["c"]'`);
+        set('v', 'k', ['c', 'aa']);
+        insert('<option az-key="aa">aa</option>');
+        expect(marked(sel)).toEqual(['c', 'aa']);
+        expect(picked(sel)).toEqual(['c', 'aa']);
+    });
+
     // `get` reads the picks the local owns: the selected values but those a static part
     // names, the user's own picks included.
     it('reads a local beside static parts as the selected values it owns', () => {

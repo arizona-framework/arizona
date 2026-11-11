@@ -127,8 +127,10 @@ as its text, references and all. Under `multiple` each part of a literal list ho
 its own pick, compared alone.
 `multiple` counts as present whatever it holds but `false`, as the attribute renders. A `?local`
 value stays on the select for the client to move, and the page loads on its initial. The
-selection is the client's from then on: the options are marked from the initial where they render,
-never diffed, so a later change of a binding the initial reads ships no `selected` op. A whole
+selection is the client's from then on: only the page (the SSR render, static generation) marks
+the options, from the initial; a live render and an option the server adds later carry no
+`selected` (the client marks them from the value it owns), and nothing diffs, so a later change of
+a binding the initial reads neither ships a `selected` op nor marks a new option. A whole
 `?local` holds the value. In a list with static parts (`[~"user-", ?local(id, ~"1")]`) the list
 means what any select value's list means: without `multiple` one text, the parts the client-side
 affixes; under `multiple` a list of picks, each static part one and the local its own -- the

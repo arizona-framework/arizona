@@ -45,6 +45,7 @@ and the select keeps its value for the client to apply after.
     opaque_child_is_marked_in_its_own_slot/1,
     opaque_each_keeps_its_item_diff/1,
     local_value_marks_render_once/1,
+    local_value_marks_only_the_page/1,
     option_with_runtime_text_compiles/1,
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
@@ -113,7 +114,8 @@ groups() ->
             markup_text_tracks_what_its_slot_tracks,
             opaque_diff_ships_the_value,
             opaque_each_keeps_its_item_diff,
-            local_value_marks_render_once
+            local_value_marks_render_once,
+            local_value_marks_only_the_page
         ]},
         {compile, [parallel], [
             opaque_child_compiles,
@@ -259,7 +261,7 @@ static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     %% the component and the child view on `b`; the `?local` selects on their
     %% initials.
     ?assertEqual(
-        [~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b", ~"a", ~"c", ~"a", ~"c", ~"b"],
+        [~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b", ~"a", ~"c", ~"a", ~"c", ~"b", ~"a", ~"c", ~"b"],
         selected_values(HTML)
     ).
 
@@ -373,7 +375,7 @@ opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     %% Literal, list ?each, stream ?each, the multiple select, then the component
     %% and the child view, and the `?local` selects.
     ?assertEqual(
-        [~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c", ~"a", ~"c", ~"a", ~"c", ~"c"],
+        [~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c", ~"a", ~"c", ~"a", ~"c", ~"c", ~"a", ~"c", ~"c"],
         selected_values(HTML),
         HTML
     ).
@@ -1467,9 +1469,66 @@ local_value_marks_render_once(Config) when is_list(Config) ->
         ])
     ).
 
+%% Only the page marks the options a `?local` value names, from its initial. What the
+%% server renders later -- a live render, an option a list or stream `?each` inserts --
+%% carries no `selected` of its own: by then the selection is the client's, which
+%% marks a new option from the value it holds, so the binding the initial read cannot
+%% take the user's pick over.
+local_value_marks_only_the_page(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Multiple, Kind}}) ->
+            Mod = "sel_local_page_" ++ integer_to_list(N),
+            Value = "arizona_template:local(k, arizona_template:get(x, Bindings))",
+            M = compile_module(
+                raw_src(Mod, [Multiple, "{value, ", Value, "}"], page_options(Kind))
+            ),
+            B0 = #{x => ~"c", os => [~"a", ~"c", ~"ac"], s => page_stream([~"a", ~"c", ~"ac"])},
+            _ = ssr_picked([~"c"], M, B0),
+            {Live, Snap0, V0} = arizona_render:render(M:render(B0), #{}),
+            ?assertEqual([], selected_values(iolist_to_binary(Live)), {Mod, Live}),
+            B1 = B0#{
+                x => ~"aa",
+                os => [~"a", ~"c", ~"ac", ~"aa"],
+                s => arizona_stream:insert(maps:get(s, B0), ~"aa")
+            },
+            {Ops, _, _} = arizona_diff:diff(M:render(B1), Snap0, V0, #{
+                x => true, os => true, s => true
+            }),
+            ?assertMatch([_ | _], Ops, Mod),
+            ?assertEqual(nomatch, binary:match(term_text(Ops), ~"selected"), {Mod, Ops})
+        end,
+        lists:enumerate([
+            {Multiple, Kind}
+         || Kind <- [each_list, each_stream], Multiple <- ["", "multiple, "]
+        ])
+    ),
+    %% A mark the transform decides at compile time is the page's alone too.
+    Lit = compile_module(
+        raw_src(
+            "sel_local_page_lit",
+            "{value, arizona_template:local(k, ~\"c\")}",
+            local_options(literal)
+        )
+    ),
+    _ = ssr_picked([~"c"], Lit, #{}),
+    {LitLive, _, _} = arizona_render:render(Lit:render(#{}), #{}),
+    ?assertEqual([], selected_values(iolist_to_binary(LitLive)), LitLive).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+page_options(each_list) ->
+    "arizona_template:each(fun(O) -> {option, [], [O]} end, arizona_template:get(os, Bindings))";
+page_options(each_stream) ->
+    "arizona_template:each(fun(O, K) -> {option, [{az_key, K}], [O]} end, "
+    "arizona_template:get(s, Bindings))".
+
+page_stream(Items) ->
+    arizona_stream:new(fun(O) -> O end, Items).
+
+term_text(Term) ->
+    iolist_to_binary(io_lib:format("~0p", [Term])).
 
 once_options(literal) ->
     "{option, [], [~\"a\"]}, {option, [], [~\"c\"]}, {option, [], [~\"ac\"]}, "

@@ -125,4 +125,29 @@ test.describe('select value', () => {
         await expect(page.locator('#select-value .lit')).toHaveValue('c');
         await expect(bound).toHaveValue('a');
     });
+
+    // The options a server change adds under a `?local` value arrive unmarked: the
+    // client marks them from the value it owns, so one the server's new binding names
+    // leaves the user's picks alone, in a single and a multiple select, from a list and
+    // a stream `?each`.
+    test('an option the server adds never takes the pick of a local value', async ({ page }) => {
+        await page.goto('/select-value');
+        await wsReady(page);
+        const bound = page.locator('#select-value .local-bound');
+        const stream = page.locator('#select-value .local-bound-stream');
+        const many = page.locator('#select-value .local-bound-many');
+        await expect(bound).toHaveValue('b');
+        await bound.selectOption('c');
+        await stream.selectOption('c');
+        await many.selectOption(['b']);
+        await expectStaysConnected(page, () => page.locator('#select-value .add-opt').click());
+        await expect(page.locator('#select-value .list option[value="d"]')).toHaveCount(1);
+        await expect(stream.locator('option[value="d"]')).toHaveCount(1);
+        await expect(many.locator('option[value="d"]')).toHaveCount(1);
+        await expect(bound).toHaveValue('c');
+        await expect(stream).toHaveValue('c');
+        expect(await many.evaluate((s) => [...s.selectedOptions].map((o) => o.value))).toEqual([
+            'b',
+        ]);
+    });
 });
