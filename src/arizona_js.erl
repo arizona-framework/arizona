@@ -263,7 +263,9 @@ password field's `type` between `password` and `text`.
 
 Under an `az-*` name both values may be commands, as in `set_attr/3`, which
 proves the name; binaries there are data and prove nothing, and so does the
-presence toggle of `toggle_attr/2`.
+presence toggle of `toggle_attr/2`. Commands match the current value by what
+they run, not by their text: a command and a list of just it (`Cmd`, `[Cmd]`,
+`[Cmd, []]`) are the same value.
 """.
 -spec toggle_attr(Selector, Attr, ValueA, ValueB) -> arizona_effect:cmd() when
     Selector :: binary(),

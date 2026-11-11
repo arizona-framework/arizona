@@ -342,13 +342,26 @@ function withQueryAll(sel, fn) {
 }
 
 /**
- * JSON text in JSON.stringify's form, or null when it is not JSON.
+ * Command JSON in one text form, or null when it is not a command array: a
+ * single command and a list holding only it run the same (runCommands), so both
+ * become the list, without the empty items a list may carry.
+ * @param {*} value
+ * @returns {string|null}
+ */
+function canonicalCmds(value) {
+    if (!Array.isArray(value)) return null;
+    const list = value.length === 0 || Array.isArray(value[0]) ? value : [value];
+    return JSON.stringify(list.filter((c) => !Array.isArray(c) || c.length > 0));
+}
+
+/**
+ * Attribute text as `canonicalCmds` writes it, or null when it is not JSON.
  * @param {string} text
  * @returns {string|null}
  */
-function reserialize(text) {
+function canonicalCmdsText(text) {
     try {
-        return JSON.stringify(JSON.parse(text));
+        return canonicalCmds(JSON.parse(text));
     } catch {
         return null;
     }
@@ -535,16 +548,18 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // Commands compare re-serialized on both sides: the server renders
             // them with Erlang's encoder (`2.0`, binary-sorted keys), whose text
             // JSON.stringify need not reproduce, so raw text may never match.
+            // Both are taken as a list, since `Cmd` and `[Cmd]` are written in
+            // their own shapes and run the same.
             const cmds = Array.isArray(cmd[3]);
             noteAzAttr(cmd[2], cmds);
-            const a = cmds ? JSON.stringify(cmd[3]) : cmd[3];
+            const a = cmds ? canonicalCmds(cmd[3]) : cmd[3];
             withQueryAll(cmd[1], (t) => {
                 if (cmd.length === 3) {
                     if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
                     else applySetAttrOp(t, cmd[2], '');
                 } else {
                     const cur = t.getAttribute(cmd[2]);
-                    const isA = cmds ? cur !== null && reserialize(cur) === a : cur === a;
+                    const isA = cmds ? cur !== null && canonicalCmdsText(cur) === a : cur === a;
                     applySetAttrOp(t, cmd[2], isA ? cmd[4] : cmd[3]);
                 }
             });

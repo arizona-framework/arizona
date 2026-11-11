@@ -1883,6 +1883,24 @@ describe('applyEffects -- toggle_attr', () => {
         expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(b);
     });
 
+    // A command and a list holding only it run the same, and the server writes
+    // whichever shape the template or the toggle argument was written in
+    // (`Cmd` is `[0,"a"]`, `[Cmd]` and `[Cmd, []]` are `[[0,"a"]]`).
+    it('commands: a single command matches a list of just it, in either direction', () => {
+        document.body.innerHTML = `<input id="f" az-select='[[0,"a"]]' />`;
+        applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([0, 'b']);
+        field().setAttribute('az-select', '[0,"a"]');
+        applyEffects([[21, '#f', 'az-select', [[0, 'a']], [[0, 'b']]]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([[0, 'b']]);
+    });
+
+    it('commands: a list of several commands never matches its first alone', () => {
+        document.body.innerHTML = `<input id="f" az-select='[[0,"a"],[1,"#m"]]' />`;
+        applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([0, 'a']);
+    });
+
     it('commands: a current value that is not JSON resolves to A', () => {
         document.body.innerHTML = `<input id="f" az-select="not json" />`;
         applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
