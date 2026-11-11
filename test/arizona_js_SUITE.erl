@@ -24,6 +24,8 @@
 -export([attr_refuses_an_improper_list_value/1]).
 -export([set_attr_refuses_a_value_with_no_command/1]).
 -export([toggle_attr_refuses_a_value_with_no_command/1]).
+-export([attr_refuses_a_name_that_is_not_a_binary/1]).
+-export([attr_refuses_a_selector_that_is_not_a_binary/1]).
 
 all() ->
     [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
@@ -53,7 +55,9 @@ groups() ->
             attr_errors_name_the_public_function,
             attr_refuses_an_improper_list_value,
             set_attr_refuses_a_value_with_no_command,
-            toggle_attr_refuses_a_value_with_no_command
+            toggle_attr_refuses_a_value_with_no_command,
+            attr_refuses_a_name_that_is_not_a_binary,
+            attr_refuses_a_selector_that_is_not_a_binary
         ]}
     ].
 
@@ -300,6 +304,38 @@ toggle_attr_refuses_a_value_with_no_command(Config) when is_list(Config) ->
      || Attr <- [~"class", ~"az-click"], {A, B} <- [{"", ""}, {[], Cmd}, {Cmd, [[]]}]
     ].
 
+%% The name is what the client writes and, under az-*, proves, so an atom or a
+%% charlist is refused whatever the value, binary values included.
+attr_refuses_a_name_that_is_not_a_binary(Config) when is_list(Config) ->
+    Cmd = arizona_js:push_event(~"a"),
+    [
+        assert_target_error(Name, ~"an attribute name must be a binary", Fun)
+     || Attr <- [title, "title", 'az-click'],
+        {Name, Fun} <- [
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", Attr, ~"v") end},
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", Attr, Cmd) end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(~"#x", Attr, ~"a", ~"b") end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(~"#x", Attr, Cmd, Cmd) end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(~"#x", Attr) end},
+            {remove_attr, fun() -> arizona_js:remove_attr(~"#x", Attr) end}
+        ]
+    ].
+
+attr_refuses_a_selector_that_is_not_a_binary(Config) when is_list(Config) ->
+    Cmd = arizona_js:push_event(~"a"),
+    [
+        assert_target_error(Name, ~"a selector must be a binary", Fun)
+     || Sel <- [x, "#x", 1],
+        {Name, Fun} <- [
+            {set_attr, fun() -> arizona_js:set_attr(Sel, ~"title", ~"v") end},
+            {set_attr, fun() -> arizona_js:set_attr(Sel, ~"az-click", Cmd) end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(Sel, ~"title", ~"a", ~"b") end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(Sel, ~"az-click", Cmd, Cmd) end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(Sel, ~"hidden") end},
+            {remove_attr, fun() -> arizona_js:remove_attr(Sel, ~"hidden") end}
+        ]
+    ].
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -334,3 +370,7 @@ top_frame(Fun) ->
 assert_no_command_error(Fun) ->
     assert_value_error(Fun),
     ?assertNotEqual(nomatch, string:find(formatted_error(Fun), ~"holds no command")).
+
+assert_target_error(Name, Expected, Fun) ->
+    ?assertNotEqual(nomatch, string:find(formatted_error(Fun), Expected)),
+    ?assertMatch({arizona_js, Name, _, _}, top_frame(Fun)).

@@ -234,9 +234,13 @@ nothing: on a page that does not otherwise use the name,
     Selector :: binary(),
     Attr :: binary(),
     Value :: binary() | arizona_effect:cmd() | arizona_effect:cmds().
+set_attr(Sel, Attr, Val) when not is_binary(Sel); not is_binary(Attr) ->
+    erlang:error(target_error(set_attr, Sel, Attr), [Sel, Attr, Val], [
+        {error_info, #{module => ?MODULE}}
+    ]);
 set_attr(Sel, Attr, Val) when is_binary(Val) ->
     {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]};
-set_attr(Sel, Attr, Val) when is_binary(Attr) ->
+set_attr(Sel, Attr, Val) ->
     case {value_kind(Val), Attr} of
         {command, <<"az-", _/binary>>} ->
             {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Val)]};
@@ -258,7 +262,12 @@ set_attr(Sel, Attr, Val) when is_binary(Attr) ->
 -spec remove_attr(Selector, Attr) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary().
-remove_attr(Sel, Attr) -> {arizona_effect, [?EFFECT_REMOVE_ATTR, Sel, Attr]}.
+remove_attr(Sel, Attr) when is_binary(Sel), is_binary(Attr) ->
+    {arizona_effect, [?EFFECT_REMOVE_ATTR, Sel, Attr]};
+remove_attr(Sel, Attr) ->
+    erlang:error(target_error(remove_attr, Sel, Attr), [Sel, Attr], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Toggles the presence of a bare boolean attribute on all elements matching the
@@ -268,7 +277,12 @@ selector: removes it if present, otherwise sets it (e.g. `disabled`, `readonly`,
 -spec toggle_attr(Selector, Attr) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary().
-toggle_attr(Sel, Attr) -> {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr]}.
+toggle_attr(Sel, Attr) when is_binary(Sel), is_binary(Attr) ->
+    {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr]};
+toggle_attr(Sel, Attr) ->
+    erlang:error(target_error(toggle_attr, Sel, Attr), [Sel, Attr], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Toggles an attribute between two values on all elements matching the selector: sets
@@ -287,9 +301,13 @@ they run, not by their text: a command and a list of just it (`Cmd`, `[Cmd]`,
     Attr :: binary(),
     ValueA :: binary() | arizona_effect:cmd() | arizona_effect:cmds(),
     ValueB :: binary() | arizona_effect:cmd() | arizona_effect:cmds().
+toggle_attr(Sel, Attr, A, B) when not is_binary(Sel); not is_binary(Attr) ->
+    erlang:error(target_error(toggle_attr, Sel, Attr), [Sel, Attr, A, B], [
+        {error_info, #{module => ?MODULE}}
+    ]);
 toggle_attr(Sel, Attr, A, B) when is_binary(A), is_binary(B) ->
     {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr, A, B]};
-toggle_attr(Sel, Attr, A, B) when is_binary(Attr) ->
+toggle_attr(Sel, Attr, A, B) ->
     Reason =
         case {value_kind(A), value_kind(B), Attr} of
             {command, command, <<"az-", _/binary>>} ->
@@ -688,6 +706,10 @@ format_error({not_a_value, Fun, Attr, Value}, _Stacktrace) ->
             [Fun, Value, Attr, Hint]
         )
     };
+format_error({not_a_selector, Fun, Sel}, _Stacktrace) ->
+    #{general => io_lib:format("~ts: a selector must be a binary, got ~tp", [Fun, Sel])};
+format_error({not_a_name, Fun, Attr}, _Stacktrace) ->
+    #{general => io_lib:format("~ts: an attribute name must be a binary, got ~tp", [Fun, Attr])};
 format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
     #{
         general => io_lib:format(
@@ -700,6 +722,14 @@ format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+-spec target_error(Fun, Selector, Attr) -> Reason when
+    Fun :: atom(),
+    Selector :: term(),
+    Attr :: term(),
+    Reason :: {not_a_selector, atom(), term()} | {not_a_name, atom(), term()}.
+target_error(Fun, Sel, _Attr) when not is_binary(Sel) -> {not_a_selector, Fun, Sel};
+target_error(Fun, _Sel, Attr) -> {not_a_name, Fun, Attr}.
 
 %% A command is a command or a command list as arizona_effect flattens it: lists
 %% nested to any depth whose leaves are commands, `[]` none. A list flattening to
