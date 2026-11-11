@@ -797,8 +797,13 @@ does a raw in a literal attribute `?raw`).
 Only a `raw/1` literal at the template site opts out. Text in a raw that arrives
 any other way as the whole value -- from a helper, a `case`/`begin`, a prop a child
 reads -- is escaped, in content and attribute values alike; one inside a list value
-raises `bad_template_value`. A `?local` attribute init is always text, as the client
-sets it; a content `?local` raw init is spliced.
+raises `bad_template_value`. A single-clause local helper whose body is a literal
+list holding a `?raw` is inlined at the call site, so that `?raw` is literal there
+and spliced, in content and attribute values alike; the same body behind a
+multi-clause or remote helper is a runtime list value and raises. A helper whose
+whole body is `?raw(X)` is a scalar helper, never inlined, so text in its raw is
+escaped. A `?local` attribute init is always text, as the client sets it; a content
+`?local` raw init is spliced.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().

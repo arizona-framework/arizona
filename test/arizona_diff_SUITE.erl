@@ -139,6 +139,7 @@
     literal_raw_attr_whole_spliced/1,
     local_raw_init_text_in_attr/1,
     raw_raw_template_attr_located/1,
+    inlined_helper_raw_is_literal/1,
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
@@ -328,7 +329,8 @@ groups() ->
             non_literal_raw_attr_escaped,
             literal_raw_attr_whole_spliced,
             local_raw_init_text_in_attr,
-            raw_raw_template_attr_located
+            raw_raw_template_attr_located,
+            inlined_helper_raw_is_literal
         ]},
         {markerless_slots, [parallel], [
             markerless_stream_item_update_no_dangling_op,
@@ -2741,6 +2743,46 @@ raw_raw_template_attr_located(Config) when is_list(Config) ->
         catch_error(fun() ->
             arizona_diff:diff(M:raw_raw_template_attr(B), S0, V0, #{wrap => true})
         end)
+    ).
+
+%% A single-clause local helper is inlined, so the `?raw` in its list body is literal
+%% at the site: spliced and raw-tagged, in an attribute and in content alike. The same
+%% body behind a multi-clause helper is a list value holding a raw, refused; a helper
+%% whose whole body is a raw is not inlined, so it is escaped (helper_raw_attr_value
+%% and helper_raw cover that in an attribute and content).
+inlined_helper_raw_is_literal(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B0 = #{h => ~"<b>"},
+    B1 = #{h => ~"<s>"},
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B0))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+            ?assertNotEqual(nomatch, binary:match(SSR, Want)),
+            ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), Want)),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(B1), S0, V0, #{h => true}),
+            ?assertMatch([[_, _ | _]], Ops),
+            [Op] = Ops,
+            ?assertMatch(#{~"raw" := Raw}, lists:last(Op))
+        end
+     || {Fun, Want, Raw} <- [
+            {inlined_raw_list_attr, ~"title=\"a<b>\"", ~"a<s>"},
+            {inlined_raw_list_content, ~"--><b><!--/az-->", ~"<s>"}
+        ]
+    ],
+    [
+        ?assertMatch(
+            {arizona_loc, {M, _}, {bad_template_value, [~"a", {arizona_raw, ~"<b>"}]}},
+            catch_error(fun() -> arizona_render:render_to_iolist(M:Fun(B0)) end)
+        )
+     || Fun <- [multi_raw_list_attr, multi_raw_list_content]
+    ],
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            iolist_to_binary(arizona_render:render_to_iolist(M:whole_raw_helper_content(B0))),
+            ~"&lt;b&gt;"
+        )
     ).
 
 raw_items() ->

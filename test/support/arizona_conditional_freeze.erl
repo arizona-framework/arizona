@@ -92,6 +92,11 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([local_raw_attr/1]).
 -export([local_raw_content/1]).
 -export([raw_raw_template_attr/1]).
+-export([inlined_raw_list_attr/1]).
+-export([inlined_raw_list_content/1]).
+-export([multi_raw_list_attr/1]).
+-export([multi_raw_list_content/1]).
+-export([whole_raw_helper_content/1]).
 -export([attr_name_swap/1]).
 -export([event_attr_name_swap/1]).
 -export([json_attr_name_swap/1]).
@@ -811,6 +816,35 @@ local_raw_content(Bindings) ->
 -spec raw_raw_template_attr(az:bindings()) -> az:template().
 raw_raw_template_attr(Bindings) ->
     ?html({span, [{title, ?raw(maybe_raw_template(?get(wrap), ?get(h)))}], []}).
+
+%% A single-clause local helper is inlined, so the `?raw` in its list body is literal
+%% at the template site; a multi-clause one is a runtime call whose list value holds a
+%% raw tuple, refused. A helper whose whole body is a raw is not inlined (a scalar
+%% helper) and its raw is escaped.
+-spec inlined_raw_list_attr(az:bindings()) -> az:template().
+inlined_raw_list_attr(Bindings) ->
+    ?html({span, [{title, raw_list(?get(h))}], []}).
+
+-spec inlined_raw_list_content(az:bindings()) -> az:template().
+inlined_raw_list_content(Bindings) ->
+    ?html({p, [], [raw_list(?get(h))]}).
+
+-spec multi_raw_list_attr(az:bindings()) -> az:template().
+multi_raw_list_attr(Bindings) ->
+    ?html({span, [{title, raw_list_multi(?get(h))}], []}).
+
+-spec multi_raw_list_content(az:bindings()) -> az:template().
+multi_raw_list_content(Bindings) ->
+    ?html({p, [], [raw_list_multi(?get(h))]}).
+
+-spec whole_raw_helper_content(az:bindings()) -> az:template().
+whole_raw_helper_content(Bindings) ->
+    ?html({p, [], [wrap_raw(?get(h))]}).
+
+raw_list(H) -> [~"a", ?raw(H)].
+
+raw_list_multi(H) when is_binary(H) -> [~"a", ?raw(H)];
+raw_list_multi(H) -> H.
 
 %% Two branches whose only difference is the NAME of a dynamic attribute: switching
 %% `mode` must replace the branch, not patch the shared value under the new name and
