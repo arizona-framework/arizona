@@ -283,7 +283,10 @@ time when it holds no markup syntax. Text holding a value compares `arizona_temp
 of the children, so it tracks and diffs like the value case; a value there that renders markup (a
 template, a `?stateless` component) is rendered in the SSR form (`arizona_render:render_markup/2`)
 and adds the text it shows, on the SSR, live and diff paths alike. A `?stateful` there is
-`stateful_in_text`: reading its text would mount it a second time, outside the view tree.
+`stateful_in_text`: reading its text would mount it a second time, outside the view tree. Markup
+that ends the option (an `<hr>`, another `<option>`) cuts the text of its own part there, and the
+parts after it are still read; browsers disagree on such an option (the classic select parser and
+the customizable-select one end it differently), so keep markup in an option's text inline.
 
 What the transform cannot reach -- a `?stateless`/`?stateful` component, a remote or non-inlined
 helper, a runtime value, `?raw` or static markup, an option valued by markup -- still renders under

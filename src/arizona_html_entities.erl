@@ -7,8 +7,11 @@ names) included, each with the text it stands for.
 
 `arizona_html` decodes markup with it where it must read a value the way the browser
 does: an `<option>` a component or `?raw` markup renders under a `<select>` that has
-a value (`arizona_html:mark_choices/2`), whose value can be written with any of them.
-The table is a literal, so it costs nothing until a reference is looked up.
+a value (`arizona_html:mark_choices/2`), and the text of an option valued by its text,
+static (folded at compile time) or rendered by a value in it
+(`arizona_html:markup_text/1`), each of which can be written with any of them. The
+table is a literal: in interactive mode the module loads on the first reference looked
+up, while an embedded release loads it at boot with every other module.
 """.
 
 -export([named/1]).
