@@ -216,7 +216,8 @@ on a `select`" in [erlang.md](erlang.md)). The page arrives with them marked (th
 that child's output), but a live update renders them unmarked, and HTML ignores the attribute, so
 `applyChooser` (`arizona-attrs.js`) applies it: every option's `selected` attribute (its
 `defaultSelected`, what a form reset returns to and what an untouched option shows) follows whether
-the value names it -- the value, or under `multiple` the JSON array of values the server renders --
+the value names it -- the value, or under `multiple` the JSON array of values the server renders (and a `?local`
+`set` writes: a list is the picks, any other value one pick, an interpolated value one text) --
 and when the value itself changes (a `SET_ATTR`/`REM_ATTR` `value` on the select, a `?local` `set`)
 the live selection follows too, the user's pick included. It runs on every such select when the page
 starts (`connect` and the static `start`), on the select an op writes the value of, and after any

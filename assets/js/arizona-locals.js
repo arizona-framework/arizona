@@ -1,4 +1,4 @@
-import { applyRemAttrOp, applySetAttrOp, syncsProp } from './arizona-attrs.js';
+import { applyRemAttrOp, applySetAttrOp, isMultipleChooser, syncsProp } from './arizona-attrs.js';
 import { resolveTarget } from './arizona-commands.js';
 import { allDocs, findViewRoot } from './arizona-docs.js';
 import { destroyChildHooks, destroyHooks, notifyUpdated } from './arizona-hooks.js';
@@ -53,8 +53,19 @@ function writeLocalValue(el, target, value) {
     const name = target[1];
     if (target.length === 4) {
         // Interpolated: recompose prefix + value + suffix (always a string attr). An
-        // absent value interpolates as empty, as a content slot renders it.
-        applySetAttrOp(el, name, target[2] + (value == null ? '' : String(value)) + target[3]);
+        // absent value interpolates as empty, as a content slot renders it. On a
+        // multiple select that one text is one pick of the array its value holds.
+        const text = target[2] + (value == null ? '' : String(value)) + target[3];
+        applySetAttrOp(el, name, isMultipleChooser(el, name) ? [text] : text);
+    } else if (isMultipleChooser(el, name) && value !== false && value != null) {
+        // The JSON array of the texts it picks, as the server renders it: a list holds
+        // the picks, anything else is one, a string reading as JSON included.
+        const picks = Array.isArray(value) ? value : [value];
+        applySetAttrOp(
+            el,
+            name,
+            picks.map((p) => (p === true ? '' : String(p))),
+        );
     } else if (value === false || value == null) {
         // Through the canonical writer, like a set: after user interaction the
         // dirty value/checkedness flags detach `.checked`/`.selected`/`.value` from
@@ -89,10 +100,15 @@ function readLocalValue(el, target) {
     }
     const name = target[1];
     if (target.length === 4) {
-        // Interpolated: strip the known prefix/suffix to recover the local value.
-        const v = el.getAttribute(name) ?? '';
+        // Interpolated: strip the known prefix/suffix to recover the local value (on a
+        // multiple select, from the one pick its value holds).
+        let v = el.getAttribute(name) ?? '';
+        if (isMultipleChooser(el, name)) v = onePick(v);
         return v.slice(target[2].length, v.length - target[3].length);
     }
+    // A multiple select holds a list: the values of the options the user sees picked.
+    if (isMultipleChooser(el, name))
+        return Array.from(/** @type {HTMLSelectElement} */ (el).selectedOptions, (o) => o.value);
     // The form-control properties hold what the user sees once they interacted
     // (the attributes are only the defaults by then) -- the same three
     // applySetAttrOp/applyRemAttrOp keep in step on a write.
@@ -100,6 +116,21 @@ function readLocalValue(el, target) {
     if (!el.hasAttribute(name)) return false;
     const v = el.getAttribute(name);
     return v === '' ? true : v;
+}
+
+/**
+ * The one pick a multiple select's value holds (a JSON array, see `writeLocalValue`).
+ * @param {string} raw
+ * @returns {string}
+ */
+function onePick(raw) {
+    try {
+        const picks = JSON.parse(raw);
+        if (Array.isArray(picks)) return picks.length ? String(picks[0]) : '';
+    } catch {
+        // Not an array: the text itself, as the select reads it.
+    }
+    return raw;
 }
 
 /**

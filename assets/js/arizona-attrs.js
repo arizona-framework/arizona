@@ -94,6 +94,17 @@ function isChooserValue(el, name) {
 }
 
 /**
+ * Is `name` the `value` of a `<select multiple>`? Its value is the JSON array of the
+ * texts it picks, the form every writer gives it (see `applyChooser`).
+ * @param {Element} el
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isMultipleChooser(el, name) {
+    return isChooserValue(el, name) && /** @type {HTMLSelectElement} */ (el).multiple;
+}
+
+/**
  * Mark `selected` the options of `sel` its `value` attribute names: the value, or
  * under `multiple` the JSON array of values the server renders (no attribute names
  * none). The `selected` attribute is what a form reset returns to and what an

@@ -88,4 +88,26 @@ test.describe('select value', () => {
             ),
         ).toEqual(['d']);
     });
+
+    // A `?local` value under `multiple`: a whole one holds the list of picks, an
+    // interpolated one is one pick, its static part included. The page loads on them,
+    // the client reads the value the same way at start, and a `set` moves them.
+    test('a local multiple value loads and moves on the options it names', async ({ page }) => {
+        const picked = (cls) =>
+            page.evaluate(
+                (c) =>
+                    [...document.querySelector(`#select-value .${c}`).selectedOptions].map(
+                        (o) => o.value,
+                    ),
+                cls,
+            );
+        await page.goto('/select-value');
+        await wsReady(page);
+        expect(await picked('local-many')).toEqual(['a', 'c']);
+        expect(await picked('local-tail')).toEqual(['ac']);
+        await page.locator('#select-value .set-many').click();
+        expect(await picked('local-many')).toEqual(['c', 'ac']);
+        await page.locator('#select-value .set-tail').click();
+        expect(await picked('local-tail')).toEqual(['a']);
+    });
 });

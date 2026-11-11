@@ -14,6 +14,7 @@ import {
     set,
     setAll,
 } from './arizona.js';
+import { applyChoosers } from './arizona-attrs.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3795,6 +3796,66 @@ describe('?local -- set/get attribute', () => {
         expect(document.querySelector('progress').position).toBe(-1);
         expect(document.querySelector('option').value).toBe('text');
         expect(get('v', 'li')).toBe(false);
+    });
+});
+
+describe('?local -- a select value', () => {
+    const picked = (sel) => [...sel.options].filter((o) => o.selected).map((o) => o.value);
+    const marked = (sel) => [...sel.options].filter((o) => o.defaultSelected).map((o) => o.value);
+    const options = '<option>a</option><option>c</option><option>ac</option>';
+    function selectView(attrs, desc) {
+        setupView('v', `<select az="0" az-local='${desc}' ${attrs}>${options}</select>`);
+        return /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+    }
+    const whole = '{"a":{"value":"k"}}';
+    const interp = '{"a":{"value":"k"},"ap":{"value":["a",""]}}';
+
+    // Under `multiple` the value is the JSON array of the texts it picks, the form the
+    // server renders: a list is its picks, anything else one pick.
+    it('writes a multiple select value as a JSON array', () => {
+        const sel = selectView(`multiple value='["a"]'`, whole);
+        set('v', 'k', ['a', 'c']);
+        expect(sel.getAttribute('value')).toBe('["a","c"]');
+        expect(picked(sel)).toEqual(['a', 'c']);
+        expect(marked(sel)).toEqual(['a', 'c']);
+        set('v', 'k', 'ac');
+        expect(sel.getAttribute('value')).toBe('["ac"]');
+        expect(picked(sel)).toEqual(['ac']);
+        // A string is one pick even when it reads as JSON.
+        set('v', 'k', '["c"]');
+        expect(sel.getAttribute('value')).toBe('["[\\"c\\"]"]');
+        expect(picked(sel)).toEqual([]);
+        set('v', 'k', false);
+        expect(sel.hasAttribute('value')).toBe(false);
+        expect(picked(sel)).toEqual([]);
+    });
+
+    it('reads a multiple select value as the values it selects', () => {
+        const sel = selectView(`multiple value='["a","c"]'`, whole);
+        applyChoosers(document);
+        expect(get('v', 'k')).toEqual(['a', 'c']);
+        sel.options[2].selected = true;
+        expect(get('v', 'k')).toEqual(['a', 'c', 'ac']);
+    });
+
+    // An interpolated local is one text, its affixes included: one pick.
+    it('writes an interpolated multiple select value as one pick', () => {
+        const sel = selectView(`multiple value='["ac"]'`, interp);
+        applyChoosers(document);
+        expect(picked(sel)).toEqual(['ac']);
+        expect(get('v', 'k')).toBe('c');
+        set('v', 'k', '');
+        expect(sel.getAttribute('value')).toBe('["a"]');
+        expect(picked(sel)).toEqual(['a']);
+        expect(get('v', 'k')).toBe('');
+    });
+
+    it('writes a single select value as its text', () => {
+        const sel = selectView('value="ac"', interp);
+        set('v', 'k', '');
+        expect(sel.getAttribute('value')).toBe('a');
+        expect(sel.value).toBe('a');
+        expect(get('v', 'k')).toBe('');
     });
 });
 
