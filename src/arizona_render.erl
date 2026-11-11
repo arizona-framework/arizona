@@ -1022,6 +1022,10 @@ render_ssr_esc_val(Backend, V) when is_binary(V) ->
     Backend:escape(V);
 render_ssr_esc_val(Backend, V) when is_integer(V) ->
     Backend:escape(integer_to_binary(V));
+render_ssr_esc_val(Backend, #{az_local := _, v := Init}) ->
+    %% A `?local` a helper returned: its init, as the live render holds it
+    %% (arizona_template:mark_esc/1).
+    render_ssr_local_init(Backend, Init);
 render_ssr_esc_val(Backend, V) when is_map(V) ->
     render_ssr_val(Backend, V);
 render_ssr_esc_val(Backend, V) ->
@@ -1030,6 +1034,9 @@ render_ssr_esc_val(Backend, V) ->
         %% Only a helper's raw/1 around a map is left unmarked; live renders it whole.
         Map -> render_ssr_val(Backend, Map)
     end.
+
+render_ssr_local_init(Backend, {arizona_raw, _} = Raw) -> render_ssr_val(Backend, Raw);
+render_ssr_local_init(Backend, Init) -> render_ssr_esc_val(Backend, Init).
 
 render_fp_val(Backend, {arizona_esc, V}) ->
     %% The fingerprint (initial hydration) payload carries a scalar content value

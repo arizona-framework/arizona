@@ -111,6 +111,9 @@
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
     wire_helper_raw_value_escaped/1,
+    runtime_local_content_diffs_like_render/1,
+    runtime_local_content_keeps_diffing/1,
+    runtime_local_template_init_renders/1,
     wire_raw_in_list_item/1,
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
@@ -279,6 +282,9 @@ groups() ->
             wire_get_value_raw,
             wire_raw_value_tagged_html,
             wire_helper_raw_value_escaped,
+            runtime_local_content_diffs_like_render,
+            runtime_local_content_keeps_diffing,
+            runtime_local_template_init_renders,
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
@@ -2022,6 +2028,73 @@ wire_helper_raw_value_escaped(Config) when is_list(Config) ->
         M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}
     ),
     ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
+
+%% A `?local` that reaches a content slot at runtime renders its init on SSR and the
+%% live render -- escaped, or spliced for a `raw/1` init -- and a diff that lands on
+%% it ships the same: a bare string the client text-nodes, or the raw-tagged markup.
+runtime_local_content_diffs_like_render(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            B = #{kind => Kind, v => ~"<i>"},
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:runtime_local_content(B))),
+            {HTML, _, _} = arizona_render:render(M:runtime_local_content(B), #{}),
+            ?assertEqual(SSR, iolist_to_binary(HTML)),
+            ?assertNotEqual(nomatch, binary:match(SSR, Rendered)),
+            {_, S0, V0} = arizona_render:render(
+                M:runtime_local_content(#{kind => text, v => ~"a"}), #{}
+            ),
+            {Ops, _, _} = arizona_diff:diff(
+                M:runtime_local_content(B), S0, V0, #{kind => true, v => true}
+            ),
+            ?assertEqual({Kind, [[?OP_TEXT, ~"1S9L2GB-0", Wire]]}, {Kind, Ops})
+        end
+     || {Kind, Rendered, Wire} <- [
+            {local, ~"-->&lt;i&gt;<!--", ~"<i>"},
+            {raw_local, ~"--><i><!--", #{~"raw" => ~"<i>"}}
+        ]
+    ].
+
+%% A runtime `?local` has no client binding, so its slot keeps diffing like any value
+%% slot: onto text, onto another local, and from text onto one. Each diff ships what a
+%% fresh render shows.
+runtime_local_content_keeps_diffing(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            {_, S0, V0} = arizona_render:render(M:runtime_local_content(B0), #{}),
+            {Ops, _, _} = arizona_diff:diff(
+                M:runtime_local_content(B1), S0, V0, #{kind => true, v => true}
+            ),
+            Fresh = iolist_to_binary(
+                arizona_render:render_to_iolist(M:runtime_local_content(B1))
+            ),
+            ?assertNotEqual(nomatch, binary:match(Fresh, ~"-->b<!--")),
+            ?assertEqual({B0, B1, [[?OP_TEXT, ~"1S9L2GB-0", ~"b"]]}, {B0, B1, Ops})
+        end
+     || {B0, B1} <- [
+            {#{kind => local, v => ~"a"}, #{kind => text, v => ~"b"}},
+            {#{kind => local, v => ~"a"}, #{kind => local, v => ~"b"}},
+            {#{kind => text, v => ~"a"}, #{kind => local, v => ~"b"}}
+        ]
+    ].
+
+%% A template init is markup in content, as a raw around one is: it renders as the
+%% template on SSR and the live render, and a diff ships it and then diffs inside it.
+runtime_local_template_init_renders(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{kind => template_local, v => ~"<a>"},
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(M:runtime_local_content(B))),
+    {HTML, S0, V0} = arizona_render:render(M:runtime_local_content(B), #{}),
+    ?assertEqual(SSR, iolist_to_binary(HTML)),
+    ?assertNotEqual(nomatch, binary:match(SSR, ~">&lt;a&gt;<!--/az--></b>")),
+    {Ops, _, _} = arizona_diff:diff(M:runtime_local_content(B#{v => ~"z"}), S0, V0, #{v => true}),
+    ?assertMatch([[?OP_TEXT, _, ~"z"]], Ops),
+    {_, S1, V1} = arizona_render:render(M:runtime_local_content(#{kind => text, v => ~"a"}), #{}),
+    {Ops1, _, _} = arizona_diff:diff(
+        M:runtime_local_content(B), S1, V1, #{kind => true, v => true}
+    ),
+    ?assertMatch([[?OP_TEXT, ~"1S9L2GB-0", #{}]], Ops1).
 
 %% The text/HTML distinction holds below the top level too: inside a plain-list item
 %% patch, a stream item patch and a same-statics branch, the `?get` value stays a bare

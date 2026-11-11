@@ -862,6 +862,8 @@ across the live diff).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
+mark_esc(#{az_local := _, v := Init}) ->
+    mark_local_init(Init);
 mark_esc(V) when is_map(V) ->
     V;
 mark_esc(V0) ->
@@ -870,6 +872,13 @@ mark_esc(V0) ->
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> {arizona_esc, V0}
     end.
+
+%% A `?local` in an escaping slot is not one the template declared (a literal one has
+%% a bare slot and a client binding): a value a helper returned, which nothing on the
+%% client owns. The slot holds its init, rendered as content renders it -- a `raw/1`
+%% init spliced, a template one rendered, any other escaped -- so it keeps diffing.
+mark_local_init({arizona_raw, _} = Raw) -> Raw;
+mark_local_init(Init) -> mark_esc(Init).
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
