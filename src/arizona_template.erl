@@ -108,8 +108,10 @@ render(Bindings) ->
 -ignore_xref([nodiff_token/3]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
-%% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
+%% Emitted by the parse transform around an attribute value holding a literal `?raw`.
 -ignore_xref([raw_attr/2]).
+%% Emitted by the parse transform around each other part of such a value.
+-ignore_xref([mark_attr_part/1]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
 %% Emitted by the parse transform as the `selected` of an option under a valued select.
