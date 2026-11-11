@@ -664,12 +664,46 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         delete hooks.H;
     });
 
-    it('discards the stale view on close when its placeholder is gone', async () => {
-        // The placeholder is wiped by an inner re-render (not a REPLACE, so no
-        // auto-close); when the user then closes the window, the stale element
-        // must be discarded, not appended to the page body.
+    it('closes the window when a re-render brings the popped-out view back inline', async () => {
+        // A parent's wholesale re-render wipes the placeholder and renders the
+        // child view inline again: the floating copy is stale and must close, or
+        // it stays open beside the live one.
         document.body.innerHTML =
-            '<div id="root" az-view az="0"><div id="player" az-view az="0" az-hook="H"></div></div>';
+            '<div id="root" az-view az="0">' +
+            '<div id="player" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = {
+            destroyed() {
+                destroyed(this.el.dataset.n);
+            },
+        };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([
+            [
+                OP.TEXT,
+                'root:0',
+                '<div id="player" az-view az="0"><i az-hook="H" data-n="new"></i></div>',
+                true,
+            ],
+        ]);
+
+        expect(pip.closed).toBe(true);
+        expect(destroyed.mock.calls).toEqual([['old']]);
+        expect(document.querySelector('#player i')?.dataset.n).toBe('new');
+        expect(resolveEl('player')?.ownerDocument).toBe(document);
+
+        delete hooks.H;
+    });
+
+    it('closes the window when a stream remove takes the placeholder with its item', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><ul az="1">' +
+            '<li az-key="a"><div id="player" az-view az="0" az-hook="H"></div></li>' +
+            '<li az-key="b">b</li></ul></div>';
         const destroyed = vi.fn();
         hooks.H = { destroyed };
         mountHooks(document);
@@ -677,14 +711,37 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         stubPip(pip);
         await requestPip('player');
 
-        // A wholesale OP.TEXT on the root wipes the inline placeholder.
-        applyOps([[OP.TEXT, 'root:0', 'wiped', true]]);
-        pip.fire('pagehide'); // user closes the floating window
+        applyOps([[OP.REMOVE, 'root:1', 'a']]);
 
+        // Closed and discarded, not dumped into the page.
+        expect(pip.closed).toBe(true);
         expect(document.getElementById('player')).toBeNull();
-        expect(document.body.contains(pip.document.getElementById('player'))).toBe(false);
         expect(destroyed).toHaveBeenCalledOnce();
+        expect(resolveEl('player')).toBeNull();
 
         delete hooks.H;
+    });
+
+    it('closes the window when an item patch re-renders the placeholder away', async () => {
+        // The re-render is nested in a stream item's ops, not a top-level op.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><ul az="1">' +
+            '<li az-key="a" az="2"><div id="player" az-view az="0"></div></li></ul></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'root:1',
+                'a',
+                [[OP.TEXT, '2', '<div id="player" az-view az="0">new</div>', true]],
+            ],
+        ]);
+
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('player')?.textContent).toBe('new');
+        expect(resolveEl('player')?.ownerDocument).toBe(document);
     });
 });

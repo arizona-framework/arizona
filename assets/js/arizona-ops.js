@@ -408,9 +408,6 @@ export function applyOps(ops, resync = false) {
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);
                     for (const e of added) mountHooksOutside(e, kept);
-                    // A popped-out (PiP) view whose placeholder just went with
-                    // the outgoing subtree is orphaned -- close its window.
-                    closeOrphanedPipWindows();
                     didReplace = true;
                     break;
                 }
@@ -442,6 +439,11 @@ export function applyOps(ops, resync = false) {
             console.error('[arizona] op %s failed; skipping', op[0], err);
         }
     }
+    // A popped-out (PiP) view whose placeholder went with a subtree this batch
+    // replaced, re-rendered or removed is orphaned -- close its window, or it
+    // floats beside the live copy. Once per batch: any op can take the
+    // placeholder, an item patch's nested re-render included.
+    closeOrphanedPipWindows();
     // A select the server left its value on holds options it could not mark: any it
     // rendered or changed in this batch take the value now, as SSR marked the page's.
     // noteChoices fills it, so it is not the `null` set above.

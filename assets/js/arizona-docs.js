@@ -13,11 +13,11 @@ import { destroyHooks } from './arizona-hooks.js';
 /** @type {Map<string, Document>} */
 export const _viewDocs = new Map();
 
-// The PiP window and inline placeholder per popped-out view, so a navigate's
-// OP_REPLACE -- which destroys the placeholder with the outgoing subtree -- can
-// close the now-orphaned window instead of leaving it floating over dead server
-// state. Entries live and die with `_viewDocs` (set in requestPip, removed by
-// the window's pagehide handler).
+// The PiP window and inline placeholder per popped-out view, so an op batch
+// that destroys the placeholder (a navigate's OP_REPLACE, a parent re-render, a
+// removal) can close the now-orphaned window instead of leaving it floating
+// over dead server state. Entries live and die with `_viewDocs` (set in
+// requestPip, removed by the window's pagehide handler).
 /** @type {Map<string, {win: Window, placeholder: Comment}>} */
 export const _pipWindows = new Map();
 
@@ -39,12 +39,14 @@ export function closeAllPip() {
 
 /**
  * Close any popped-out (PiP) window whose inline placeholder is no longer in
- * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page),
- * so the floating view shows dead server state. Closing fires the window's
- * pagehide handler, which discards the stale view and unregisters the maps.
- * Same reconciliation `disconnect` performs, driven here by the page swap.
+ * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page, a
+ * parent re-render or removal took it), so the floating view shows dead server
+ * state. Closing fires the window's pagehide handler, which discards the stale
+ * view and unregisters the maps. Same reconciliation `disconnect` performs,
+ * driven here by each op batch.
  */
 export function closeOrphanedPipWindows() {
+    if (_pipWindows.size === 0) return;
     for (const pip of [..._pipWindows.values()]) {
         if (!pip.placeholder.isConnected) {
             try {
