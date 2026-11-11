@@ -1,5 +1,11 @@
 import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
-import { _pipWindows, _viewDocs, findViewRoot, reconcilePipWindows } from './arizona-docs.js';
+import {
+    _pipWindows,
+    _viewDocs,
+    findViewRoot,
+    reconcilePipWindows,
+    retireStaleCopies,
+} from './arizona-docs.js';
 import {
     anyHookDefs,
     destroyChildHooks,
@@ -247,14 +253,11 @@ function slotsOf(nodes, slots) {
 
 /**
  * `mountHooks` over `root`, skipping the kept az-nodiff elements: their hooks never left,
- * and what is inside them is the client's own markup. Every op mounting new
- * content goes through it, so a popped-out view rendered again is torn down in
- * its window first (`retirePoppedCopies`).
+ * and what is inside them is the client's own markup.
  * @param {Element} root
  * @param {ReadonlySet<Element>} kept
  */
 function mountHooksOutside(root, kept) {
-    if (_pipWindows.size !== 0) retirePoppedCopies(root);
     if (kept.size === 0) {
         mountHooks(root);
         return;
@@ -270,21 +273,6 @@ function mountHooksOutside(root, kept) {
     };
     if (root.hasAttribute('az-hook') && !inKept(root)) mountHook(root);
     for (const e of root.querySelectorAll('[az-hook]')) if (!inKept(e)) mountHook(e);
-}
-
-/**
- * Tear down the hooks of each popped-out (PiP) view's window copy that `root`
- * renders again, before `root`'s hooks mount: inline, a re-render destroys the
- * old content first, and the window copy only leaves once the batch ends
- * (`reconcilePipWindows`, whose own teardown then finds nothing left to run).
- * @param {Element} root
- */
-function retirePoppedCopies(root) {
-    for (const { id, win } of _pipWindows.values()) {
-        const fresh = root.ownerDocument.getElementById(id);
-        const stale = win.document.getElementById(id);
-        if (fresh && stale && fresh !== stale && root.contains(fresh)) destroyHooks(stale);
-    }
 }
 
 /**
@@ -319,12 +307,14 @@ function applyTextOp(el, az, val, isHtml) {
             console.warn(`[arizona] slot az:${az} has no closing marker; skipping`);
             return;
         }
+        retireStaleCopies();
         forEachElementBetweenMarkers(marker, (e) => mountHooksOutside(e, kept));
     } else {
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;
-            mountHooksOutside(el, NO_KEPT);
+            retireStaleCopies();
+            mountHooks(el);
         } else {
             // In-place when the element holds exactly one text node: `textContent =`
             // would remove + reinsert it (childList churn), and that forces a layout
@@ -466,6 +456,7 @@ export function applyOps(ops, resync = false) {
                     destroyHooks(el);
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);
+                    retireStaleCopies();
                     for (const e of added) mountHooksOutside(e, kept);
                     didReplace = true;
                     break;
@@ -880,7 +871,8 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
     }
     if (item) {
         cachedKeyMap(streams, el, az)?.set(key, item);
-        mountHooksOutside(item, NO_KEPT);
+        retireStaleCopies();
+        mountHooks(item);
     } else {
         console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
     }
@@ -1149,7 +1141,8 @@ function applyListPatch(el, az, subOps) {
                 // but honoring idx keeps this correct for any sub-op ordering).
                 const ref = roots[sub[1]] ?? endMarker;
                 ref.before(frag);
-                for (const e of added) mountHooksOutside(e, NO_KEPT);
+                retireStaleCopies();
+                for (const e of added) mountHooks(e);
                 childListChanged = true;
                 break;
             }

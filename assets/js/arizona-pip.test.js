@@ -1287,6 +1287,133 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         delete hooks.H;
     });
 
+    it('leaves a live window view alone when a non-view element takes its id', async () => {
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        document.body.innerHTML =
+            '<div id="root" az-view az="R-0"><div id="v" az-view az="V-0" az-hook="H">v</div>' +
+            '<!--az:R-1--><!--/az--></div>';
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([[OP.TEXT, 'root:R-1', '<span id="v">label</span>', true]]);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.H;
+    });
+
+    it('tears the stale copy down before any of the re-rendered slot mounts', async () => {
+        const log = vi.fn();
+        hooks.A = {
+            mounted() {
+                log(`mount ${this.el.id}`);
+            },
+            destroyed() {
+                log(`destroy ${this.el.id}`);
+            },
+        };
+        const body = (/** @type {string} */ t) =>
+            `<i id="s" az-hook="A">${t}</i><div id="v" az-view az="V-0" az-hook="A">${t}</div>`;
+        document.body.innerHTML = `<div id="root" az-view az="R-0"><!--az:R-1-->${body('a')}<!--/az--></div>`;
+        mountHooks(document);
+        // Inline: the whole slot is torn down, then the whole slot mounts.
+        log.mockClear();
+        applyOps([[OP.TEXT, 'root:R-1', body('b'), true]]);
+        expect(log.mock.calls).toEqual([['destroy s'], ['destroy v'], ['mount s'], ['mount v']]);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        log.mockClear();
+
+        applyOps([[OP.TEXT, 'root:R-1', body('c'), true]]);
+
+        expect(log.mock.calls).toEqual([['destroy s'], ['destroy v'], ['mount s'], ['mount v']]);
+        pip.fire('pagehide');
+        delete hooks.A;
+    });
+
+    describe('stale copy teardown before mounting, on every path that mounts', () => {
+        /** @type {ReturnType<typeof vi.fn>} */
+        let log;
+        const view = (/** @type {string} */ n) =>
+            `<div id="v" az-view az="V-0" az-hook="A" data-n="${n}"></div>`;
+        /** @param {string} html */
+        const popWithin = async (html) => {
+            log = vi.fn();
+            hooks.A = {
+                mounted() {
+                    log(`mount ${this.el.dataset.n}`);
+                },
+                destroyed() {
+                    log(`destroy ${this.el.dataset.n}`);
+                },
+            };
+            document.body.innerHTML = html;
+            mountHooks(document);
+            const pip = makePipWindow();
+            stubPip(pip);
+            await requestPip('v');
+            log.mockClear();
+            return pip;
+        };
+        const settle = (/** @type {ReturnType<typeof makePipWindow>} */ pip) => {
+            pip.fire('pagehide');
+            delete hooks.A;
+        };
+
+        it('a resync replace', async () => {
+            const page = (/** @type {string} */ n) =>
+                `<div id="root" az-view az="R-0">${view(n)}</div>`;
+            const pip = await popWithin(page('a'));
+            applyOps([[OP.REPLACE, 'root', page('b')]], true);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+
+        it('a re-render of an element with no slot markers', async () => {
+            const pip = await popWithin(`<div id="root" az-view az="R-0">${view('a')}</div>`);
+            applyOps([[OP.TEXT, 'root:R-0', view('b'), true]]);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+
+        it('a stream insert', async () => {
+            const li = (/** @type {string} */ k, /** @type {string} */ n) =>
+                `<li az-key="${k}">${view(n)}</li>`;
+            const pip = await popWithin(
+                `<div id="root" az-view az="R-0"><ul az="1">${li('a', 'a')}</ul></div>`,
+            );
+            applyOps([
+                [OP.REMOVE, 'root:1', 'a'],
+                [OP.INSERT, 'root:1', 'b', -1, li('b', 'b')],
+            ]);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+
+        it('a list insert', async () => {
+            const pip = await popWithin(
+                `<div id="root" az-view az="R-0"><ul az="L"><!--az:L--><li az="0">${view('a')}</li><!--/az--></ul></div>`,
+            );
+            applyOps([
+                [
+                    OP.LIST_PATCH,
+                    'root:L',
+                    [
+                        [OP.REMOVE, 0],
+                        [OP.INSERT, 0, `<li az="0">${view('b')}</li>`],
+                    ],
+                ],
+            ]);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+    });
+
     it('leaves a live window view alone when unrelated content mounts', async () => {
         // Another element under the same id elsewhere (not a re-render of the
         // view) is no reason to tear the popped-out view down.

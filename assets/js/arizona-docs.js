@@ -113,6 +113,23 @@ function renderedAgain(id, own) {
 }
 
 /**
+ * Tear down the hooks of every stale window's copy (see `homeChain`), before an
+ * op mounts its new content. Inline, a re-render destroys the old content before
+ * the new mounts; a popped-out view's old content is in its window, and the op
+ * that took its placeholder is the one that would have destroyed it. Staleness
+ * never reverts, so the copy is gone either way -- replaced by a fresh one or
+ * closed with its window once the batch ends (`reconcilePipWindows`), whose own
+ * teardown then finds nothing left to run.
+ */
+export function retireStaleCopies() {
+    if (_pipWindows.size === 0) return;
+    for (const entry of _pipWindows.values()) {
+        if (!isStale(entry)) continue;
+        for (const e of viewsIn(entry.win.document)) destroyHooks(e);
+    }
+}
+
+/**
  * Bring each popped-out (PiP) window in line with the op batch just applied:
  * - A replace in the window under a new id (a navigate of a popped-out root)
  *   re-keys it, so `exit_pip`/`request_pip` from the new page name it.
