@@ -614,6 +614,35 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // cleanup
     });
 
+    it('tears down the view a replace re-rendered when a navigate orphans its window', async () => {
+        // A resync replace re-rendered the popped-out view in its window, so the
+        // element there is not the one moved out: the teardown must reach it.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = {
+            destroyed() {
+                destroyed(this.el.dataset.n);
+            },
+        };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        applyOps([
+            [OP.REPLACE, 'v', '<div id="v" az-view az="0"><i az-hook="H" data-n="new"></i></div>'],
+        ]);
+
+        applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="0">x</div>']]);
+
+        expect(pip.closed).toBe(true);
+        expect(destroyed.mock.calls).toEqual([['old'], ['new']]);
+        expect(pip.document.getElementById('v')).toBeNull();
+
+        delete hooks.H;
+    });
+
     it('discards the stale view on close when its placeholder is gone', async () => {
         // The placeholder is wiped by an inner re-render (not a REPLACE, so no
         // auto-close); when the user then closes the window, the stale element
