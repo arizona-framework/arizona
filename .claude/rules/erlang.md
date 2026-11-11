@@ -122,7 +122,9 @@ callback parameter shadowing a name the value reads is renamed; a hoisted value 
 reads such a name is `hoisted_var_captured`, as any hoisted read there. The one refusal is an option
 that also writes `selected` (`select_value`, `option_selected`): the value already decides it. The
 backend opts in through the optional `arizona_renderer:selection_role/1` and `mark_choices/2`;
-`?json` keeps `value` as a prop.
+`?json` keeps `value` as a prop. Options sharing a value are all marked, at compile time, in a
+child's output and by the client alike, so the browser selects the last of them, as the parser does
+(the `.value` setter would pick the first).
 
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises

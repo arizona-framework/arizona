@@ -22,6 +22,7 @@ and the select keeps its value for the client to apply after.
     multiple_decided_at_runtime/1,
     multiple_is_any_value_but_false/1,
     nothing_selected_without_a_match/1,
+    duplicate_values_mark_every_match/1,
     diff_moves_selected_to_the_new_option/1,
     diff_is_fine_grained/1,
     diff_of_unrelated_binding_is_empty/1,
@@ -65,6 +66,7 @@ groups() ->
             multiple_decided_at_runtime,
             multiple_is_any_value_but_false,
             nothing_selected_without_a_match,
+            duplicate_values_mark_every_match,
             static_generation_marks_the_chosen_option,
             nodiff_select_marks_the_chosen_option,
             local_value_loads_on_its_initial,
@@ -198,6 +200,20 @@ nothing_selected_without_a_match(Config) when is_list(Config) ->
         )
     ),
     ?assertEqual([~"2"], selected_values(Int)).
+
+%% Options sharing the value are all marked, the ones the transform reaches and the
+%% ones a component renders alike: the browser then selects the last, as the client
+%% does when it applies the value.
+duplicate_values_mark_every_match(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod(
+            "sel_dups",
+            "{option, [{value, ~\"a\"}], [~\"A1\"]}, "
+            "arizona_template:stateless(fun opts/1, #{o => [~\"a\", ~\"b\"]})"
+        )
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a"}))),
+    ?assertEqual([~"a", ~"a"], selected_values(HTML), HTML).
 
 static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     Dir = filename:join(proplists:get_value(priv_dir, Config), "select_static"),

@@ -311,6 +311,8 @@ there. In the live client the select's `value` is applied to its options' `selec
 batch that rendered or changed an option (`applyChooser`, `arizona-attrs.js`). Options the
 transform reached keep their own `selected` diffs beside it; both compute the same choice. A
 backend without the callbacks keeps `value` as an ordinary attribute, which is what `?json` wants.
+Options sharing a value are all marked, by every path, so the browser selects the last of them,
+as the parser selects the last `selected` option (the `.value` setter would pick the first).
 
 ## API -- `arizona_diff.erl`
 
