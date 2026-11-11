@@ -8615,9 +8615,210 @@ describe('fetch + az-form-reset via the submit listener', () => {
         await vi.waitFor(() => {
             const ev = mock.getSentMessages().find((m) => m[0] === 'v' && m[1] === 'saved');
             expect(ev).toBeDefined();
-            // Effects run against the view element, not the form -> no field echo.
+            // Effects run against a stand-in, not the form -> no field echo.
             expect(ev[2]).not.toHaveProperty('secret');
         });
+
+        mock.restore();
+    });
+
+    // The form can itself be the view root (an `?html({form, ...})` view). The
+    // response effects still target that view, but must not take the form as
+    // their trigger, or the push_event payload carries every field.
+    it('relays a response push_event without the fields of a form that is the view root', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="v" az-view><input name="secret" value="x" />' +
+            '<button type="submit">Go</button></form>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#v'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual(['v', 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // A form in no view (layout chrome) falls back to the root view; its fields
+    // must not ride along either.
+    it('relays a response push_event without the fields of a form outside any view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="f"><input name="secret" value="x" /></form><div id="v" az-view></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual([null, 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // A field in no view (a fetch on az-change of a layout input) falls back to
+    // the root view too; as the trigger it would put its own value in the payload.
+    it('relays a response push_event without the value of a field outside any view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form><input id="pw" type="password" name="pw" value="hunter2" /></form>' +
+            '<div id="v" az-view></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#pw'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual([null, 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // A field inside a view sends the response's push_event to that view.
+    it('relays a response push_event to the view of a field inside one, without its value', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><form><input id="pw" type="password" name="pw" value="hunter2" />' +
+            '</form></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#pw'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual(['v', 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // The form's own events go to `other` through az-target; the response's
+    // push_event is the form's too, so it goes there, not to the enclosing view.
+    it('relays a response push_event to the az-target of a form inside a view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f" az-target="other">' +
+            '<input name="secret" value="x" /></form></div><div id="other" az-view></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual(['other', 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // A view nested in a form: a fetch in the response must not find that outer
+    // form through its trigger and post its fields unasked.
+    it('a fetch in the response posts no fields of a form enclosing the view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="outer"><input name="secret" value="x" />' +
+            '<div id="v" az-view><button id="b">Go</button></div></form>';
+        globalThis.fetch = vi.fn((url) =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () =>
+                    Promise.resolve(
+                        url === '/first' ? JSON.stringify({ e: [[22, '/second', {}]] }) : '',
+                    ),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#b'), null, [22, '/first', { body: { a: 1 } }]);
+
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+        const [url, init] = globalThis.fetch.mock.calls[1];
+        expect(url).toBe('/second');
+        expect(init.body).toBeUndefined();
+
+        mock.restore();
+    });
+
+    // A ?local set/2 in the response updates the slot of the trigger's view.
+    it('applies a response set/2 to the view of the trigger', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><span az="0" az-local=\'{"c":{"0":"msg"}}\'><!--az:0-->old<!--/az--></span>' +
+            '<form id="f"><input name="n" value="x" /></form></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[17, 'msg', 'new']] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => expect(mod.get('v', 'msg')).toBe('new'));
 
         mock.restore();
     });
