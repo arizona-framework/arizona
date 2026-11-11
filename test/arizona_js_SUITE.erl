@@ -272,9 +272,11 @@ attr_errors_name_the_public_function(Config) when is_list(Config) ->
     ).
 
 %% An improper list is no command list: it is refused as a value by the public
-%% function, not by whatever walked it.
+%% function, not by whatever walked it. That holds when its tail is a command
+%% too, which is a command as an element but not as a list's tail.
 attr_refuses_an_improper_list_value(Config) when is_list(Config) ->
-    Improper = [arizona_js:push_event(~"a") | foo],
+    P = arizona_js:push_event(~"a"),
+    Improper = [P | foo],
     [
         begin
             assert_value_error(Fun),
@@ -283,12 +285,16 @@ attr_refuses_an_improper_list_value(Config) when is_list(Config) ->
      || {Name, Fun} <- [
             {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"az-click", Improper) end},
             {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"title", Improper) end},
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"az-click", [P | P]) end},
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"az-click", [[] | P]) end},
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"az-click", [[P | P]]) end},
             {toggle_attr, fun() ->
                 arizona_js:toggle_attr(~"#x", ~"az-click", Improper, arizona_js:push_event(~"b"))
             end},
             {toggle_attr, fun() ->
                 arizona_js:toggle_attr(~"#x", ~"az-click", arizona_js:push_event(~"b"), Improper)
-            end}
+            end},
+            {toggle_attr, fun() -> arizona_js:toggle_attr(~"#x", ~"az-click", [P | P], []) end}
         ]
     ].
 

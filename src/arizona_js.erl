@@ -750,18 +750,23 @@ value_kind(Value, Attr) ->
     end.
 
 %% Walked by hand, not with lists:all/2: an improper list would crash there,
-%% outside this module, with no error_info.
+%% outside this module, with no error_info. A list's tail is walked as a list
+%% only, since a command there (`[P | P]`) is an improper list too.
 -spec cmds_kind(Value) -> command | empty | other when
     Value :: term().
 cmds_kind({arizona_effect, Cmd}) when is_list(Cmd) -> command;
-cmds_kind([]) ->
+cmds_kind(Value) -> list_cmds_kind(Value).
+
+-spec list_cmds_kind(Value) -> command | empty | other when
+    Value :: term().
+list_cmds_kind([]) ->
     empty;
-cmds_kind([Cmds | Rest]) ->
+list_cmds_kind([Cmds | Rest]) ->
     case cmds_kind(Cmds) of
         other -> other;
-        Kind -> join_cmds_kind(Kind, cmds_kind(Rest))
+        Kind -> join_cmds_kind(Kind, list_cmds_kind(Rest))
     end;
-cmds_kind(_) ->
+list_cmds_kind(_) ->
     other.
 
 join_cmds_kind(_, other) -> other;
