@@ -1435,6 +1435,16 @@ format_select_error({option_selected, Tag, Name, Chooser}) ->
             "decides which option is selected. Drop one of the two",
             [Name, Tag, Chooser]
         )
+    );
+format_select_error({no_markup_text, Backend, Tag}) ->
+    lists:flatten(
+        io_lib:format(
+            "an <~ts> without a value attribute is valued by its text, and a value in "
+            "this one's text may render markup, whose text the render target ~ts cannot "
+            "read: it names the selection roles (selection_role/1) but does not export "
+            "markup_text/1. Implement it, or give the option a value attribute",
+            [Tag, Backend]
+        )
     ).
 
 binder_kind(fun_param) -> "fun parameter";
@@ -7528,8 +7538,19 @@ choice_text(Backend, [Children]) ->
                 Texts when length(Texts) =:= length(Parts) ->
                     {ok, ast_binary(collapse_ws(iolist_to_binary(Texts)))};
                 _Computed ->
-                    {ok, choice_text_call(Backend, [part_ast(P) || P <- Parts], anno(Children))}
+                    L = anno(Children),
+                    ok = needs_markup_text(Backend, L),
+                    {ok, choice_text_call(Backend, [part_ast(P) || P <- Parts], L)}
             end
+    end.
+
+%% A value in the text may render markup, whose text only the backend can read
+%% (arizona_renderer:markup_text/1): refused here rather than as `undef` the first time
+%% one does.
+needs_markup_text(Backend, L) ->
+    case erlang:function_exported(Backend, markup_text, 1) of
+        true -> ok;
+        false -> parse_error({select_value, {no_markup_text, Backend, Backend:name(option)}}, L)
     end.
 
 %% What one child adds to an option's text. A static binary is spliced as markup, so

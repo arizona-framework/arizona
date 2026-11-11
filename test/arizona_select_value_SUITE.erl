@@ -50,6 +50,7 @@ and the select keeps its value for the client to apply after.
     runtime_text_option_valued_by_its_markup/1,
     markup_text_tracks_what_its_slot_tracks/1,
     authored_selected_is_refused/1,
+    choice_text_needs_markup_text/1,
     shadowing_parameter_is_renamed/1,
     shadowing_hoisted_read_is_refused/1,
     static_value_selects_at_compile_time/1,
@@ -103,6 +104,7 @@ groups() ->
             opaque_child_is_marked_in_its_own_slot,
             option_with_runtime_text_compiles,
             authored_selected_is_refused,
+            choice_text_needs_markup_text,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
@@ -876,6 +878,49 @@ authored_selected_is_refused(Config) when is_list(Config) ->
     assert_parse_error(
         select_src("{option, [{value, ~\"a\"}, {<<\"SELECTED\">>, false}], []}"), Conflict
     ).
+
+%% A choice whose text holds a value is valued by what it renders, read by the
+%% backend's markup_text/1: a backend naming the roles without it is refused where the
+%% template compiles, not when a value first renders markup.
+choice_text_needs_markup_text(Config) when is_list(Config) ->
+    Backend = sel_no_markup_text,
+    Exports = [FA || {F, _A} = FA <- arizona_html:module_info(exports), F =/= module_info],
+    Delegates = [
+        io_lib:format("~s(~s) -> arizona_html:~s(~s). ", [F, args(A), F, args(A)])
+     || {F, A} <- Exports, F =/= markup_text
+    ],
+    {module, Backend} = load_source(
+        [
+            "-module(",
+            atom_to_list(Backend),
+            "). -compile([export_all, nowarn_export_all]). ",
+            Delegates
+        ]
+    ),
+    Source = lists:flatten([
+        "-module(sel_no_mt). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(sel_no_markup_text, {select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [], [arizona_template:get(label, Bindings)]}]}). "
+    ]),
+    assert_parse_error(Source, fun
+        ({select_value, {no_markup_text, sel_no_markup_text, _Tag}}) -> true;
+        (_) -> false
+    end),
+    %% Static text needs no reading at render, so the same backend compiles it.
+    {module, _} = load_source(
+        "-module(sel_no_mt_static). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(sel_no_markup_text, {select, "
+        "[{value, arizona_template:get(v, Bindings)}], [{option, [], [~\"a\"]}]}). "
+    ).
+
+args(0) -> "";
+args(A) -> lists:join(", ", ["A" ++ integer_to_list(N) || N <- lists:seq(1, A)]).
+
+load_source(Source) ->
+    Forms = arizona_parse_transform:parse_transform(parse_forms(lists:flatten(Source)), []),
+    {ok, Mod, Bin} = compile:forms(Forms, [return_errors]),
+    code:load_binary(Mod, "", Bin).
 
 %% The value is read inside every option the item builds, so an `?each` parameter
 %% of a name it reads is renamed: `Bindings` here is the item, and the select's

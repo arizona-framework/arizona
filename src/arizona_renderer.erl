@@ -272,9 +272,9 @@ comparison stays an ordinary attribute that renders, tracks and diffs. For HTML:
 the option's `text` reads, tags and comments left out, character references decoded,
 up to what would end the option.
 
-Optional, and required of a backend that implements `selection_role/1` for a choice
-whose text holds a value rendering markup; without it static text holding markup
-syntax is left for `mark_choices/2`.
+Optional. A backend that implements `selection_role/1` without it cannot compile a
+choice whose text holds a value (a `select_value` compile error), and its static text
+holding markup syntax is left for `mark_choices/2`.
 """.
 -callback markup_text(Markup :: iodata()) -> {text | markup, binary()}.
 
