@@ -76,9 +76,11 @@ export function applyRemAttrOp(el, name) {
 
 /**
  * Is `name` the `value` of a `<select>`? HTML has no such attribute: a select the
- * server left one on holds options it could not mark (from a component, a runtime
- * value, raw markup), so the value is applied to the options instead -- see
- * `applyChooser`.
+ * server left one on holds options it could not mark in the template (from a
+ * component, a runtime value, raw markup), so the value is applied to the options
+ * instead -- see `applyChooser`. An `arizona_js` attribute effect writing `value` on
+ * any select means the same: it picks the option(s) it names, and a removal names
+ * none (a single select then shows its first option, as HTML does with no pick).
  * @param {Element} el
  * @param {string} name
  * @returns {boolean}
@@ -97,7 +99,9 @@ function isChooserValue(el, name) {
  * none). The `selected` attribute is what a form reset returns to and what an
  * option the user has not touched shows, so a newly rendered option the value names
  * is picked as one the server marked would be. `force` also moves the live
- * selection, the user's pick included: the server changed the value.
+ * selection, the user's pick included: the server changed the value. Options sharing a
+ * value are all marked, so the last of them is selected, as the parser selects the
+ * last `selected` option.
  * @param {HTMLSelectElement} sel
  * @param {boolean} force
  */

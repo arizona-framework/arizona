@@ -333,8 +333,10 @@ function removeEl(el) {
  */
 export function applyOps(ops, resync = false) {
     let didReplace = false;
-    /** @type {Set<Document>|null} */
-    let choiceDocs = null;
+    const outerChoices = choiceDocs;
+    const outerChoosers = chooserDocs;
+    choiceDocs = null;
+    chooserDocs = new Map();
     /** @type {Map<string, Resolution>} */
     const els = new Map();
     const streams = newStreamCache();
@@ -382,10 +384,7 @@ export function applyOps(ops, resync = false) {
             }
             const el = found.el;
             const az = azOf(op[1]);
-            if (touchesChoices(op, el)) {
-                choiceDocs ??= new Set();
-                choiceDocs.add(el.ownerDocument);
-            }
+            noteChoices(op, el);
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
@@ -445,7 +444,11 @@ export function applyOps(ops, resync = false) {
     }
     // A select the server left its value on holds options it could not mark: any it
     // rendered or changed in this batch take the value now, as SSR marked the page's.
-    if (choiceDocs) for (const doc of choiceDocs) applyChoosers(doc);
+    // noteChoices fills it, so it is not the `null` set above.
+    const docs = /** @type {Set<Document>|null} */ (choiceDocs);
+    choiceDocs = outerChoices;
+    chooserDocs = outerChoosers;
+    if (docs) for (const doc of docs) applyChoosers(doc);
     // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one), as
     // does a patch the server degraded to a replace. A patch kept in place has no
     // OP_REPLACE: it scrolls on its own reply, which the frame handler recognises
@@ -456,29 +459,59 @@ export function applyOps(ops, resync = false) {
     }
 }
 
-// Markup opening a select or an option, in any case.
+// Markup opening a select or an option, and a select alone, in any case.
 const CHOICE_MARKUP = /<(?:option|select)[\s/>]/i;
+const CHOOSER_MARKUP = /<select[\s/>]/i;
 
 /**
- * Could this op have rendered or changed an option a select's value names? Its
- * target is a select, an option or an optgroup, or it carries markup holding one
- * (a slot re-render, an inserted item, a replaced view, nested item ops).
+ * The documents whose valued selects the batch `applyOps` is applying may have
+ * changed (`null` outside one, or while nothing has), and per document whether it
+ * holds a valued select, asked once per batch. Module state because the item ops
+ * (`applyItemOps`, reached through item and list patches, child view batches
+ * included) note into the same batch.
+ * @type {Set<Document>|null}
+ */
+let choiceDocs = null;
+/** @type {Map<Document, boolean>|null} */
+let chooserDocs = null;
+
+/**
+ * Note `el`'s document when this op could have rendered or changed an option a
+ * select's value names: it targets a select, an option or an optgroup, or carries
+ * markup holding one (a slot re-render, an inserted item, a replaced view, nested
+ * item ops). Option markup counts only on a page that has a valued select; without
+ * one, only markup bringing a select does.
  * @param {Array<*>} op
  * @param {Element} el
- * @returns {boolean}
  */
-function touchesChoices(op, el) {
+function noteChoices(op, el) {
+    const doc = el.ownerDocument;
+    if (!chooserDocs || choiceDocs?.has(doc)) return;
     const n = el.localName;
-    return n === 'select' || n === 'option' || n === 'optgroup' || hasChoiceMarkup(op);
+    let has = chooserDocs.get(doc);
+    if (has === undefined) {
+        has = doc.querySelector('select[value]') !== null;
+        chooserDocs.set(doc, has);
+    }
+    if (
+        n === 'select' ||
+        n === 'option' ||
+        n === 'optgroup' ||
+        hasMarkup(op, has ? CHOICE_MARKUP : CHOOSER_MARKUP)
+    ) {
+        choiceDocs ??= new Set();
+        choiceDocs.add(doc);
+    }
 }
 
 /**
  * @param {*} x
+ * @param {RegExp} re
  * @returns {boolean}
  */
-function hasChoiceMarkup(x) {
-    if (typeof x === 'string') return CHOICE_MARKUP.test(x);
-    return Array.isArray(x) && x.some(hasChoiceMarkup);
+function hasMarkup(x, re) {
+    if (typeof x === 'string') return re.test(x);
+    return Array.isArray(x) && x.some((y) => hasMarkup(y, re));
 }
 
 /**
@@ -962,6 +995,7 @@ function applyItemOps(item, innerOps, streams = null) {
                 continue;
             }
             const el = found.el;
+            noteChoices(op, el);
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
