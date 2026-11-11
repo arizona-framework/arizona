@@ -971,24 +971,27 @@ raw_text_remedy(_TextElement) ->
 %% `<textarea>`) through `Backend` (an `arizona_renderer`): its statics with the slot
 %% markers the backend put around each dynamic removed, each value escaped as content
 %% escapes it (a nested text-only template read the same way, a literal `raw/1` part
-%% as written), and every `<` written `&lt;` -- none of them opens a tag, or this
-%% answers `markup`. A component, an each, a `?local` or an attribute is markup too.
+%% as written), and every `<` written `&lt;`. Only the statics decide whether it is
+%% markup: one opening a tag answers `markup`, as does a component, an each, a `?local`
+%% or an attribute; a value or `raw/1` part is text, whatever it holds.
 %% The values are evaluated here, inside the slot that holds the template, so their
 %% reads are that slot's.
 -doc false.
 -spec text_markup(Backend, Template) -> {ok, binary()} | markup when
     Backend :: module(),
     Template :: map().
-text_markup(Backend, #{s := Statics, d := Dynamics}) ->
-    try text_zip(Backend, text_statics(Backend, Statics, [dyn_az(D) || D <- Dynamics]), Dynamics) of
-        Parts ->
-            Bin = iolist_to_binary(Parts),
-            case has_tag_open(Bin) of
-                true -> markup;
-                false -> {ok, binary:replace(Bin, ~"<", ~"&lt;", [global])}
+text_markup(Backend, #{s := Statics0, d := Dynamics}) ->
+    Statics = text_statics(Backend, Statics0, [dyn_az(D) || D <- Dynamics]),
+    case lists:any(fun has_tag_open/1, Statics) of
+        true ->
+            markup;
+        false ->
+            try text_zip(Backend, Statics, Dynamics) of
+                Parts ->
+                    {ok, binary:replace(iolist_to_binary(Parts), ~"<", ~"&lt;", [global])}
+            catch
+                throw:arizona_markup -> markup
             end
-    catch
-        throw:arizona_markup -> markup
     end;
 text_markup(_Backend, _NotTemplate) ->
     markup.

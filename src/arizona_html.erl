@@ -1133,8 +1133,10 @@ raw_text(Tag, Before, After, Value) ->
     %% match and no atom is built at render time.
     raw_text_1({raw_text_mode(Tag), Before, After}, Value).
 
-raw_text_1({{rcdata, _Name}, _, _}, {arizona_esc, V}) ->
-    arizona_template:raw(escape(arizona_template:to_bin(V)));
+raw_text_1({{rcdata, _Name}, _, _} = Ctx, {arizona_esc, V}) ->
+    %% Escaped, the value holds no `<`, but a static before it may: `x</tit` then
+    %% `le x` would close the element.
+    arizona_template:raw(neutralize(Ctx, escape(arizona_template:to_bin(V))));
 raw_text_1({{rcdata, _Name}, _, _} = Ctx, V) when is_map(V) ->
     arizona_template:raw(raw_text_markup(Ctx, V));
 raw_text_1(Ctx, Value) when is_binary(Value) ->
@@ -1181,14 +1183,14 @@ raw_text_mode(Tag) ->
         true ->
             script;
         false ->
-            case rawtext_name(Tag, [~"title", ~"textarea"]) of
-                nomatch -> {rawtext, rawtext_name(Tag, rawtext_names())};
-                Name -> {rcdata, Name}
+            case rawtext_name(Tag, rawtext_names()) of
+                nomatch -> {rcdata, rawtext_name(Tag, [~"title", ~"textarea"])};
+                Name -> {rawtext, Name}
             end
     end.
 
-%% The canonical lowercase name, found by a comparison that allocates nothing. Only
-%% a tag raw_text_kind/2 classified `raw` reaches here, so the list always holds it.
+%% The canonical lowercase name, found by a comparison that allocates nothing. Only a
+%% tag raw_text_kind/2 classified raw text reaches here, so one of the lists holds it.
 rawtext_name(Tag, [Name | Names]) ->
     case string:equal(Tag, Name, true) of
         true -> Name;

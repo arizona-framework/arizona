@@ -121,6 +121,8 @@
     raw_text_end_tag_neutralized/1,
     text_template_renders_text_in_raw_text/1,
     raw_text_bad_list_located/1,
+    raw_in_title_text_template_is_text/1,
+    title_end_tag_split_by_static_neutralized/1,
     raw_each_diffs_like_bare/1,
     raw_nodiff_skips_like_bare/1,
     literal_raw_template_refused/1,
@@ -303,6 +305,8 @@ groups() ->
             raw_text_end_tag_neutralized,
             text_template_renders_text_in_raw_text,
             raw_text_bad_list_located,
+            raw_in_title_text_template_is_text,
+            title_end_tag_split_by_static_neutralized,
             raw_each_diffs_like_bare,
             raw_nodiff_skips_like_bare,
             literal_raw_template_refused,
@@ -2273,6 +2277,42 @@ text_template_renders_text_in_raw_text(Config) when is_list(Config) ->
         arizona_render:render_to_iolist(M:title_static_text_template(#{x => 1}))
     ),
     ?assertNotEqual(nomatch, binary:match(Static, ~">a &lt; b</title>")).
+
+%% A `?raw` inside a text-only template in a title is text, as written: whatever its
+%% data holds -- a `<` before a letter, a comment, the end tag -- it renders with every
+%% `<` written `&lt;`, never closing the element, on SSR, the live render and the diff.
+raw_in_title_text_template_is_text(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(#{v => V}))),
+            {LiveHTML, _, _} = arizona_render:render(M:Fun(#{v => V}), #{}),
+            ?assertEqual(SSR, iolist_to_binary(LiveHTML)),
+            ?assertEqual({Fun, V, 1}, {Fun, V, count(SSR, ~"</title")}),
+            ?assertNotEqual({Fun, V, nomatch}, {Fun, V, binary:match(SSR, Want)}),
+            {_, S0, V0} = arizona_render:render(M:Fun(#{v => ~"x"}), #{}),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(#{v => V}), S0, V0, #{v => true}),
+            ?assertNotEqual([], Ops),
+            ?assertEqual({Fun, V, 0}, {Fun, V, count(term_to_binary(Ops), ~"</title")})
+        end
+     || Fun <- [title_raw_in_list, title_raw_in_inline_template, title_raw_in_helper_template],
+        {V, Want} <- [
+            {~"a<b", ~"a&lt;b"},
+            {~"<!-- c -->", ~"&lt;!-- c -->"},
+            {~"</title>", ~"&lt;/title>"}
+        ]
+    ].
+
+%% A static ending in part of the end tag cannot be completed by an escaped value.
+title_end_tag_split_by_static_neutralized(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(M:title_split_end_tag(#{v => ~"le x"}))),
+    {HTML, S0, V0} = arizona_render:render(M:title_split_end_tag(#{v => ~"le x"}), #{}),
+    ?assertEqual(1, count(SSR, ~"</title")),
+    ?assertEqual(1, count(iolist_to_binary(HTML), ~"</title")),
+    {Ops, _, _} = arizona_diff:diff(M:title_split_end_tag(#{v => ~"le y"}), S0, V0, #{v => true}),
+    ?assertNotEqual([], Ops),
+    ?assertEqual(0, count(term_to_binary(Ops), ~"</title")).
 
 %% A `?raw` list in a script holding a non-text term is a located bad_template_value.
 raw_text_bad_list_located(Config) when is_list(Config) ->

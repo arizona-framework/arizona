@@ -42,6 +42,10 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([helper_raw_template_json/1]).
 -export([literal_raw_template/1]).
 -export([raw_wrapped/1]).
+-export([title_raw_in_list/1]).
+-export([title_raw_in_inline_template/1]).
+-export([title_raw_in_helper_template/1]).
+-export([title_split_end_tag/1]).
 -export([title_raw_value/1]).
 -export([textarea_raw_value/1]).
 -export([title_raw_helper_raw/1]).
@@ -546,6 +550,28 @@ text_titled(Bindings) ->
 -spec title_static_text_template(az:bindings()) -> az:template().
 title_static_text_template(Bindings) ->
     ?html({head, [], [?stateless(fun text_titled/1, #{t => ?html(~"a < b"), x => ?get(x)})]}).
+
+%% A `?raw` in a text-only template in a title: a list, an inline template, a template a
+%% helper returns. Its value is text there, `<` and all.
+-spec title_raw_in_list(az:bindings()) -> az:template().
+title_raw_in_list(Bindings) ->
+    ?html({title, [], [[~"a ", ?raw(?get(v))]]}).
+
+-spec title_raw_in_inline_template(az:bindings()) -> az:template().
+title_raw_in_inline_template(Bindings) ->
+    ?html({title, [], [?html([~"P - ", ?raw(?get(v))])]}).
+
+-spec title_raw_in_helper_template(az:bindings()) -> az:template().
+title_raw_in_helper_template(Bindings) ->
+    ?html({title, [], [raw_doc(?get(kind, raw), ?get(v))]}).
+
+raw_doc(raw, V) -> ?html([~"Raw - ", ?raw(V)]);
+raw_doc(plain, V) -> V.
+
+%% A static ending in part of the element's end tag, before a value that completes it.
+-spec title_split_end_tag(az:bindings()) -> az:template().
+title_split_end_tag(Bindings) ->
+    ?html({title, [], [~"x</tit", ?get(v)]}).
 
 %% A `?raw` list in a script holding a non-text term.
 -spec script_raw_bad_list(az:bindings()) -> az:template().

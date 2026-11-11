@@ -1323,8 +1323,9 @@ format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
 format_error(markup_in_raw_text) ->
     "a <title> or <textarea> holds text only (escapable raw text): the browser shows "
-    "an ?each, a ?stateless/?stateful component or a nested template there as literal "
-    "markup. Render the value as text instead";
+    "an element, an ?each, a ?stateless/?stateful component or a template holding an "
+    "element there as literal markup. Render text instead: a value, or a text-only "
+    "template (text and values, no element), which renders its text";
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -5605,8 +5606,10 @@ is_text_only_template(Fields, Backend) ->
     Statics = [extract_binary_value(B) || B <- ast_list_to_list(template_map_field(s, Fields))],
     case dynamic_azs(template_map_field(d, Fields)) of
         {ok, Azs} ->
-            Text = iolist_to_binary(arizona_template:text_statics(Backend, Statics, Azs)),
-            not arizona_template:has_tag_open(Text);
+            not lists:any(
+                fun arizona_template:has_tag_open/1,
+                arizona_template:text_statics(Backend, Statics, Azs)
+            );
         error ->
             false
     end.
