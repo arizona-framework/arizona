@@ -48,6 +48,7 @@ and the select keeps its value for the client to apply after.
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
     runtime_text_option_valued_by_its_markup/1,
+    raw_template_option_is_valued_by_its_text/1,
     markup_text_tracks_what_its_slot_tracks/1,
     authored_selected_is_refused/1,
     choice_text_needs_markup_text/1,
@@ -95,6 +96,7 @@ groups() ->
             runtime_text_option_diffs,
             runtime_text_option_in_each_row,
             runtime_text_option_valued_by_its_markup,
+            raw_template_option_is_valued_by_its_text,
             markup_text_tracks_what_its_slot_tracks,
             opaque_diff_ships_the_value,
             opaque_each_keeps_its_item_diff
@@ -652,22 +654,29 @@ runtime_text_option_in_each_row(Config) when is_list(Config) ->
 %% An `?each` the select wraps whole (its item's option is valued by markup) still
 %% diffs item by item: the wrapper is transparent to a live render.
 opaque_each_keeps_its_item_diff(Config) when is_list(Config) ->
-    Mod = compile_module(
-        select_src_mod(
-            "sel_opaque_each",
-            "arizona_template:each(fun(O) -> {option, [], [arizona_template:raw(O)]} end, "
-            "arizona_template:get(opts, Bindings))"
-        )
-    ),
-    B0 = #{v => ~"b", opts => [~"a", ~"<i>b</i>"]},
-    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
-    {Ops, Snap1, _} = arizona_diff:diff(
-        Mod:render(B0#{opts => [~"a", ~"<i>c</i>"]}), Snap0, V0, #{opts => true}
-    ),
-    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 1, _]]]], Ops),
-    ?assertEqual([], [Op || Op <- flatten_ops(Ops), hd(Op) =:= ?OP_SET_ATTR]),
-    ?assertNotEqual(
-        nomatch, binary:match(iolist_to_binary(arizona_render:snapshot_html(Snap1)), ~"<i>c</i>")
+    Each =
+        "arizona_template:each(fun(O) -> {option, [], [arizona_template:raw(O)]} end, "
+        "arizona_template:get(opts, Bindings))",
+    %% A raw around the each is the each (arizona_template:raw/1), chooser or not.
+    lists:foreach(
+        fun({Name, Child}) ->
+            Mod = compile_module(select_src_mod(Name, Child)),
+            B0 = #{v => ~"b", opts => [~"a", ~"<i>b</i>"]},
+            {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+            {Ops, Snap1, _} = arizona_diff:diff(
+                Mod:render(B0#{opts => [~"a", ~"<i>c</i>"]}), Snap0, V0, #{opts => true}
+            ),
+            ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 1, _]]]], Ops, Child),
+            ?assertEqual([], [Op || Op <- flatten_ops(Ops), hd(Op) =:= ?OP_SET_ATTR]),
+            ?assertNotEqual(
+                nomatch,
+                binary:match(iolist_to_binary(arizona_render:snapshot_html(Snap1)), ~"<i>c</i>")
+            )
+        end,
+        [
+            {"sel_opaque_each", Each},
+            {"sel_opaque_raw_each", "arizona_template:raw(" ++ Each ++ ")"}
+        ]
     ).
 
 %% An inserted item ships as its HTML, or as statics plus values.
@@ -850,6 +859,45 @@ runtime_text_option_valued_by_its_markup(Config) when is_list(Config) ->
         Mod:render(B1#{v => ~"Pick Z&!"}), Snap1, V1, #{v => true}
     ),
     ?assertEqual([{set, ~"selected"}], attr_ops(Ops2), Ops2).
+
+%% A raw around a template in an option renders as that template, so the option is
+%% valued by the text the template shows. One a value holds is read where the
+%% attribute renders, as the bare template is, on the SSR, the live render and a diff;
+%% one written in the option is markup the compiler cannot see into, marked in the SSR
+%% output and left to the client live.
+raw_template_option_is_valued_by_its_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(sel_raw_tmpl). -export([render/1, label/1]). "
+        "render(Bindings) -> arizona_template:target(arizona_html, {select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [], [arizona_template:get(label, Bindings)]}, {option, [], [~\"y\"]}]}). "
+        "label(T) -> arizona_template:raw(arizona_template:target(arizona_html, {b, [], [T]})). "
+    ),
+    B0 = #{v => ~"A&B", label => Mod:label(~"A&B")},
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    ?assertMatch({match, _}, re:run(SSR, ~"<option[^>]* selected>(<!--[^>]*-->)?<b"), SSR),
+    ?assertEqual(1, count_selected(SSR), SSR),
+    ?assertEqual(nomatch, re:run(SSR, ~"<select[^>]* value[ =>]"), SSR),
+    {Live, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertEqual(1, count_selected(iolist_to_binary(Live)), Live),
+    B1 = B0#{label => Mod:label(~"Z")},
+    {Ops1, Snap1, V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, #{label => true}),
+    ?assertEqual([{remove, ~"selected"}], attr_ops(Ops1), Ops1),
+    {Ops2, _Snap2, _} = arizona_diff:diff(Mod:render(B1#{v => ~"Z"}), Snap1, V1, #{v => true}),
+    ?assertEqual([{set, ~"selected"}], attr_ops(Ops2), Ops2),
+    Literal = compile_module(
+        select_src_mod(
+            "sel_raw_tmpl_literal",
+            "{option, [], [~\"a\"]}, {option, [], [arizona_template:raw("
+            "arizona_template:target(arizona_html, {b, [], [arizona_template:get(x, Bindings)]}))]}"
+        )
+    ),
+    LB = #{v => ~"b", x => ~"b"},
+    LitHTML = iolist_to_binary(arizona_render:render_to_iolist(Literal:render(LB))),
+    ?assertEqual([~"b"], [strip_tags(V) || V <- selected_values(LitHTML)], LitHTML),
+    ?assertMatch({match, _}, re:run(LitHTML, ~"<select[^>]* value=\"b\""), LitHTML),
+    {LitLive, _, _} = arizona_render:render(Literal:render(LB), #{}),
+    ?assertEqual(0, count_selected(iolist_to_binary(LitLive)), LitLive).
 
 %% The `selected` of an option valued by a markup child tracks what the child's slot
 %% tracks, and no more: a read inside the markup's own closures (a remote helper's) is
@@ -1110,6 +1158,9 @@ option_value(Attrs, Text) ->
 
 is_selected(Attrs) ->
     re:run(Attrs, ~" selected(?:$| |=)") =/= nomatch.
+
+strip_tags(HTML) ->
+    re:replace(HTML, ~"<[^>]*>", ~"", [global, {return, binary}]).
 
 count_selected(HTML) ->
     length(binary:matches(HTML, ~" selected")).
