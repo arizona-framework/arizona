@@ -1864,6 +1864,30 @@ describe('applyEffects -- toggle_attr', () => {
         applyEffects([[21, '#f', 'type', 'password', 'text']]);
         expect(field().getAttribute('type')).toBe('password');
     });
+
+    // The server renders a command attribute with Erlang's json:encode, which
+    // writes `2.0` and `1.0e21` and sorts map keys as binaries ("10" before
+    // "9"); JSON.stringify writes `2`, `1e+21` and puts integer-like keys first.
+    // The same command must still match, in either direction.
+    it('commands: flips from a server-rendered A whose text JS would write differently', () => {
+        const server = '[0,"pick",{"10":1,"9":2.0,"big":1.0e21,"x":0.1}]';
+        const a = JSON.parse(server);
+        const b = [0, 'other'];
+        document.body.innerHTML = `<input id="f" az-select='${server}' />`;
+        applyEffects([[21, '#f', 'az-select', a, b]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(b);
+        applyEffects([[21, '#f', 'az-select', a, b]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(a);
+        field().setAttribute('az-select', server);
+        applyEffects([[21, '#f', 'az-select', b, a]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(b);
+    });
+
+    it('commands: a current value that is not JSON resolves to A', () => {
+        document.body.innerHTML = `<input id="f" az-select="not json" />`;
+        applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([0, 'a']);
+    });
 });
 
 // ---------------------------------------------------------------------------

@@ -342,6 +342,19 @@ function withQueryAll(sel, fn) {
 }
 
 /**
+ * JSON text in JSON.stringify's form, or null when it is not JSON.
+ * @param {string} text
+ * @returns {string|null}
+ */
+function reserialize(text) {
+    try {
+        return JSON.stringify(JSON.parse(text));
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Execute JS commands from an az-* attribute value.
  * Single command: [opcode, ...args]
  * Multiple commands: [[opcode, ...args], [opcode, ...args]]
@@ -519,6 +532,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
             // Each match is toggled on its own current state. Like set_attr, it
             // proves the name only when it writes commands: a bare value is data.
+            // Commands compare re-serialized on both sides: the server renders
+            // them with Erlang's encoder (`2.0`, binary-sorted keys), which
+            // JSON.stringify never reproduces, so raw text would never match.
             const cmds = Array.isArray(cmd[3]);
             noteAzAttr(cmd[2], cmds);
             const a = cmds ? JSON.stringify(cmd[3]) : cmd[3];
@@ -527,7 +543,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                     if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
                     else applySetAttrOp(t, cmd[2], '');
                 } else {
-                    applySetAttrOp(t, cmd[2], t.getAttribute(cmd[2]) === a ? cmd[4] : cmd[3]);
+                    const cur = t.getAttribute(cmd[2]);
+                    const isA = cmds ? cur !== null && reserialize(cur) === a : cur === a;
+                    applySetAttrOp(t, cmd[2], isA ? cmd[4] : cmd[3]);
                 }
             });
             break;
