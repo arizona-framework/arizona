@@ -706,8 +706,11 @@ value_kind(Value) ->
         false -> other
     end.
 
+%% Walked by hand, not with lists:all/2: an improper list would crash there,
+%% outside this module, with no error_info.
 is_cmds({arizona_effect, Cmd}) when is_list(Cmd) -> true;
-is_cmds(Cmds) when is_list(Cmds) -> lists:all(fun is_cmds/1, Cmds);
+is_cmds([]) -> true;
+is_cmds([Cmds | Rest]) -> is_cmds(Cmds) andalso is_cmds(Rest);
 is_cmds(_) -> false.
 
 encode_key(Key) when is_atom(Key) -> [Key];

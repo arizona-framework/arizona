@@ -21,6 +21,7 @@
 -export([set_attr_refuses_a_value_neither_binary_nor_command/1]).
 -export([toggle_attr_refuses_a_value_neither_binary_nor_command/1]).
 -export([attr_errors_name_the_public_function/1]).
+-export([attr_refuses_an_improper_list_value/1]).
 
 all() ->
     [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
@@ -47,7 +48,8 @@ groups() ->
             toggle_attr_refuses_commands_under_another_name,
             set_attr_refuses_a_value_neither_binary_nor_command,
             toggle_attr_refuses_a_value_neither_binary_nor_command,
-            attr_errors_name_the_public_function
+            attr_errors_name_the_public_function,
+            attr_refuses_an_improper_list_value
         ]}
     ].
 
@@ -256,6 +258,27 @@ attr_errors_name_the_public_function(Config) when is_list(Config) ->
             arizona_js:toggle_attr(~"#x", ~"title", ~"a", arizona_js:push_event(~"b"))
         end)
     ).
+
+%% An improper list is no command list: it is refused as a value by the public
+%% function, not by whatever walked it.
+attr_refuses_an_improper_list_value(Config) when is_list(Config) ->
+    Improper = [arizona_js:push_event(~"a") | foo],
+    [
+        begin
+            assert_value_error(Fun),
+            ?assertMatch({arizona_js, Name, _, _}, top_frame(Fun))
+        end
+     || {Name, Fun} <- [
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"az-click", Improper) end},
+            {set_attr, fun() -> arizona_js:set_attr(~"#x", ~"title", Improper) end},
+            {toggle_attr, fun() ->
+                arizona_js:toggle_attr(~"#x", ~"az-click", Improper, arizona_js:push_event(~"b"))
+            end},
+            {toggle_attr, fun() ->
+                arizona_js:toggle_attr(~"#x", ~"az-click", arizona_js:push_event(~"b"), Improper)
+            end}
+        ]
+    ].
 
 %% --------------------------------------------------------------------
 %% Helpers
