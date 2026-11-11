@@ -165,6 +165,23 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // restore
     });
 
+    // A replace of the popped-out view (a reconnect's resync re-renders it in its
+    // window) leaves the element moved out a stale copy: closing the window brings
+    // back the view as it is now.
+    it('brings back the view a replace re-rendered in the PiP document', async () => {
+        document.body.innerHTML = '<div id="v20" az-view az="0"><span>old</span></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v20');
+        applyOps([[OP.REPLACE, 'v20', '<div id="v20" az-view az="0"><span>new</span></div>']]);
+        expect(pip.document.querySelector('#v20 span')?.textContent).toBe('new');
+
+        pip.fire('pagehide');
+
+        expect(document.querySelector('#v20 span')?.textContent).toBe('new');
+        expect(pip.document.getElementById('v20')).toBeNull();
+    });
+
     it("preserves a popped-out form's typed values across a reconnect", async () => {
         document.body.innerHTML =
             '<div id="v7" az-view az="0"><form id="pf"><input name="note" /></form></div>';
