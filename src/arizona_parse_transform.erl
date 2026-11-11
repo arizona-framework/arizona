@@ -7157,7 +7157,6 @@ chooser_sel(Backend, Tag, Attrs) ->
 chooser_value({tuple, _, [_Name, Value]}) -> Value;
 chooser_value(_Bare) -> ast_binary(<<>>).
 
-%% A `?local`, whole or interpolated, stands for its initial value.
 %% A choice's or chooser's value as the comparison reads it: marked as the attribute
 %% renders it (raw_interp_attr_ast/2), so a literal `?raw`, whole or a part, compares as
 %% the markup it is and a raw any other part returns (a helper's) as the text it
@@ -7200,6 +7199,7 @@ markup_ast(Backend, Raw) ->
         {atom, L, Backend}, {cons, L, Raw, {nil, L}}
     ]}.
 
+%% A `?local`, whole or interpolated, stands for its initial value.
 local_inits({cons, L, Head, Tail}) ->
     {cons, L, local_inits(Head), local_inits(Tail)};
 local_inits(Value) ->

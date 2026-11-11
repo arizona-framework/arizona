@@ -1153,7 +1153,23 @@ helper_raw_value_compares_as_its_text(Config) when is_list(Config) ->
         )
     ),
     assert_picked([~"&amp;amp;b"], Mixed, #{v => ~"&amp;b"}),
-    assert_picked([], Mixed, #{v => ~"&b"}).
+    assert_picked([], Mixed, #{v => ~"&b"}),
+    %% A helper's raw around a map is not text: the comparison refuses it as an
+    %% attribute value refuses one, though the select renders no value of its own.
+    MapRaw = compile_module(
+        helper_raw_src(
+            "sel_helper_raw_map",
+            "{value, h(arizona_template:get(m, Bindings))}",
+            "{option, [{value, ~\"a\"}], []}"
+        )
+    ),
+    M = #{s => [~"a"], d => []},
+    ?assertError(
+        {arizona_loc, _, {raw_template, M}}, ssr_html(MapRaw, #{m => M})
+    ),
+    ?assertError(
+        {arizona_loc, _, {raw_template, M}}, arizona_render:render(MapRaw:render(#{m => M}), #{})
+    ).
 
 %% A `?raw` attribute value is markup: the page holds it with its character references
 %% decoded, so an option valued `?raw(~"a&amp;b")` is the option `a&b` names, on the

@@ -123,7 +123,8 @@ A literal `?raw` value, on the select or an option, whole or an interpolated par
 the backend's parser decodes an attribute value (the optional `arizona_renderer:markup_text/2`, in
 `attribute`), so `?raw(~"a&amp;b")` and `~"a&b"` name the same option on every path, and a select
 keeping a raw value keeps that decoded text. A raw a helper returns renders escaped, so it compares
-as its text, references and all.
+as its text, references and all. Under `multiple` each part of a literal list holding a `?raw` is
+its own pick, compared alone.
 `multiple` counts as present whatever it holds but `false`, as the attribute renders. A `?local`
 value stays on the select for the client to move, and the page loads on its initial. An `?each`
 callback parameter shadowing a name the value reads is renamed; a hoisted value whose definition

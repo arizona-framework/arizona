@@ -271,7 +271,8 @@ newlines normalized and NUL replaced; a literal `?raw` value, or an interpolated
 literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its character references
 are decoded too, through the backend's optional `c:arizona_renderer:markup_text/2` in `attribute`;
 a raw a helper returns renders escaped and compares as its text; the transform marks the parts of
-both values as the attribute renders them, so every path compares them alike), folded to a
+both values as the attribute renders them, so every path compares them alike, and under
+`multiple` each part of a literal list holding a `?raw` is its own pick), folded to a
 static `true`/`false` when both values are literals (text, or a literal `?raw` of text). The
 choices are found where the chooser compiles (`compile_element/5`), after hoisted variables and
 helper bodies are spliced, through elements, content lists and conditional tails. An `?each`
