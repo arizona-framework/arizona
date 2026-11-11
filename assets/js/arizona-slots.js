@@ -123,7 +123,7 @@ export function findMarker(el, az) {
 
 /**
  * If the slot between `startMarker` and its `<!--/az-->` already holds exactly one
- * text node, update it in place (`node.data = value`, a characterData write) and
+ * text node, update it in place (`node.nodeValue = value`, a characterData write) and
  * return true. The reason this matters: a childList remove+insert of the text node
  * forces a layout recompute, and WebKitGTK reverts an IN-PROGRESS / uncommitted
  * scroll offset to a remembered position when that happens (it implements no CSS
@@ -146,7 +146,7 @@ function updateLoneTextNode(startMarker, value) {
         after.nodeType === 8 &&
         /** @type {Comment} */ (after).data === '/az'
     ) {
-        /** @type {Text} */ (first).data = value;
+        first.nodeValue = value;
         return true;
     }
     return false;

@@ -374,6 +374,10 @@ render_dyn(Backend, #{t := ?EACH, items := Items, template := Tmpl}) when is_lis
 render_dyn(Backend, #{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
     #{s := ItemS} = Tmpl,
     join_items(Backend, [zip_stream_item(Backend, ItemS, maps:get(K, Items)) || K <- Order]);
+render_dyn(_Backend, #{az_local := _, ssr_only := true}) ->
+    %% A choice's mark under a `?local` chooser value: the page's alone
+    %% (render_ssr_val/2); afterwards the client marks it from the value it owns.
+    <<>>;
 render_dyn(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
     Backend:render_attr(Name, V);
 render_dyn(Backend, #{az_local := _, v := V}) ->
@@ -1060,6 +1064,8 @@ render_fp_val(Backend, {attr, Name, V}) ->
     %% the name (baked into the static) and sends the raw value -- both via the
     %% backend's wire_attr/2, so no backend is named here.
     Backend:wire_attr(Name, V);
+render_fp_val(_Backend, #{az_local := _, ssr_only := true}) ->
+    <<>>;
 render_fp_val(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
     Backend:render_attr(Name, V);
 render_fp_val(Backend, #{az_local := _, v := V}) ->

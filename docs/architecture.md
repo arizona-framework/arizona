@@ -1089,9 +1089,38 @@ its key, and `ap` (present only for interpolated attributes) carries the
 static prefix/suffix. The client scans `[az-local]` live (no persistent index): for a content
 slot it reconstructs the marker `az` from the element's runtime `az` + the slot index
 (mirroring `arizona_html:text_az/2`); for an interpolated attribute it recomposes
-`prefix ++ value ++ suffix` on set and strips them on read. An interpolated attribute's
-composed initial value is baked into the bind-map's `v` (`[Prefix, to_bin(Init), Suffix]`), so
-SSR render and diff-skip reuse the whole-value attribute path unchanged.
+`prefix ++ value ++ suffix` on set and strips them on read (from the live property for a
+control's `value` -- what the user typed or picked -- and `null` when it no longer carries
+them). An interpolated attribute's composed initial value is baked into the bind-map's `v`
+(`[Prefix, to_bin(Init), Suffix]`), so SSR render and diff-skip reuse the whole-value attribute
+path unchanged.
+
+A `?local` `value` on a `<select>` is the one place the rendered attribute is not the local's
+text as written: the transform rewrites it to one whole local whose init is
+`arizona_template:chooser_value/3` of the value it stands for, so under `multiple` it renders
+the JSON array of picks like any kept select value. A local in a list with static parts stands
+for what any select value's list does: without `multiple` the one composed text, under it a
+pick per static part with the local's own picks in its place
+(`arizona_template:local_choice/5`, deciding at render when `multiple` is a runtime value).
+The descriptor is built from the attributes as written; for a select value its `ap` entry
+holds the static parts as lists (`[[Before...], [After...]]`), so the client can rebuild the
+array around the picks a `set` gives the local (a list is the picks, `false`/`null` none,
+anything else one), or join them as affixes without `multiple`. `get` reads the live
+selection: under `multiple` the selected values but those a static part names, else the
+selected value with the affixes stripped. A runtime `multiple` the server flips changes what
+the value means and nothing re-renders the local, so the client's `multiple` write carries it:
+it reads the local's value as the select held it and writes it back in the new form (the parts
+around it becoming picks, or affixes again), a single select keeping the last of several picks
+as the browser does.
+
+The options under such a select are marked from the initial by the page alone: their
+`selected`, decided at compile time or not, compiles as a browser-owned slot (the `az_local`
+map a `?local` attribute is, never re-evaluated or patched) flagged `ssr_only`, which the SSR
+render renders and every live render (`render_dyn/2`, the wire payloads of `render_fp_val/2`)
+renders empty. The selection is the client's: a server change of a binding the initial reads
+must not move it, neither by a `selected` op nor by an option it inserts marked, which in a
+single select would take the user's pick. The client marks an inserted option from the value
+it owns (`applyChoosers` after the batch).
 
 Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
 op `?EFFECT_SET_LOCAL`):

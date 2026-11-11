@@ -14,6 +14,7 @@ import {
     set,
     setAll,
 } from './arizona.js';
+import { applyChoosers } from './arizona-attrs.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3798,6 +3799,236 @@ describe('?local -- set/get attribute', () => {
     });
 });
 
+describe('?local -- a select value', () => {
+    const picked = (sel) => [...sel.options].filter((o) => o.selected).map((o) => o.value);
+    const marked = (sel) => [...sel.options].filter((o) => o.defaultSelected).map((o) => o.value);
+    const options = '<option>a</option><option>c</option><option>ac</option>';
+    function selectView(attrs, desc) {
+        setupView('v', `<select az="0" az-local='${desc}' ${attrs}>${options}</select>`);
+        return /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+    }
+    const whole = '{"a":{"value":"k"}}';
+    const interp = '{"a":{"value":"k"},"ap":{"value":[["a"],[]]}}';
+    const parts = '{"a":{"value":"k"},"ap":{"value":[["a"],["ac"]]}}';
+
+    // Under `multiple` the value is the JSON array of the texts it picks, the form the
+    // server renders: a list is its picks, anything else one pick.
+    it('writes a multiple select value as a JSON array', () => {
+        const sel = selectView(`multiple value='["a"]'`, whole);
+        set('v', 'k', ['a', 'c']);
+        expect(sel.getAttribute('value')).toBe('["a","c"]');
+        expect(picked(sel)).toEqual(['a', 'c']);
+        expect(marked(sel)).toEqual(['a', 'c']);
+        set('v', 'k', 'ac');
+        expect(sel.getAttribute('value')).toBe('["ac"]');
+        expect(picked(sel)).toEqual(['ac']);
+        // A string is one pick even when it reads as JSON.
+        set('v', 'k', '["c"]');
+        expect(sel.getAttribute('value')).toBe('["[\\"c\\"]"]');
+        expect(picked(sel)).toEqual([]);
+        set('v', 'k', false);
+        expect(sel.hasAttribute('value')).toBe(false);
+        expect(picked(sel)).toEqual([]);
+    });
+
+    it('reads a multiple select value as the values it selects', () => {
+        const sel = selectView(`multiple value='["a","c"]'`, whole);
+        applyChoosers(document);
+        expect(get('v', 'k')).toEqual(['a', 'c']);
+        sel.options[2].selected = true;
+        expect(get('v', 'k')).toEqual(['a', 'c', 'ac']);
+    });
+
+    // In a list under `multiple` every static part is a pick, and the local owns its
+    // own: a `set` replaces those and keeps the static ones.
+    it('writes a local beside static parts as the picks it owns', () => {
+        const sel = selectView(`multiple value='["a","c","ac"]'`, parts);
+        applyChoosers(document);
+        expect(picked(sel)).toEqual(['a', 'c', 'ac']);
+        set('v', 'k', '');
+        expect(sel.getAttribute('value')).toBe('["a","","ac"]');
+        expect(picked(sel)).toEqual(['a', 'ac']);
+        set('v', 'k', ['c', 'c']);
+        expect(sel.getAttribute('value')).toBe('["a","c","c","ac"]');
+        set('v', 'k', false);
+        expect(sel.getAttribute('value')).toBe('["a","ac"]');
+        set('v', 'k', null);
+        expect(sel.getAttribute('value')).toBe('["a","ac"]');
+        set('v', 'k', 1);
+        expect(sel.getAttribute('value')).toBe('["a","1","ac"]');
+        // `true` renders a bare attribute, the empty text, as the server reads it.
+        set('v', 'k', true);
+        expect(sel.getAttribute('value')).toBe('["a","","ac"]');
+        set('v', 'k', [true, 'c']);
+        expect(sel.getAttribute('value')).toBe('["a","","c","ac"]');
+    });
+
+    it('writes a whole multiple local true as the empty pick', () => {
+        const sel = selectView(`multiple value='["a"]'`, whole);
+        set('v', 'k', true);
+        expect(sel.getAttribute('value')).toBe('[""]');
+        set('v', 'k', [true]);
+        expect(sel.getAttribute('value')).toBe('[""]');
+    });
+
+    // The server renders an option inserted under a `?local` value unmarked (only the
+    // page is marked); the client marks it from the value it owns, so a new option the
+    // server's binding names leaves the user's pick alone.
+    const streamSelect = (attrs) => {
+        setupView(
+            'v',
+            `<select az="0" az-local='${whole}' ${attrs}><!--az:0-->` +
+                '<option az-key="a">a</option><option az-key="c" selected>c</option>' +
+                '<option az-key="ac">ac</option><!--/az--></select>',
+        );
+        return /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+    };
+    const insert = (html) => applyOps([[OP.INSERT, 'v:0', 'aa', -1, html]]);
+
+    it('keeps the user pick of a single select across a server insert', () => {
+        const sel = streamSelect('value="c"');
+        sel.value = 'a';
+        insert('<option az-key="aa">aa</option>');
+        expect(sel.value).toBe('a');
+        expect(marked(sel)).toEqual(['c']);
+    });
+
+    it('keeps the user picks of a multiple select across a server insert', () => {
+        const sel = streamSelect(`multiple value='["c"]'`);
+        sel.options[1].selected = false;
+        sel.options[0].selected = true;
+        insert('<option az-key="aa">aa</option>');
+        expect(picked(sel)).toEqual(['a']);
+        expect(marked(sel)).toEqual(['c']);
+    });
+
+    // The value the client owns does name an inserted option: marked from it.
+    it('marks an inserted option the local value names', () => {
+        const sel = streamSelect(`multiple value='["c"]'`);
+        set('v', 'k', ['c', 'aa']);
+        insert('<option az-key="aa">aa</option>');
+        expect(marked(sel)).toEqual(['c', 'aa']);
+        expect(picked(sel)).toEqual(['c', 'aa']);
+    });
+
+    // `get` reads the picks the local owns: the selected values but those a static part
+    // names, the user's own picks included.
+    it('reads a local beside static parts as the selected values it owns', () => {
+        const sel = selectView(`multiple value='["a","c"]'`, interp);
+        applyChoosers(document);
+        expect(get('v', 'k')).toEqual(['c']);
+        sel.options[2].selected = true;
+        expect(get('v', 'k')).toEqual(['c', 'ac']);
+        sel.options[0].selected = false;
+        sel.options[1].selected = false;
+        expect(get('v', 'k')).toEqual(['ac']);
+    });
+
+    // Without `multiple` the list is one text: the parts are the affixes.
+    it('writes a single select value as its text', () => {
+        const sel = selectView('value="ac"', interp);
+        set('v', 'k', '');
+        expect(sel.getAttribute('value')).toBe('a');
+        expect(sel.value).toBe('a');
+        expect(get('v', 'k')).toBe('');
+    });
+
+    // `get` reads what the user selected, its affixes stripped; a selection the
+    // affixes cannot compose is no value of the local's.
+    it('reads a single select value from the selection', () => {
+        setupView(
+            'v',
+            `<select az="0" az-local='${parts}' value="acac">` +
+                '<option>a</option><option>acac</option><option>axac</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        applyChoosers(document);
+        expect(get('v', 'k')).toBe('c');
+        sel.options[2].selected = true;
+        expect(get('v', 'k')).toBe('x');
+        sel.options[0].selected = true;
+        expect(get('v', 'k')).toBe(null);
+    });
+
+    // A runtime `multiple` changes what the value means -- one text, or a pick per part
+    // -- and the server never renders a local again, so the client carries the local's
+    // value across the flip: what it held, written in the new form, the marks with it.
+    const flip = (on) =>
+        applyOps([on ? [OP.SET_ATTR, 'v:0', 'multiple', ''] : [OP.REM_ATTR, 'v:0', 'multiple']]);
+
+    it('reads the parts beside a local as picks once multiple turns on', () => {
+        const sel = selectView('value="ac"', interp);
+        applyChoosers(document);
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('["a","c"]');
+        expect(picked(sel)).toEqual(['a', 'c']);
+        expect(marked(sel)).toEqual(['a', 'c']);
+        expect(get('v', 'k')).toEqual(['c']);
+    });
+
+    it('reads the picks beside a local as one text once multiple turns off', () => {
+        const sel = selectView(`multiple value='["a","c"]'`, interp);
+        applyChoosers(document);
+        flip(false);
+        expect(sel.getAttribute('value')).toBe('ac');
+        expect(picked(sel)).toEqual(['ac']);
+        expect(marked(sel)).toEqual(['ac']);
+        expect(get('v', 'k')).toBe('c');
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('["a","c"]');
+        expect(picked(sel)).toEqual(['a', 'c']);
+    });
+
+    // The value a local holds is what the user picked: that is what crosses. A single
+    // select keeps the last of several picks, as the browser does when `multiple` goes.
+    it('carries the user selection of a whole local across a flip', () => {
+        const sel = selectView('value="c"', whole);
+        applyChoosers(document);
+        sel.options[2].selected = true;
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('["ac"]');
+        expect(picked(sel)).toEqual(['ac']);
+        expect(marked(sel)).toEqual(['ac']);
+        sel.options[0].selected = true;
+        flip(false);
+        expect(sel.getAttribute('value')).toBe('ac');
+        expect(picked(sel)).toEqual(['ac']);
+        expect(marked(sel)).toEqual(['ac']);
+        expect(get('v', 'k')).toBe('ac');
+    });
+
+    it('carries no picks of a whole local as no value', () => {
+        const sel = selectView(`multiple value='["c"]'`, whole);
+        applyChoosers(document);
+        sel.options[1].selected = false;
+        flip(false);
+        expect(sel.hasAttribute('value')).toBe(false);
+        expect(marked(sel)).toEqual([]);
+    });
+
+    // Only a select's value changes meaning with `multiple`: an input's local value is
+    // left as it is, the default it was rendered with included.
+    it('leaves the local value of an input alone when multiple flips', () => {
+        setupView('v', `<input az="0" type="email" az-local='${whole}' value="a@x" />`);
+        const input = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        input.value = 'b@x';
+        flip(true);
+        expect(input.getAttribute('value')).toBe('a@x');
+        expect(input.value).toBe('b@x');
+    });
+
+    // A select the server keeps a value on has it re-rendered with the flip: the client
+    // leaves it alone.
+    it('leaves the value of a select without a local to the server', () => {
+        setupView('v', `<select az="0" value="ac">${options}</select>`);
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        applyChoosers(document);
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('ac');
+        expect(picked(sel)).toEqual(['ac']);
+    });
+});
+
 describe('?local -- descriptor cache and early exit', () => {
     afterEach(() => {
         vi.restoreAllMocks();
@@ -3872,6 +4103,44 @@ describe('?local -- interpolated attribute', () => {
         const input = document.querySelector('input');
         expect(input.getAttribute('value')).toBe('$50');
         expect(input.value).toBe('$50');
+    });
+
+    // A control's live value is what the user typed: an interpolated binding reads it,
+    // as a whole-value one does, its affixes stripped. A value the user edited out of
+    // its affixes holds no value of the local's.
+    it('reads what the user typed into an interpolated value', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local='{"a":{"value":"amt"},"ap":{"value":["$",".00"]}}' value="$0.00" />` +
+                `<textarea az="1" az-local='{"a":{"value":"note"},"ap":{"value":["> ",""]}}' value="> hi"></textarea>`,
+        );
+        const input = document.querySelector('input');
+        const area = document.querySelector('textarea');
+        area.value = '> hi';
+        expect(get('v', 'amt')).toBe('0');
+        input.value = '$12.00';
+        expect(get('v', 'amt')).toBe('12');
+        input.value = '12';
+        expect(get('v', 'amt')).toBe(null);
+        input.value = '$.0';
+        expect(get('v', 'amt')).toBe(null);
+        area.value = '> typed';
+        expect(get('v', 'note')).toBe('typed');
+        area.value = 'typed';
+        expect(get('v', 'note')).toBe(null);
+    });
+
+    // A `value` that is not live (a hidden input's reflects the attribute, an `<li>`'s
+    // coerces it) reads the attribute as before.
+    it('reads the attribute of an interpolated value that is not live', () => {
+        setupView(
+            'v',
+            `<input type="hidden" az="0" az-local='{"a":{"value":"id"},"ap":{"value":["u-",""]}}' value="u-1" />` +
+                `<ol><li az="1" az-local='{"a":{"value":"n"},"ap":{"value":["",""]}}' value="7x"></li></ol>`,
+        );
+        expect(get('v', 'id')).toBe('1');
+        // `<li>`'s `value` property is a number, coerced from the attribute.
+        expect(get('v', 'n')).toBe('7x');
     });
 
     it('null or undefined interpolates as empty, never the text "null"', () => {

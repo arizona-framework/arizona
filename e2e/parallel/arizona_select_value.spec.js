@@ -88,4 +88,91 @@ test.describe('select value', () => {
             ),
         ).toEqual(['d']);
     });
+
+    // A `?local` value under `multiple`: a whole one holds the list of picks, and in a
+    // list each static part is a pick and the local owns its own. The page loads on
+    // them, the client reads the value the same way at start, and a `set` moves the
+    // picks the local owns, the static ones staying.
+    test('a local multiple value loads and moves on the options it names', async ({ page }) => {
+        const picked = (cls) =>
+            page.evaluate(
+                (c) =>
+                    [...document.querySelector(`#select-value .${c}`).selectedOptions].map(
+                        (o) => o.value,
+                    ),
+                cls,
+            );
+        await page.goto('/select-value');
+        await wsReady(page);
+        expect(await picked('local-many')).toEqual(['a', 'c']);
+        expect(await picked('local-tail')).toEqual(['a', 'c']);
+        await page.locator('#select-value .set-many').click();
+        expect(await picked('local-many')).toEqual(['c', 'ac']);
+        await page.locator('#select-value .set-tail').click();
+        expect(await picked('local-tail')).toEqual(['a', 'ac']);
+    });
+
+    // A `?local` value is the client's even when its initial came from a binding: the
+    // page loads on it, and a later server change of that binding leaves the option
+    // the user picked alone.
+    test('a server change never moves a local value', async ({ page }) => {
+        await page.goto('/select-value');
+        await wsReady(page);
+        const bound = page.locator('#select-value .local-bound');
+        await expect(bound).toHaveValue('b');
+        await bound.selectOption('a');
+        await expectStaysConnected(page, () => page.locator('#select-value .pick-c').click());
+        await expect(page.locator('#select-value .lit')).toHaveValue('c');
+        await expect(bound).toHaveValue('a');
+    });
+
+    // The options a server change adds under a `?local` value arrive unmarked: the
+    // client marks them from the value it owns, so one the server's new binding names
+    // leaves the user's picks alone, in a single and a multiple select, from a list and
+    // a stream `?each`.
+    test('an option the server adds never takes the pick of a local value', async ({ page }) => {
+        await page.goto('/select-value');
+        await wsReady(page);
+        const bound = page.locator('#select-value .local-bound');
+        const stream = page.locator('#select-value .local-bound-stream');
+        const many = page.locator('#select-value .local-bound-many');
+        await expect(bound).toHaveValue('b');
+        await bound.selectOption('c');
+        await stream.selectOption('c');
+        await many.selectOption(['b']);
+        await expectStaysConnected(page, () => page.locator('#select-value .add-opt').click());
+        await expect(page.locator('#select-value .list option[value="d"]')).toHaveCount(1);
+        await expect(stream.locator('option[value="d"]')).toHaveCount(1);
+        await expect(many.locator('option[value="d"]')).toHaveCount(1);
+        await expect(bound).toHaveValue('c');
+        await expect(stream).toHaveValue('c');
+        expect(await many.evaluate((s) => [...s.selectedOptions].map((o) => o.value))).toEqual([
+            'b',
+        ]);
+    });
+
+    // A `multiple` the server flips changes what a local's list value means -- one
+    // text, or a pick per part -- and the client carries the value it owns across:
+    // the user's pick, both ways, with the options marked from it.
+    test('a local value follows a multiple the server flips', async ({ page }) => {
+        await page.goto('/select-value');
+        await wsReady(page);
+        const sel = page.locator('#select-value .local-flip');
+        const state = () =>
+            sel.evaluate((s) => ({
+                picked: [...s.selectedOptions].map((o) => o.value),
+                marked: [...s.options].filter((o) => o.defaultSelected).map((o) => o.value),
+            }));
+        const flip = () =>
+            expectStaysConnected(page, () => page.locator('#select-value .flip').click());
+        expect(await state()).toEqual({ picked: ['ac'], marked: ['ac'] });
+        await flip();
+        await expect(sel).toHaveJSProperty('multiple', true);
+        expect(await state()).toEqual({ picked: ['a', 'c'], marked: ['a', 'c'] });
+        // The user takes the local's pick away: the static part alone is left, `a`.
+        await sel.selectOption(['a']);
+        await flip();
+        await expect(sel).toHaveJSProperty('multiple', false);
+        expect(await state()).toEqual({ picked: ['a'], marked: ['a'] });
+    });
 });

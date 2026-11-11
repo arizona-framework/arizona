@@ -126,7 +126,19 @@ keeping a raw value keeps that decoded text. A raw a helper returns renders esca
 as its text, references and all. Under `multiple` each part of a literal list holding a `?raw` is
 its own pick, compared alone.
 `multiple` counts as present whatever it holds but `false`, as the attribute renders. A `?local`
-value stays on the select for the client to move, and the page loads on its initial. An `?each`
+value stays on the select for the client to move, and the page loads on its initial. The
+selection is the client's from then on: only the page (the SSR render, static generation) marks
+the options, from the initial; a live render and an option the server adds later carry no
+`selected` (the client marks them from the value it owns), and nothing diffs, so a later change of
+a binding the initial reads neither ships a `selected` op nor marks a new option. A whole
+`?local` holds the value. In a list with static parts (`[~"user-", ?local(id, ~"1")]`) the list
+means what any select value's list means: without `multiple` one text, the parts the client-side
+affixes; under `multiple` a list of picks, each static part one and the local its own -- the
+elements of a list initial, none for `false`, else the initial
+(`[~"a", ?local(k, [~"c", ~"d"])]` picks `a`, `c` and `d`). A runtime `{multiple, ?get(m)}`
+decides between the two as the page renders. Under `multiple` the select's `value` is the JSON
+array of the texts it picks on every path: the SSR attribute, a `?local`'s initial, and the
+client's `set`, which replaces only the picks the local owns and keeps the static parts. An `?each`
 callback parameter shadowing a name the value reads is renamed; a hoisted value whose definition
 reads such a name is `hoisted_var_captured`, as any hoisted read there. The one refusal is an option
 that also writes `selected` (`select_value`, `option_selected`): the value already decides it. The

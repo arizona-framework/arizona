@@ -44,6 +44,8 @@ and the select keeps its value for the client to apply after.
     opaque_child_compiles/1,
     opaque_child_is_marked_in_its_own_slot/1,
     opaque_each_keeps_its_item_diff/1,
+    local_value_marks_render_once/1,
+    local_value_marks_only_the_page/1,
     option_with_runtime_text_compiles/1,
     runtime_text_option_diffs/1,
     runtime_text_option_in_each_row/1,
@@ -61,7 +63,11 @@ and the select keeps its value for the client to apply after.
     helper_raw_value_compares_as_its_text/1,
     raw_option_value_reads_as_the_page_holds_it/1,
     raw_select_value_reads_as_the_page_holds_it/1,
-    interpolated_raw_value_reads_as_one_text/1
+    interpolated_raw_value_reads_as_one_text/1,
+    interpolated_local_value_compiles/1,
+    local_value_names_what_the_page_selects/1,
+    multiple_local_value_is_a_json_array/1,
+    local_value_parts_follow_runtime_multiple/1
 ]).
 
 all() ->
@@ -91,7 +97,10 @@ groups() ->
             opaque_live_render_is_left_to_the_client,
             mark_choices_reads_the_fragment,
             authored_selected_follows_the_value,
-            fragment_reads_as_the_parser_preprocesses
+            fragment_reads_as_the_parser_preprocesses,
+            local_value_names_what_the_page_selects,
+            multiple_local_value_is_a_json_array,
+            local_value_parts_follow_runtime_multiple
         ]},
         {diff, [parallel], [
             diff_moves_selected_to_the_new_option,
@@ -104,7 +113,9 @@ groups() ->
             raw_template_option_is_valued_by_its_text,
             markup_text_tracks_what_its_slot_tracks,
             opaque_diff_ships_the_value,
-            opaque_each_keeps_its_item_diff
+            opaque_each_keeps_its_item_diff,
+            local_value_marks_render_once,
+            local_value_marks_only_the_page
         ]},
         {compile, [parallel], [
             opaque_child_compiles,
@@ -121,7 +132,8 @@ groups() ->
             helper_raw_value_compares_as_its_text,
             raw_option_value_reads_as_the_page_holds_it,
             raw_select_value_reads_as_the_page_holds_it,
-            interpolated_raw_value_reads_as_one_text
+            interpolated_raw_value_reads_as_one_text,
+            interpolated_local_value_compiles
         ]}
     ].
 
@@ -246,8 +258,29 @@ static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     ),
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each and stream ?each on `b`; the multiple select on its two;
-    %% the component and the child view on `b`.
-    ?assertEqual([~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b"], selected_values(HTML)).
+    %% the component and the child view on `b`; the `?local` selects on their
+    %% initials, the one whose `multiple` flips (off) on its one text.
+    ?assertEqual(
+        [
+            ~"b",
+            ~"b",
+            ~"b",
+            ~"a",
+            ~"c",
+            ~"b",
+            ~"b",
+            ~"a",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"b",
+            ~"a",
+            ~"c",
+            ~"b",
+            ~"ac"
+        ],
+        selected_values(HTML)
+    ).
 
 nodiff_select_marks_the_chosen_option(Config) when is_list(Config) ->
     HTML = ssr(nodiff, ~"b"),
@@ -357,8 +390,29 @@ opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     ),
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each, stream ?each, the multiple select, then the component
-    %% and the child view.
-    ?assertEqual([~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c"], selected_values(HTML), HTML).
+    %% and the child view, and the `?local` selects.
+    ?assertEqual(
+        [
+            ~"c",
+            ~"c",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"c",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"c",
+            ~"ac"
+        ],
+        selected_values(HTML),
+        HTML
+    ).
 
 %% A live render, outside a page or inside a live process alike, leaves the options a
 %% component renders to the client: the select carries its value, and nothing is left
@@ -1291,9 +1345,270 @@ interpolated_raw_value_reads_as_one_text(Config) when is_list(Config) ->
     ),
     ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"a&amp;b\""), HTML).
 
+%% A `?local` in a list with static parts: one text with them as its affixes, and
+%% under `multiple` one pick each, the local its own. A select holding an option the
+%% transform cannot see keeps the value; the descriptor hands the client the static
+%% parts on either side, each a pick of its own.
+interpolated_local_value_compiles(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Multiple, Value, Picked}) ->
+            M = compile_module(
+                raw_src(
+                    Mod,
+                    [Multiple, "{value, [~\"a\", arizona_template:local(k, ~\"c\")]}"],
+                    local_options(opaque)
+                )
+            ),
+            HTML = ssr_picked(Picked, M, #{}),
+            ?assertEqual(Value, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[~"a"], []]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [
+            {"sel_interp_local", "", ~"ac", [~"ac"]},
+            {"sel_interp_local_m", "multiple, ", ~"[\"a\",\"c\"]", [~"a", ~"c"]}
+        ]
+    ).
+
+%% `multiple` decided at runtime decides what the parts of a `?local` value are: one
+%% text without it, one pick each with it.
+local_value_parts_follow_runtime_multiple(Config) when is_list(Config) ->
+    M = compile_module(
+        raw_src(
+            "sel_local_runtime_multiple",
+            "{multiple, arizona_template:get(m, Bindings)}, "
+            "{value, [~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]}",
+            local_options(literal)
+        )
+    ),
+    One = ssr_picked([~"ac"], M, #{m => false, x => ~"c"}),
+    ?assertEqual(~"ac", select_value(One), One),
+    Many = ssr_picked([~"a", ~"c"], M, #{m => true, x => ~"c"}),
+    ?assertEqual(~"[\"a\",\"c\"]", select_value(Many), Many),
+    Own = ssr_picked([~"a", ~"c", ~"ac"], M, #{m => true, x => [~"c", ~"ac"]}),
+    ?assertEqual(~"[\"a\",\"c\",\"ac\"]", select_value(Own), Own),
+    None = ssr_picked([~"a"], M, #{m => true, x => false}),
+    ?assertEqual(~"[\"a\"]", select_value(None), None),
+    %% `multiple` is present whatever it holds but `false`, as the attribute renders.
+    Present = ssr_picked([~"a", ~"c"], M, #{m => ~"", x => ~"c"}),
+    ?assertEqual(~"[\"a\",\"c\"]", select_value(Present), Present).
+
+%% Whatever the shape of a `?local` value -- whole or interpolated, a select whose
+%% options are all marked in the template or one holding an option only the SSR
+%% render marks -- the value the select carries names exactly the options the page
+%% selects, so the client applying it at load moves nothing.
+local_value_names_what_the_page_selects(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Multiple, Value, Options, Picked}}) ->
+            Mod = "sel_local_" ++ integer_to_list(N),
+            M = compile_module(raw_src(Mod, [Multiple, "{value, ", Value, "}"], Options)),
+            HTML = ssr_picked(Picked, M, #{x => ~"c", xs => [~"a", ~"c"]}),
+            ?assertEqual(Picked, value_picks(HTML), {Mod, HTML})
+        end,
+        lists:enumerate(
+            [
+                {"", W, local_options(Kind), Picked}
+             || Kind <- [literal, opaque],
+                {W, Picked} <- [
+                    {"arizona_template:local(k, ~\"ac\")", [~"ac"]},
+                    {"[~\"a\", arizona_template:local(k, ~\"c\")]", [~"ac"]},
+                    {"[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]", [
+                        ~"ac"
+                    ]}
+                ]
+            ] ++
+                [
+                    {"multiple, ", W, local_options(Kind), Picked}
+                 || Kind <- [literal, opaque],
+                    {W, Picked} <- [
+                        {"arizona_template:local(k, [~\"a\", ~\"c\"])", [~"a", ~"c"]},
+                        {"arizona_template:local(k, ~\"ac\")", [~"ac"]},
+                        {"[~\"a\", arizona_template:local(k, ~\"c\")]", [~"a", ~"c"]},
+                        {"[arizona_template:local(k, ~\"a\"), ~\"c\"]", [~"a", ~"c"]},
+                        {"[~\"a\", ~\"c\", arizona_template:local(k, ~\"ac\")]", [
+                            ~"a", ~"c", ~"ac"
+                        ]},
+                        {"[~\"a\", arizona_template:local(k, [~\"c\", ~\"ac\"])]", [
+                            ~"a", ~"c", ~"ac"
+                        ]},
+                        {"[~\"a\", arizona_template:local(k, false)]", [~"a"]},
+                        {"arizona_template:local(k, arizona_template:get(xs, Bindings))", [
+                            ~"a", ~"c"
+                        ]},
+                        {"[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]", [
+                            ~"a", ~"c"
+                        ]}
+                    ]
+                ]
+        )
+    ).
+
+%% Under `multiple` the value is the JSON array of the texts it picks on every path:
+%% a whole `?local` holds the list of picks (or one pick), and in a list each static
+%% part is a pick and the local its own.
+multiple_local_value_is_a_json_array(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Value, Kind, Json}}) ->
+            Mod = "sel_local_json_" ++ integer_to_list(N),
+            M = compile_module(
+                raw_src(Mod, ["multiple, {value, ", Value, "}"], local_options(Kind))
+            ),
+            HTML = ssr_html(M, #{}),
+            ?assertEqual(Json, select_value(HTML), {Mod, HTML})
+        end,
+        lists:enumerate([
+            {V, Kind, Json}
+         || Kind <- [literal, opaque],
+            {V, Json} <- [
+                {"arizona_template:local(k, [~\"a\", ~\"c\"])", ~"[\"a\",\"c\"]"},
+                {"arizona_template:local(k, ~\"a&b\")", ~"[\"a&b\"]"},
+                {"[~\"a\", arizona_template:local(k, ~\"c\")]", ~"[\"a\",\"c\"]"},
+                {"[~\"a&b\", arizona_template:local(k, [~\"c\", 1])]", ~"[\"a&b\",\"c\",\"1\"]"}
+            ]
+        ])
+    ).
+
+%% A `?local` value is the client's: the options it names are marked as the page
+%% loads, from its initial, and never again by the server. A later change of the
+%% binding the initial came from ships no `selected` op, so the server never moves a
+%% selection the client owns, wherever the options come from.
+local_value_marks_render_once(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Multiple, Value, Kind}}) ->
+            Mod = "sel_local_once_" ++ integer_to_list(N),
+            M = compile_module(
+                raw_src(Mod, [Multiple, "{value, ", Value, "}"], once_options(Kind))
+            ),
+            B0 = #{x => ~"c", xs => [~"c"], os => [~"a", ~"c", ~"ac"]},
+            {_, Snap0, V0} = arizona_render:render(M:render(B0), #{}),
+            B1 = B0#{x => ~"a", xs => [~"a"]},
+            {Ops, _Snap1, _} = arizona_diff:diff(M:render(B1), Snap0, V0, #{x => true, xs => true}),
+            ?assertEqual([], attr_ops(Ops), {Mod, Ops}),
+            {AllOps, _, _} = arizona_diff:diff(M:render(B1), Snap0, V0),
+            ?assertEqual([], attr_ops(AllOps), {Mod, AllOps})
+        end,
+        lists:enumerate([
+            {Multiple, Value, Kind}
+         || Kind <- [literal, each_list, each_stream],
+            {Multiple, Value} <- [
+                {"", "arizona_template:local(k, arizona_template:get(x, Bindings))"},
+                {"", "[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]"},
+                {"multiple, ", "arizona_template:local(k, arizona_template:get(xs, Bindings))"},
+                {"multiple, ",
+                    "[~\"a\", arizona_template:local(k, arizona_template:get(x, Bindings))]"}
+            ]
+        ])
+    ).
+
+%% Only the page marks the options a `?local` value names, from its initial. What the
+%% server renders later -- a live render, an option a list or stream `?each` inserts --
+%% carries no `selected` of its own: by then the selection is the client's, which
+%% marks a new option from the value it holds, so the binding the initial read cannot
+%% take the user's pick over.
+local_value_marks_only_the_page(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, {Multiple, Kind}}) ->
+            Mod = "sel_local_page_" ++ integer_to_list(N),
+            Value = "arizona_template:local(k, arizona_template:get(x, Bindings))",
+            M = compile_module(
+                raw_src(Mod, [Multiple, "{value, ", Value, "}"], page_options(Kind))
+            ),
+            B0 = #{x => ~"c", os => [~"a", ~"c", ~"ac"], s => page_stream([~"a", ~"c", ~"ac"])},
+            _ = ssr_picked([~"c"], M, B0),
+            {Live, Snap0, V0} = arizona_render:render(M:render(B0), #{}),
+            ?assertEqual([], selected_values(iolist_to_binary(Live)), {Mod, Live}),
+            B1 = B0#{
+                x => ~"aa",
+                os => [~"a", ~"c", ~"ac", ~"aa"],
+                s => arizona_stream:insert(maps:get(s, B0), ~"aa")
+            },
+            {Ops, _, _} = arizona_diff:diff(M:render(B1), Snap0, V0, #{
+                x => true, os => true, s => true
+            }),
+            ?assertMatch([_ | _], Ops, Mod),
+            ?assertEqual(nomatch, binary:match(term_text(Ops), ~"selected"), {Mod, Ops})
+        end,
+        lists:enumerate([
+            {Multiple, Kind}
+         || Kind <- [each_list, each_stream], Multiple <- ["", "multiple, "]
+        ])
+    ),
+    %% A mark the transform decides at compile time is the page's alone too.
+    Lit = compile_module(
+        raw_src(
+            "sel_local_page_lit",
+            "{value, arizona_template:local(k, ~\"c\")}",
+            local_options(literal)
+        )
+    ),
+    _ = ssr_picked([~"c"], Lit, #{}),
+    {LitLive, _, _} = arizona_render:render(Lit:render(#{}), #{}),
+    ?assertEqual([], selected_values(iolist_to_binary(LitLive)), LitLive).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+page_options(each_list) ->
+    "arizona_template:each(fun(O) -> {option, [], [O]} end, arizona_template:get(os, Bindings))";
+page_options(each_stream) ->
+    "arizona_template:each(fun(O, K) -> {option, [{az_key, K}], [O]} end, "
+    "arizona_template:get(s, Bindings))".
+
+page_stream(Items) ->
+    arizona_stream:new(fun(O) -> O end, Items).
+
+term_text(Term) ->
+    iolist_to_binary(io_lib:format("~0p", [Term])).
+
+once_options(literal) ->
+    "{option, [], [~\"a\"]}, {option, [], [~\"c\"]}, {option, [], [~\"ac\"]}, "
+    "{option, [], [~\"aa\"]}";
+once_options(each_list) ->
+    "arizona_template:each(fun(O) -> {option, [], [O]} end, arizona_template:get(os, Bindings))";
+once_options(each_stream) ->
+    "arizona_template:each(fun(O, K) -> {option, [{az_key, K}], [O]} end, "
+    "arizona_stream:new(fun(O) -> O end, arizona_template:get(os, Bindings)))".
+
+%% Options named `a`, `c` and `ac`: written literally, or the last two in raw markup
+%% the transform cannot see into.
+local_options(literal) ->
+    "{option, [], [~\"a\"]}, {option, [], [~\"c\"]}, {option, [], [~\"ac\"]}";
+local_options(opaque) ->
+    "{option, [], [~\"a\"]}, "
+    "arizona_template:raw(~\"<option>c</option><option>ac</option>\")".
+
+%% The text the page's select holds as its `value`, the HTML parser's reading.
+select_value(HTML) ->
+    case re:run(HTML, ~"<select[^>]* value=\"([^\"]*)\"", [{capture, all_but_first, binary}]) of
+        {match, [V]} -> unescape_attr(V);
+        nomatch -> none
+    end.
+
+%% The options a select's `value` names, read as the client reads it: under
+%% `multiple` a JSON array of texts, else one text.
+value_picks(HTML) ->
+    V = select_value(HTML),
+    case re:run(HTML, ~"<select[^>]* multiple[ >]") of
+        {match, _} -> json:decode(V);
+        nomatch -> [V]
+    end.
+
+local_descriptor(HTML) ->
+    {match, [D]} = re:run(
+        HTML, ~"<select[^>]* az-local=\"([^\"]*)\"", [{capture, all_but_first, binary}]
+    ),
+    json:decode(unescape_attr(D)).
+
+unescape_attr(V) ->
+    lists:foldl(
+        fun({From, To}, Acc) -> binary:replace(Acc, From, To, [global]) end,
+        V,
+        [{~"&quot;", ~"\""}, {~"&lt;", ~"<"}, {~"&gt;", ~">"}, {~"&amp;", ~"&"}]
+    ).
 
 shapes() ->
     [
