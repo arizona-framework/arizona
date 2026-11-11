@@ -223,7 +223,11 @@ them as lists, `[[before...], [after...]]`, joined into affixes without `multipl
 and when the value itself changes (a `SET_ATTR`/`REM_ATTR` `value` on the select, a `?local` `set`)
 the live selection follows too, the user's pick included. Under a `?local` value the server marks
 only the page, so an option a later batch inserts there arrives unmarked and this pass is the only
-one that marks it, from the value the client owns. It runs on every such select when the page
+one that marks it, from the value the client owns. A `multiple` the server flips changes what that
+value means, and nothing re-renders it, so the `multiple` write itself carries it across
+(`heldChooserLocal`/`carryChooserLocal`, from `applySetAttrOp`/`applyRemAttrOp`): the local's value
+as the select held it, written back in the new form -- a single select taking the last of several
+picks, as the browser keeps the last selected option. It runs on every such select when the page
 starts (`connect` and the static `start`), on the select an op writes the value of, and after any
 batch in which an op, at any depth (an item or list patch's inner ops, a child view's batch inside
 an item), targeted a select/option/optgroup or carried markup holding one (`noteChoices`,

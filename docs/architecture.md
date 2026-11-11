@@ -1107,7 +1107,11 @@ holds the static parts as lists (`[[Before...], [After...]]`), so the client can
 array around the picks a `set` gives the local (a list is the picks, `false`/`null` none,
 anything else one), or join them as affixes without `multiple`. `get` reads the live
 selection: under `multiple` the selected values but those a static part names, else the
-selected value with the affixes stripped.
+selected value with the affixes stripped. A runtime `multiple` the server flips changes what
+the value means and nothing re-renders the local, so the client's `multiple` write carries it:
+it reads the local's value as the select held it and writes it back in the new form (the parts
+around it becoming picks, or affixes again), a single select keeping the last of several picks
+as the browser does.
 
 The options under such a select are marked from the initial by the page alone: their
 `selected`, decided at compile time or not, compiles as a browser-owned slot (the `az_local`

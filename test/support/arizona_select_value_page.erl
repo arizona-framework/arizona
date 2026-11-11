@@ -4,7 +4,8 @@ A live page whose selects take their choice from a `value`: written literally, f
 list `?each`, from a stream `?each`, `multiple`, from a component, from a child
 view (`arizona_select_value_child`), from a `?local` under `multiple`, whole and
 interpolated, and from a `?local` whose initial is a binding (an option added later
-leaves the user's pick there alone). Buttons move the choice
+leaves the user's pick there alone), and from a list with a `?local` under a `multiple`
+that flips at runtime. Buttons move the choice
 and add an option to the child, so the e2e can check the page loads on the chosen
 option and every update follows.
 """.
@@ -18,6 +19,7 @@ mount(Init) ->
         id => ~"select-value",
         v => maps:get(v, Init, ~"b"),
         vs => maps:get(vs, Init, [~"a", ~"c"]),
+        m => false,
         opts => [~"a", ~"b", ~"c"],
         child_opts => [~"a", ~"b", ~"c"],
         items => arizona_stream:new(fun(#{id := Id}) -> Id end, Items)
@@ -114,7 +116,17 @@ render(Bindings) ->
             ]},
             {button, [{class, ~"add-opt"}, {az_click, arizona_js:push_event(~"add_opt")}], [
                 ~"add option"
-            ]}
+            ]},
+            {button, [{class, ~"flip"}, {az_click, arizona_js:push_event(~"flip")}], [
+                ~"flip multiple"
+            ]},
+            {select,
+                [{class, ~"local-flip"}, {multiple, ?get(m)}, {value, [~"a", ?local(flip, ~"c")]}],
+                [
+                    {option, [], [~"a"]},
+                    {option, [], [~"c"]},
+                    {option, [], [~"ac"]}
+                ]}
         ]}
     ).
 
@@ -132,5 +144,7 @@ handle_event(~"add_opt", _Payload, Bindings) ->
         #{},
         []
     };
+handle_event(~"flip", _Payload, #{m := M} = Bindings) ->
+    {Bindings#{m => not M}, #{}, []};
 handle_event(~"pick_many", _Payload, Bindings) ->
     {Bindings#{vs => [~"b"]}, #{}, []}.

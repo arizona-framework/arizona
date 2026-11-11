@@ -1,5 +1,6 @@
 import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
+import { carryChooserLocal, heldChooserLocal } from './arizona-locals.js';
 
 /** @type {HTMLTemplateElement | null} */
 let rawAttrTpl = null;
@@ -51,8 +52,10 @@ export function applySetAttrOp(el, name, val) {
     // fires. Before the write: a custom element's attributeChangedCallback may
     // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
+    const held = name === 'multiple' ? heldLocal(el) : null;
     el.setAttribute(name, val);
-    if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
+    if (held) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), held);
+    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
     else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
@@ -68,10 +71,25 @@ export function applySetAttrOp(el, name, val) {
  * @param {string} name
  */
 export function applyRemAttrOp(el, name) {
+    const held = name === 'multiple' ? heldLocal(el) : null;
     el.removeAttribute(name);
-    if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
+    if (held) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), held);
+    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
     else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
+}
+
+/**
+ * The `?local` value of a select whose `multiple` is about to flip (`heldChooserLocal`):
+ * the value means one text or a pick per part by `multiple`, and the server never renders
+ * a local again, so the client carries it across. Asked only on a `multiple` write.
+ * @param {Element} el
+ * @returns {ReturnType<typeof heldChooserLocal>}
+ */
+function heldLocal(el) {
+    return isChooserValue(el, 'value')
+        ? heldChooserLocal(/** @type {HTMLSelectElement} */ (el))
+        : null;
 }
 
 /**

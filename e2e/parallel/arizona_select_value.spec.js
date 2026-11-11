@@ -150,4 +150,29 @@ test.describe('select value', () => {
             'b',
         ]);
     });
+
+    // A `multiple` the server flips changes what a local's list value means -- one
+    // text, or a pick per part -- and the client carries the value it owns across:
+    // the user's pick, both ways, with the options marked from it.
+    test('a local value follows a multiple the server flips', async ({ page }) => {
+        await page.goto('/select-value');
+        await wsReady(page);
+        const sel = page.locator('#select-value .local-flip');
+        const state = () =>
+            sel.evaluate((s) => ({
+                picked: [...s.selectedOptions].map((o) => o.value),
+                marked: [...s.options].filter((o) => o.defaultSelected).map((o) => o.value),
+            }));
+        const flip = () =>
+            expectStaysConnected(page, () => page.locator('#select-value .flip').click());
+        expect(await state()).toEqual({ picked: ['ac'], marked: ['ac'] });
+        await flip();
+        await expect(sel).toHaveJSProperty('multiple', true);
+        expect(await state()).toEqual({ picked: ['a', 'c'], marked: ['a', 'c'] });
+        // The user takes the local's pick away: the static part alone is left, `a`.
+        await sel.selectOption(['a']);
+        await flip();
+        await expect(sel).toHaveJSProperty('multiple', false);
+        expect(await state()).toEqual({ picked: ['a'], marked: ['a'] });
+    });
 });

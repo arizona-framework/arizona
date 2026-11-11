@@ -259,9 +259,26 @@ static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     {ok, HTML} = file:read_file(Path),
     %% Literal, list ?each and stream ?each on `b`; the multiple select on its two;
     %% the component and the child view on `b`; the `?local` selects on their
-    %% initials.
+    %% initials, the one whose `multiple` flips (off) on its one text.
     ?assertEqual(
-        [~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b", ~"a", ~"c", ~"a", ~"c", ~"b", ~"a", ~"c", ~"b"],
+        [
+            ~"b",
+            ~"b",
+            ~"b",
+            ~"a",
+            ~"c",
+            ~"b",
+            ~"b",
+            ~"a",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"b",
+            ~"a",
+            ~"c",
+            ~"b",
+            ~"ac"
+        ],
         selected_values(HTML)
     ).
 
@@ -375,7 +392,24 @@ opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
     %% Literal, list ?each, stream ?each, the multiple select, then the component
     %% and the child view, and the `?local` selects.
     ?assertEqual(
-        [~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c", ~"a", ~"c", ~"a", ~"c", ~"c", ~"a", ~"c", ~"c"],
+        [
+            ~"c",
+            ~"c",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"c",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"c",
+            ~"a",
+            ~"c",
+            ~"c",
+            ~"ac"
+        ],
         selected_values(HTML),
         HTML
     ).

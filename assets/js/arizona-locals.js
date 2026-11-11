@@ -180,6 +180,52 @@ function affix(a) {
 const _localDescs = new WeakMap();
 
 /**
+ * The `az-local` descriptor of `el`, parsed once; `null` when it has none.
+ * @param {Element} el
+ * @returns {LocalDesc|null}
+ */
+function localDesc(el) {
+    let parsed = _localDescs.get(el);
+    if (parsed === undefined) {
+        const desc = el.getAttribute('az-local');
+        if (!desc) return null;
+        // The descriptor is always framework-generated valid JSON.
+        parsed = /** @type {LocalDesc} */ (JSON.parse(desc));
+        _localDescs.set(el, parsed);
+    }
+    return parsed;
+}
+
+/**
+ * The value of the `?local` a select's `value` is bound to, read as the select holds it
+ * now, before its `multiple` flips (`carryChooserLocal`); `null` for a value that is no
+ * local's, which the server renders again in the new form itself.
+ * @param {HTMLSelectElement} sel
+ * @returns {[LocalTarget, *] | null}
+ */
+export function heldChooserLocal(sel) {
+    const parsed = localDesc(sel);
+    if (parsed?.a?.value === undefined) return null;
+    const aff = parsed.ap?.value;
+    /** @type {LocalTarget} */
+    const target = aff ? ['attr', 'value', aff[0], aff[1]] : ['attr', 'value'];
+    return [target, readLocalValue(sel, target)];
+}
+
+/**
+ * Write the value `heldChooserLocal` read back once `multiple` flipped: the server never
+ * renders a local again, and the value means one text or a pick per part by `multiple`.
+ * A single select holds one pick, the last, as the browser keeps the last selected
+ * option when `multiple` goes; no pick is no value.
+ * @param {HTMLSelectElement} sel
+ * @param {[LocalTarget, *]} held
+ */
+export function carryChooserLocal(sel, [target, value]) {
+    const single = Array.isArray(value) && !sel.multiple;
+    writeLocalValue(sel, target, single ? (value[value.length - 1] ?? null) : value);
+}
+
+/**
  * Visit each bound slot for `key` under `root`. When `viewId` is non-null only
  * slots whose nearest view is `viewId` are visited (per-view isolation). The
  * callback may return `true` to stop the scan (first-match reads); the return
@@ -193,14 +239,8 @@ const _localDescs = new WeakMap();
 function forEachLocal(root, key, viewId, fn) {
     /** @param {Element} el @returns {boolean} */
     const visit = (el) => {
-        let parsed = _localDescs.get(el);
-        if (parsed === undefined) {
-            const desc = el.getAttribute('az-local');
-            if (!desc) return false;
-            // The descriptor is always framework-generated valid JSON.
-            parsed = /** @type {LocalDesc} */ (JSON.parse(desc));
-            _localDescs.set(el, parsed);
-        }
+        const parsed = localDesc(el);
+        if (!parsed) return false;
         if (viewId !== null && resolveTarget(el) !== viewId) return false;
         // c maps each content slot index -> key; a maps each attr name -> key;
         // ap (optional) carries [prefix, suffix] for interpolated attributes.

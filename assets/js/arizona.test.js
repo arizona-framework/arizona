@@ -3949,6 +3949,84 @@ describe('?local -- a select value', () => {
         sel.options[0].selected = true;
         expect(get('v', 'k')).toBe(null);
     });
+
+    // A runtime `multiple` changes what the value means -- one text, or a pick per part
+    // -- and the server never renders a local again, so the client carries the local's
+    // value across the flip: what it held, written in the new form, the marks with it.
+    const flip = (on) =>
+        applyOps([on ? [OP.SET_ATTR, 'v:0', 'multiple', ''] : [OP.REM_ATTR, 'v:0', 'multiple']]);
+
+    it('reads the parts beside a local as picks once multiple turns on', () => {
+        const sel = selectView('value="ac"', interp);
+        applyChoosers(document);
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('["a","c"]');
+        expect(picked(sel)).toEqual(['a', 'c']);
+        expect(marked(sel)).toEqual(['a', 'c']);
+        expect(get('v', 'k')).toEqual(['c']);
+    });
+
+    it('reads the picks beside a local as one text once multiple turns off', () => {
+        const sel = selectView(`multiple value='["a","c"]'`, interp);
+        applyChoosers(document);
+        flip(false);
+        expect(sel.getAttribute('value')).toBe('ac');
+        expect(picked(sel)).toEqual(['ac']);
+        expect(marked(sel)).toEqual(['ac']);
+        expect(get('v', 'k')).toBe('c');
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('["a","c"]');
+        expect(picked(sel)).toEqual(['a', 'c']);
+    });
+
+    // The value a local holds is what the user picked: that is what crosses. A single
+    // select keeps the last of several picks, as the browser does when `multiple` goes.
+    it('carries the user selection of a whole local across a flip', () => {
+        const sel = selectView('value="c"', whole);
+        applyChoosers(document);
+        sel.options[2].selected = true;
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('["ac"]');
+        expect(picked(sel)).toEqual(['ac']);
+        expect(marked(sel)).toEqual(['ac']);
+        sel.options[0].selected = true;
+        flip(false);
+        expect(sel.getAttribute('value')).toBe('ac');
+        expect(picked(sel)).toEqual(['ac']);
+        expect(marked(sel)).toEqual(['ac']);
+        expect(get('v', 'k')).toBe('ac');
+    });
+
+    it('carries no picks of a whole local as no value', () => {
+        const sel = selectView(`multiple value='["c"]'`, whole);
+        applyChoosers(document);
+        sel.options[1].selected = false;
+        flip(false);
+        expect(sel.hasAttribute('value')).toBe(false);
+        expect(marked(sel)).toEqual([]);
+    });
+
+    // Only a select's value changes meaning with `multiple`: an input's local value is
+    // left as it is, the default it was rendered with included.
+    it('leaves the local value of an input alone when multiple flips', () => {
+        setupView('v', `<input az="0" type="email" az-local='${whole}' value="a@x" />`);
+        const input = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        input.value = 'b@x';
+        flip(true);
+        expect(input.getAttribute('value')).toBe('a@x');
+        expect(input.value).toBe('b@x');
+    });
+
+    // A select the server keeps a value on has it re-rendered with the flip: the client
+    // leaves it alone.
+    it('leaves the value of a select without a local to the server', () => {
+        setupView('v', `<select az="0" value="ac">${options}</select>`);
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        applyChoosers(document);
+        flip(true);
+        expect(sel.getAttribute('value')).toBe('ac');
+        expect(picked(sel)).toEqual(['ac']);
+    });
 });
 
 describe('?local -- descriptor cache and early exit', () => {
