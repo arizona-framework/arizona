@@ -11,6 +11,7 @@ import {
     restoreFormState,
     saveFormState,
 } from './arizona.js';
+import { _viewDocs } from './arizona-docs.js';
 
 // A minimal stand-in for a Document Picture-in-Picture window, backed by a real
 // (jsdom) Document, so the multi-document patch/effect paths can be exercised
@@ -34,6 +35,31 @@ function makePipWindow() {
         close() {
             this.closed = true;
             handlers.pagehide?.();
+        },
+    };
+}
+
+/**
+ * Host view `viewId` in a document from ANOTHER realm (an iframe's window), as a
+ * real PiP window is: markup parsed there (a resync's `OP_REPLACE`) builds
+ * elements from that window's constructors, so the opener's `instanceof` fails
+ * on them. Registered directly rather than through `requestPip`, whose listeners
+ * jsdom refuses to bind with an opener-realm AbortSignal.
+ * @param {string} viewId
+ * @param {string} html -- the view root's markup, parsed by the foreign document
+ * @returns {{doc: Document, close: () => void}}
+ */
+function hostInForeignRealm(viewId, html) {
+    const frame = document.createElement('iframe');
+    document.documentElement.appendChild(frame);
+    const doc = /** @type {Document} */ (frame.contentDocument);
+    doc.body.innerHTML = html;
+    _viewDocs.set(viewId, doc);
+    return {
+        doc,
+        close: () => {
+            _viewDocs.delete(viewId);
+            frame.remove();
         },
     };
 }
@@ -160,6 +186,50 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         );
 
         pip.fire('pagehide');
+    });
+
+    it('restores typed fields a PiP document parsed in its own realm', () => {
+        const markup =
+            '<input name="t" /><input type="checkbox" name="c" value="y" />' +
+            '<select name="s"><option value="a">a</option><option value="b">b</option></select>' +
+            '<textarea name="x"></textarea>';
+        const pip = hostInForeignRealm(
+            'v13',
+            `<div id="v13" az-view az="0"><form id="pf13">${markup}</form></div>`,
+        );
+        try {
+            const form = /** @type {any} */ (pip.doc.getElementById('pf13'));
+            expect(form.elements.t instanceof HTMLInputElement).toBe(false);
+            form.elements.t.value = 'typed';
+            form.elements.c.checked = true;
+            form.elements.s.value = 'b';
+            form.elements.x.value = 'notes';
+            saveFormState();
+
+            // The resync re-renders the form, parsed in the PiP document again.
+            form.innerHTML = markup;
+            restoreFormState();
+
+            expect(form.elements.t.value).toBe('typed');
+            expect(form.elements.c.checked).toBe(true);
+            expect(form.elements.s.value).toBe('b');
+            expect(form.elements.x.value).toBe('notes');
+        } finally {
+            pip.close();
+        }
+    });
+
+    it('creates an SVG child in the SVG namespace in a PiP document', () => {
+        const pip = hostInForeignRealm(
+            'v14',
+            '<div id="v14" az-view az="0"><svg><g az="1"><!--az:1--><!--/az--></g></svg></div>',
+        );
+        try {
+            applyOps([[OP.TEXT, 'v14:1', '<rect x="1"></rect>', true]]);
+            expect(pip.doc.querySelector('rect')?.namespaceURI).toBe('http://www.w3.org/2000/svg');
+        } finally {
+            pip.close();
+        }
     });
 
     it('delegates a newly declared event type into an open PiP document', async () => {
