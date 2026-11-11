@@ -56,7 +56,8 @@ and the select keeps its value for the client to apply after.
     shadowing_hoisted_read_is_refused/1,
     static_value_selects_at_compile_time/1,
     static_text_with_references_folds/1,
-    values_compare_as_the_parser_reads_them/1
+    values_compare_as_the_parser_reads_them/1,
+    helper_raw_option_value_is_its_text/1
 ]).
 
 all() ->
@@ -111,7 +112,8 @@ groups() ->
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
             static_text_with_references_folds,
-            values_compare_as_the_parser_reads_them
+            values_compare_as_the_parser_reads_them,
+            helper_raw_option_value_is_its_text
         ]}
     ].
 
@@ -1071,6 +1073,25 @@ values_compare_as_the_parser_reads_them(Config) when is_list(Config) ->
     ?assertEqual({text, ~"ab"}, arizona_html:markup_text(<<"a", 0, "b">>)),
     ?assertEqual({markup, ~"ab"}, arizona_html:markup_text(<<"<b>a", 0, "</b>b">>)),
     ?assertEqual(~"ab", arizona_template:choice_text(arizona_html, [<<"a", 0>>, ~"b"])).
+
+%% A raw a helper returns into an option's value is text, escaped where it renders, so
+%% the value the page holds is the one the option is compared by: a select valued by
+%% that text selects it, and one valued by what the text would decode to does not.
+helper_raw_option_value_is_its_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(sel_helper_raw). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_html, {select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, h(~\"a&amp;b\")}], [~\"x\"]}, {option, [], [~\"y\"]}]}). "
+        "h(X) -> arizona_template:raw(X). "
+    ),
+    Text = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a&amp;b"}))),
+    ?assertMatch({match, _}, re:run(Text, ~"value=\"a&amp;amp;b\" selected"), Text),
+    ?assertEqual(1, count_selected(Text), Text),
+    Decoded = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a&b"}))),
+    ?assertEqual(0, count_selected(Decoded), Decoded),
+    {Live, _Snap, _Views} = arizona_render:render(Mod:render(#{v => ~"a&amp;b"}), #{}),
+    ?assertEqual(1, count_selected(iolist_to_binary(Live)), Live).
 
 %% --------------------------------------------------------------------
 %% Helpers
