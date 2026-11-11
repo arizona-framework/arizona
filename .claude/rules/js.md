@@ -210,6 +210,19 @@ shadow-less custom element is unaffected, since `composed` only matters at a bou
 - `setAll(key, value)` -- every matching slot in **every** hosting document (main + popped-out PiP documents), no view scoping.
 - `get(key)` -> first match anywhere; `get(viewId, key)` -> first match in that view. Reads come back as DOM strings (no type preservation); an absent boolean attribute reads `false` and a bare one `true`. A form control's binding is the exception: it reads the live property -- `checked` on an `<input>` and `selected` on an `<option>` as a boolean, `value` on a `<textarea>`/`<select>` or an `<input>` in the HTML value mode "value" (text-like types) as a string -- since after user interaction the dirty value/checkedness flags leave the attribute holding only the default. Which element/attribute pairs sync is `syncsProp`, matched by local name (a PiP document's elements come from another realm, so `instanceof` would miss them). Anywhere else `value` only reflects the attribute, coerced, so it is neither read nor written as a property: a write would put a removed attribute back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a hidden/checkbox/radio/button `<input>`) or coerce a set one.
 
+A `<select>` carrying a `value` attribute is one whose options the server could not all mark
+`selected` (a component, a runtime value or raw markup renders some; see "A `value` on a
+`select`" in [erlang.md](erlang.md)). HTML ignores that attribute, so `applyChooser`
+(`arizona-attrs.js`) applies it: every option's `selected` attribute (its `defaultSelected`, what
+a form reset returns to and what an untouched option shows) follows whether the value names it
+-- the value, or under `multiple` the JSON array of values the server renders -- and when the
+value itself changes (a `SET_ATTR`/`REM_ATTR` `value` on the select, a `?local` `set`) the live
+selection follows too, the user's pick included. It runs on every such select when the page
+starts (`connect` and the static `start`), on the select an op writes the value of, and after any
+op batch that targeted a select/option/optgroup or carried markup holding one, since an option
+the value names may arrive later (a child view's diff, an inserted item). A select without a
+`value` is never touched.
+
 A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. `set`/`setAll` on a missing view or key are silent no-ops.
 
 Every item of an `?each` shares the slot **key** (keys are compile-time literals), so a `set` hits all of them; `?local` cannot hold per-item independent client state.

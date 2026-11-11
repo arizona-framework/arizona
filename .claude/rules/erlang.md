@@ -92,22 +92,27 @@ A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?h
 fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 
 A `value` on a `select` selects the option it names, in the `?html` target: HTML has no such
-attribute (the parser ignores it and loads on the first option), so the transform does not emit
-it and gives every `option` under the select a `selected` that tests the option's value against
-it (`arizona_template:chosen/3`, compared as the text both render as). That is an ordinary
-dynamic attribute, so the page loads on the right option (SSR and static generation alike) and a
-change ships a `REM_ATTR`/`SET_ATTR` `selected` on the two options involved. With `multiple`
-(static, or a dynamic `{multiple, ?get(m)}`) the value is a list of values. Options written
-literally, inside an `optgroup`, in a conditional branch, from an `?each` (list, stream, named
-callback, nested), from an inlined local helper or a hoisted variable are all reached; an option
-without a `value` is valued by its static text. A `?local` value stays on the select for the
-client to move, and the page loads on its initial. What could hold an option the transform cannot
-see is a compile error (`select_value`, `opaque_child`): a component, a remote or non-inlined helper, a
-runtime value, raw markup, a nested template, or an `?each` handed to the helper that renders the
-select. So are an option that also writes `selected` (`option_selected`), one whose text is
-not static and that has no `value` (`option_value`), and an `?each` callback parameter
-shadowing a name the value reads (`captured`). The backend opts in through the
-optional `arizona_renderer:selection_role/1`; `?json` keeps `value` as a prop.
+attribute (the parser ignores it and loads on the first option), so the transform gives every
+`option` under the select a `selected` that tests the option's value against it
+(`arizona_template:chosen/3`, compared as the text both render as). That is an ordinary dynamic
+attribute, so the page loads on the right option (SSR and static generation alike) and a change
+ships a `REM_ATTR`/`SET_ATTR` `selected` on the two options involved. With `multiple` (static, or
+a dynamic `{multiple, ?get(m)}`) the value is a list of values. Options written literally, inside
+an `optgroup`, in a conditional branch, from an `?each` (list, stream, named callback, nested),
+from an inlined local helper (`?MODULE:` qualified too) or a hoisted variable are all reached; an
+option without a `value` is valued by its static text. When every option is reached the select
+emits no `value`. An option the transform cannot see -- from a `?stateless`/`?stateful`
+component, a remote or non-inlined helper, a runtime value, `?raw` or static markup, or one
+valued by runtime text -- still works: the select keeps its `value`
+(`arizona_template:chooser_value/2`, a JSON array of texts under `multiple`), the SSR render
+marks those options `selected` in the document it serves (`arizona_renderer:mark_choices/1`), and
+the client keeps them in step after (see [js.md](js.md)). A `?local` value stays on the select
+for the client to move, and the page loads on its initial. An `?each` callback parameter
+shadowing a name the value reads is renamed; a hoisted value whose definition reads such a name
+is `hoisted_var_captured`, as any hoisted read there. The one refusal is an option that also
+writes `selected` (`select_value`, `option_selected`): the value already decides it. The backend
+opts in through the optional `arizona_renderer:selection_role/1` and `mark_choices/1`; `?json`
+keeps `value` as a prop.
 
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises

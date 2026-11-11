@@ -1,3 +1,4 @@
+import { applyChoosers } from './arizona-attrs.js';
 import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
@@ -1245,6 +1246,7 @@ export function connect(endpoint, params = {}) {
                     document.documentElement.classList.remove('az-disconnected');
                     if (!msg[1]) {
                         mountHooks(document);
+                        applyChoosers(document);
                     }
                     break;
                 }

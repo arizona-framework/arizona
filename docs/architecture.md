@@ -271,10 +271,26 @@ calling `arizona_template:chosen(ChoiceValue, ChooserValue, Multiple)`, folded t
 content lists and conditional tails. An `?each` compiles bottom-up, before its chooser, so the
 pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a chooser in a
 `'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its item as it
-compiles (`compile_each_clause/11`). A template compiled before the chooser was seen is accepted
-only when every option element in its statics carries a `chosen/3` call; anything else that could
-render an option is refused at compile time (`select_value`). A backend without the
-callback keeps `value` as an ordinary attribute, which is what `?json` wants.
+compiles (`compile_each_clause/11`). A template compiled before the chooser was seen counts as
+reached only when every option element in its statics carries a `chosen/3` call.
+
+What the transform cannot reach -- a `?stateless`/`?stateful` component, a remote or
+non-inlined helper, a runtime value, `?raw` or static markup, an option valued by runtime
+text -- still renders under the chooser, so the chooser keeps its value instead of dropping
+it, rendered by `arizona_template:chooser_value/2` (the text, or under `multiple` a JSON array
+of texts). An `?each` whose item holds such a child tells its chooser through a
+`'$arizona_choice_opaque'` mark around the compiled each, taken off where the chooser
+compiles. Rendered outside a live process, `chooser_value/2` notes the document holds such a
+chooser, and the SSR render (`finish_page`, `render_to_iolist/1`) then hands the document to
+the optional `c:arizona_renderer:mark_choices/1`: for HTML, a pass that marks `selected`
+every `<option>` of a valued `<select>` whose value (its `value`, else its text) the select's
+names, skipping raw text and comments. A render that noted nothing pays nothing. In the live
+client the select's `value` is applied to its options' `selected` attributes (and, on a
+change, their selection): when the page starts, when an op writes it, and after any batch
+that rendered or changed an option (`applyChooser`, `arizona-attrs.js`). Options the
+transform reached keep their own `selected` diffs beside it; both compute the same choice.
+A backend without the callbacks keeps `value` as an ordinary attribute, which is what
+`?json` wants.
 
 ## API -- `arizona_diff.erl`
 

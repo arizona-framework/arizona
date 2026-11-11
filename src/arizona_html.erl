@@ -39,6 +39,7 @@ identical to the previous inlined emission.
 -export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([selection_role/1]).
+-export([mark_choices/1]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -47,6 +48,9 @@ identical to the previous inlined emission.
 -export([wire_escape/1]).
 -export([wire_attr/2]).
 -export([static_document/2]).
+
+%% Where mark_choices/1 looks: a select, and what to skip over (raw text, comments).
+-define(SCAN_OPENS, [~"<select", ~"<script", ~"<style", ~"<textarea", ~"<title", ~"<!--"]).
 
 %% A byte that needs no entity. Letters and UTF-8 bytes (> `>`) answer on the
 %% first test; the rest of the safe set lies between and around `"`, `&`/`'`
@@ -385,6 +389,281 @@ selection_role(Tag) ->
         _Other ->
             none
     end.
+
+-spec mark_choices(iodata()) -> iodata().
+%% A `<select>` that kept its `value` holds options the transform could not mark
+%% (arizona_template:chooser_value/2), so the parser would load it on its first
+%% option. Mark `selected` every option under it whose value (its `value` attribute,
+%% else its text, whitespace stripped and collapsed, as the browser reads it) is one
+%% the select's value names: the value itself, or under `multiple` the JSON array of
+%% values chooser_value/2 renders. An option already `selected` is left alone. The
+%% content of raw-text elements and comments is skipped, so markup spelled inside a
+%% script is never touched.
+mark_choices(Doc) ->
+    Bin = iolist_to_binary(Doc),
+    Lower = <<<<(lower_ascii(C))>> || <<C>> <= Bin>>,
+    case scan_selects(Lower, Bin, 0, []) of
+        [] -> Doc;
+        Marks -> splice_selected(Bin, lists:sort(Marks), 0, [])
+    end.
+
+lower_ascii(C) when C >= $A, C =< $Z -> C + 32;
+lower_ascii(C) -> C.
+
+scan_selects(L, B, Pos, Marks) ->
+    case match_from(L, ?SCAN_OPENS, Pos) of
+        nomatch ->
+            Marks;
+        {At, Len} ->
+            Next = At + Len,
+            case binary:part(L, At, Len) of
+                ~"<!--" ->
+                    scan_selects(L, B, skip_past(L, Next, ~"-->"), Marks);
+                Open ->
+                    case ends_tag_name(L, Next) of
+                        false ->
+                            scan_selects(L, B, Next, Marks);
+                        true when Open =:= ~"<select" ->
+                            {Marks1, After} = choose_select(L, B, Next, Marks),
+                            scan_selects(L, B, After, Marks1);
+                        true ->
+                            <<$<, Name/binary>> = Open,
+                            scan_selects(L, B, skip_past(L, Next, <<"</", Name/binary>>), Marks)
+                    end
+            end
+    end.
+
+choose_select(L, B, From, Marks) ->
+    {Attrs, Gt} = tag_attrs(L, B, From, []),
+    End =
+        case match_from(L, ~"</select", Gt) of
+            {Close, _} -> Close;
+            nomatch -> byte_size(L)
+        end,
+    case lists:keyfind(~"value", 1, Attrs) of
+        {_, Value} -> {mark_options(L, B, Gt, End, picks(Value, Attrs), Marks), End};
+        false -> {Marks, End}
+    end.
+
+picks(Value, Attrs) ->
+    case lists:keymember(~"multiple", 1, Attrs) of
+        true -> json_picks(Value);
+        false -> [Value]
+    end.
+
+json_picks(Value) ->
+    try json:decode(Value) of
+        Picks when is_list(Picks) -> [P || P <- Picks, is_binary(P)];
+        _One -> [Value]
+    catch
+        error:_ -> [Value]
+    end.
+
+mark_options(_L, _B, From, End, _Picks, Marks) when From >= End ->
+    Marks;
+mark_options(L, B, From, End, Picks, Marks) ->
+    case binary:match(L, [~"<option", ~"<!--"], [{scope, {From, End - From}}]) of
+        nomatch ->
+            Marks;
+        {At, 4} ->
+            mark_options(L, B, skip_past(L, At + 4, ~"-->"), End, Picks, Marks);
+        {At, Len} ->
+            Next = At + Len,
+            case ends_tag_name(L, Next) of
+                false ->
+                    mark_options(L, B, Next, End, Picks, Marks);
+                true ->
+                    {Attrs, Gt} = tag_attrs(L, B, Next, []),
+                    Marks1 =
+                        case
+                            Gt < End andalso not lists:keymember(~"selected", 1, Attrs) andalso
+                                lists:member(option_value(L, B, Attrs, Gt + 1, End), Picks)
+                        of
+                            true -> [Gt | Marks];
+                            false -> Marks
+                        end,
+                    mark_options(L, B, Gt + 1, End, Picks, Marks1)
+            end
+    end.
+
+option_value(L, B, Attrs, From, End) ->
+    case lists:keyfind(~"value", 1, Attrs) of
+        {_, Value} -> Value;
+        false -> collapse_ws(decode_refs(iolist_to_binary(option_text(L, B, From, End))))
+    end.
+
+%% The option's text runs to the tag that ends it; comments and the tags of any
+%% element inside it are not text.
+option_text(_L, _B, From, End) when From >= End ->
+    [];
+option_text(L, B, From, End) ->
+    case binary:match(L, ~"<", [{scope, {From, End - From}}]) of
+        nomatch ->
+            [binary:part(B, From, End - From)];
+        {At, 1} ->
+            Text = binary:part(B, From, At - From),
+            case {ends_option(L, At), binary:part(L, At, min(4, End - At))} of
+                {true, _Open} -> [Text];
+                {false, ~"<!--"} -> [Text | option_text(L, B, skip_past(L, At + 4, ~"-->"), End)];
+                {false, _Tag} -> [Text | option_text(L, B, skip_past(L, At + 1, ~">"), End)]
+            end
+    end.
+
+ends_option(L, At) ->
+    lists:any(
+        fun(Open) ->
+            Len = byte_size(Open),
+            At + Len =< byte_size(L) andalso binary:part(L, At, Len) =:= Open andalso
+                ends_tag_name(L, At + Len)
+        end,
+        [~"</option", ~"<option", ~"</optgroup", ~"<optgroup", ~"<hr"]
+    ).
+
+%% An open tag's attributes, names lowercased and values decoded (the first of a
+%% repeated name first, as the parser keeps it), and the position of its `>`.
+tag_attrs(L, B, Pos0, Acc) ->
+    Pos = skip_attr_space(L, Pos0),
+    case Pos >= byte_size(L) orelse binary:at(L, Pos) =:= $> of
+        true ->
+            {lists:reverse(Acc), Pos};
+        false ->
+            NameEnd = attr_name_end(L, Pos + 1),
+            Name = binary:part(L, Pos, NameEnd - Pos),
+            AfterName = skip_space(L, NameEnd),
+            case AfterName < byte_size(L) andalso binary:at(L, AfterName) =:= $= of
+                true ->
+                    {Value, After} = attr_value(B, skip_space(L, AfterName + 1)),
+                    tag_attrs(L, B, After, [{Name, decode_refs(Value)} | Acc]);
+                false ->
+                    tag_attrs(L, B, AfterName, [{Name, <<>>} | Acc])
+            end
+    end.
+
+attr_value(B, Pos) when Pos >= byte_size(B) ->
+    {<<>>, Pos};
+attr_value(B, Pos) ->
+    case binary:at(B, Pos) of
+        Quote when Quote =:= $"; Quote =:= $' ->
+            case binary:match(B, <<Quote>>, [{scope, {Pos + 1, byte_size(B) - Pos - 1}}]) of
+                {Close, 1} -> {binary:part(B, Pos + 1, Close - Pos - 1), Close + 1};
+                nomatch -> {binary:part(B, Pos + 1, byte_size(B) - Pos - 1), byte_size(B)}
+            end;
+        _Unquoted ->
+            End = unquoted_end(B, Pos),
+            {binary:part(B, Pos, End - Pos), End}
+    end.
+
+unquoted_end(B, Pos) when Pos >= byte_size(B) -> Pos;
+unquoted_end(B, Pos) ->
+    case is_space(binary:at(B, Pos)) orelse binary:at(B, Pos) =:= $> of
+        true -> Pos;
+        false -> unquoted_end(B, Pos + 1)
+    end.
+
+attr_name_end(L, Pos) when Pos >= byte_size(L) -> Pos;
+attr_name_end(L, Pos) ->
+    case binary:at(L, Pos) of
+        C when C =:= $=; C =:= $>; C =:= $/ -> Pos;
+        C ->
+            case is_space(C) of
+                true -> Pos;
+                false -> attr_name_end(L, Pos + 1)
+            end
+    end.
+
+skip_attr_space(L, Pos) when Pos >= byte_size(L) -> Pos;
+skip_attr_space(L, Pos) ->
+    case binary:at(L, Pos) of
+        $/ ->
+            skip_attr_space(L, Pos + 1);
+        C ->
+            case is_space(C) of
+                true -> skip_attr_space(L, Pos + 1);
+                false -> Pos
+            end
+    end.
+
+skip_space(L, Pos) when Pos >= byte_size(L) -> Pos;
+skip_space(L, Pos) ->
+    case is_space(binary:at(L, Pos)) of
+        true -> skip_space(L, Pos + 1);
+        false -> Pos
+    end.
+
+skip_past(L, Pos, Pattern) ->
+    case match_from(L, Pattern, Pos) of
+        {At, Len} -> At + Len;
+        nomatch -> byte_size(L)
+    end.
+
+match_from(L, Pattern, Pos) ->
+    binary:match(L, Pattern, [{scope, {Pos, byte_size(L) - Pos}}]).
+
+ends_tag_name(L, Pos) when Pos >= byte_size(L) -> true;
+ends_tag_name(L, Pos) ->
+    C = binary:at(L, Pos),
+    C =:= $> orelse C =:= $/ orelse is_space(C).
+
+is_space(C) -> C =:= $\s orelse C =:= $\t orelse C =:= $\n orelse C =:= $\f orelse C =:= $\r.
+
+collapse_ws(Text) ->
+    iolist_to_binary(
+        lists:join(~" ", binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]))
+    ).
+
+%% The character references this module's escape/1 writes, plus numeric ones; any
+%% other `&` stays as it is.
+decode_refs(Bin) ->
+    case binary:match(Bin, ~"&") of
+        nomatch -> Bin;
+        _Some -> iolist_to_binary(decode_refs(Bin, []))
+    end.
+
+decode_refs(<<>>, Acc) ->
+    lists:reverse(Acc);
+decode_refs(<<"&amp;", R/binary>>, Acc) ->
+    decode_refs(R, [$& | Acc]);
+decode_refs(<<"&lt;", R/binary>>, Acc) ->
+    decode_refs(R, [$< | Acc]);
+decode_refs(<<"&gt;", R/binary>>, Acc) ->
+    decode_refs(R, [$> | Acc]);
+decode_refs(<<"&quot;", R/binary>>, Acc) ->
+    decode_refs(R, [$" | Acc]);
+decode_refs(<<"&apos;", R/binary>>, Acc) ->
+    decode_refs(R, [$' | Acc]);
+decode_refs(<<"&#", R0/binary>>, Acc) ->
+    case numeric_ref(R0) of
+        {ok, Char, R} -> decode_refs(R, [Char | Acc]);
+        error -> decode_refs(R0, [~"&#" | Acc])
+    end;
+decode_refs(<<C, R/binary>>, Acc) ->
+    decode_refs(R, [C | Acc]).
+
+numeric_ref(<<X, R/binary>>) when X =:= $x; X =:= $X ->
+    numeric_ref(R, 16);
+numeric_ref(R) ->
+    numeric_ref(R, 10).
+
+numeric_ref(R, Base) ->
+    case binary:split(R, ~";") of
+        [Digits, Rest] when Digits =/= <<>>, byte_size(Digits) =< 8 ->
+            try binary_to_integer(Digits, Base) of
+                N ->
+                    case unicode:characters_to_binary([N]) of
+                        Char when is_binary(Char) -> {ok, Char, Rest};
+                        _Invalid -> error
+                    end
+            catch
+                error:badarg -> error
+            end;
+        _NoRef ->
+            error
+    end.
+
+splice_selected(Bin, [], From, Acc) ->
+    lists:reverse(Acc, [binary:part(Bin, From, byte_size(Bin) - From)]);
+splice_selected(Bin, [Gt | Marks], From, Acc) ->
+    splice_selected(Bin, Marks, Gt, [~" selected", binary:part(Bin, From, Gt - From) | Acc]).
 
 boolean_attrs() -> presence.
 

@@ -5,7 +5,9 @@ A `value` on an HTML `<select>` selects the option whose value equals it.
 HTML has no such attribute: the parser ignores it and the page loads on the first
 option, while a diff writes the `.value` property. So the transform marks the matching
 option `selected` instead, at first render and on every diff, wherever the option is
-written (see `arizona_select_value`), and refuses an option it cannot see.
+written (see `arizona_select_value`). An option it cannot see -- from a component,
+a runtime value, raw markup -- leaves the select its value: the SSR render marks
+the option it names in the document, and the client keeps it in step after.
 """.
 -include_lib("stdlib/include/assert.hrl").
 -include("arizona_wire.hrl").
@@ -28,10 +30,18 @@ written (see `arizona_select_value`), and refuses an option it cannot see.
     local_value_loads_on_its_initial/1,
     select_inside_each_item/1,
     json_value_prop_is_unchanged/1,
-    opaque_child_is_refused/1,
-    option_needs_a_static_value/1,
+    opaque_ssr_marks_the_chosen_option/1,
+    opaque_select_keeps_its_value/1,
+    opaque_multiple_marks_every_listed_value/1,
+    opaque_static_generation_marks_the_chosen_option/1,
+    opaque_live_render_is_left_to_the_client/1,
+    opaque_diff_ships_the_value/1,
+    mark_choices_reads_the_document/1,
+    opaque_child_compiles/1,
+    option_with_runtime_text_compiles/1,
     authored_selected_is_refused/1,
-    captured_value_is_refused/1,
+    shadowing_parameter_is_renamed/1,
+    shadowing_hoisted_read_is_refused/1,
     static_value_selects_at_compile_time/1
 ]).
 
@@ -52,19 +62,27 @@ groups() ->
             nodiff_select_marks_the_chosen_option,
             local_value_loads_on_its_initial,
             select_inside_each_item,
-            json_value_prop_is_unchanged
+            json_value_prop_is_unchanged,
+            opaque_ssr_marks_the_chosen_option,
+            opaque_select_keeps_its_value,
+            opaque_multiple_marks_every_listed_value,
+            opaque_static_generation_marks_the_chosen_option,
+            opaque_live_render_is_left_to_the_client,
+            mark_choices_reads_the_document
         ]},
         {diff, [parallel], [
             diff_moves_selected_to_the_new_option,
             diff_is_fine_grained,
             diff_of_unrelated_binding_is_empty,
-            stream_item_update_keeps_selection
+            stream_item_update_keeps_selection,
+            opaque_diff_ships_the_value
         ]},
         {compile, [parallel], [
-            opaque_child_is_refused,
-            option_needs_a_static_value,
+            opaque_child_compiles,
+            option_with_runtime_text_compiles,
             authored_selected_is_refused,
-            captured_value_is_refused,
+            shadowing_parameter_is_renamed,
+            shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time
         ]}
     ].
@@ -155,8 +173,9 @@ static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
         Dir, [{arizona_select_value_page, ~"index.html", #{bindings => #{v => ~"b"}}}]
     ),
     {ok, HTML} = file:read_file(Path),
-    %% Literal, list ?each and stream ?each on `b`; the multiple select on its two.
-    ?assertEqual([~"b", ~"b", ~"b", ~"a", ~"c"], selected_values(HTML)).
+    %% Literal, list ?each and stream ?each on `b`; the multiple select on its two;
+    %% the component and the child view on `b`.
+    ?assertEqual([~"b", ~"b", ~"b", ~"a", ~"c", ~"b", ~"b"], selected_values(HTML)).
 
 nodiff_select_marks_the_chosen_option(Config) when is_list(Config) ->
     HTML = ssr(nodiff, ~"b"),
@@ -204,6 +223,136 @@ json_value_prop_is_unchanged(Config) when is_list(Config) ->
     Doc = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"b"}))),
     ?assertMatch(#{~"type" := ~"select", ~"value" := ~"b"}, json:decode(Doc)),
     ?assertEqual(nomatch, binary:match(Doc, ~"selected")).
+
+%% Options the transform cannot see are marked in the document the SSR render
+%% serves, so the page loads on the chosen one before any script runs.
+opaque_ssr_marks_the_chosen_option(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Shape) ->
+            HTML = opaque_ssr(Shape, ~"b"),
+            ?assertEqual([~"b"], selected_values(HTML), {Shape, HTML}),
+            ?assertEqual([], selected_values(opaque_ssr(Shape, ~"z")), Shape)
+        end,
+        opaque_shapes()
+    ),
+    %% Valued by its text: an option without a value attribute.
+    Raw = opaque_ssr(raw_options, ~"b"),
+    ?assertMatch({match, _}, re:run(Raw, ~"<option selected>b</option>"), Raw),
+    %% A `?local` value loads on its initial.
+    Local = iolist_to_binary(
+        arizona_render:render_to_iolist(
+            arizona_select_value:local_value_component(opaque_bindings(~"z"))
+        )
+    ),
+    ?assertEqual([~"b"], selected_values(Local), Local).
+
+%% The value stays on the select, as the text the options compare against: the
+%% client applies it to options the server never marks.
+opaque_select_keeps_its_value(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Shape) ->
+            HTML = opaque_ssr(Shape, ~"a&b"),
+            ?assertMatch(
+                {match, _}, re:run(HTML, ~"<select[^>]* value=\"a&amp;b\""), {Shape, HTML}
+            )
+        end,
+        opaque_shapes()
+    ),
+    %% `false` picks nothing and renders no value.
+    None = opaque_ssr(component, false),
+    ?assertEqual(nomatch, re:run(None, ~"<select[^>]* value[ =>]"), None),
+    ?assertEqual([], selected_values(None)).
+
+opaque_multiple_marks_every_listed_value(Config) when is_list(Config) ->
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(
+            arizona_select_value:multiple_component(opaque_bindings(~"b"))
+        )
+    ),
+    ?assertEqual([~"a", ~"c"], selected_values(HTML), HTML),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"value=\"[&quot;a&quot;,&quot;c&quot;]\"")),
+    One = iolist_to_binary(
+        arizona_render:render_to_iolist(
+            arizona_select_value:multiple_component((opaque_bindings(~"b"))#{vs => ~"c"})
+        )
+    ),
+    ?assertEqual([~"c"], selected_values(One), One).
+
+opaque_static_generation_marks_the_chosen_option(Config) when is_list(Config) ->
+    Dir = filename:join(proplists:get_value(priv_dir, Config), "select_opaque_static"),
+    {[Path], []} = arizona_static:generate(
+        Dir, [{arizona_select_value_page, ~"index.html", #{bindings => #{v => ~"c"}}}]
+    ),
+    {ok, HTML} = file:read_file(Path),
+    %% Literal, list ?each, stream ?each, the multiple select, then the component
+    %% and the child view.
+    ?assertEqual([~"c", ~"c", ~"c", ~"a", ~"c", ~"c", ~"c"], selected_values(HTML), HTML).
+
+%% A live process renders no document: the select carries its value, and the
+%% client marks the options it names.
+opaque_live_render_is_left_to_the_client(Config) when is_list(Config) ->
+    Self = self(),
+    Pid = spawn(fun() ->
+        _ = put('$arizona_connected', true),
+        {HTML, _Snap, _Views} = arizona_render:render(
+            arizona_select_value:component(opaque_bindings(~"b")), #{}
+        ),
+        Self ! {self(), iolist_to_binary(HTML), get('$arizona_unmarked_choices')}
+    end),
+    receive
+        {Pid, HTML, Noted} ->
+            ?assertEqual([], selected_values(HTML), HTML),
+            ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"b\""), HTML),
+            ?assertEqual(undefined, Noted)
+    after 5000 ->
+        error(timeout)
+    end.
+
+%% The renderer's pass over a document: character references, comments and raw
+%% text, the text of an option without a value, case, and an option the page
+%% already marked.
+mark_choices_reads_the_document(Config) when is_list(Config) ->
+    Mark = fun(Doc) -> iolist_to_binary(arizona_html:mark_choices(Doc)) end,
+    Bin = fun iolist_to_binary/1,
+    ?assertEqual(
+        ~"<SELECT Value=\"a&amp;b\"><option value=\"a&#38;b\" selected>x</option></SELECT>",
+        Mark(~"<SELECT Value=\"a&amp;b\"><option value=\"a&#38;b\">x</option></SELECT>")
+    ),
+    ?assertEqual(
+        Bin([
+            ~"<select value='B c'><option selected>\n B <!--az:1--> c<!--/az--></option>",
+            ~"<option>b</option></select>"
+        ]),
+        Mark([
+            ~"<select value='B c'><option>\n B <!--az:1--> c<!--/az--></option>",
+            ~"<option>b</option></select>"
+        ])
+    ),
+    Script = ~"<script>\"<select value=a><option>a</option></select>\"</script>",
+    ?assertEqual(Script, Mark(Script)),
+    Comment = ~"<!-- <select value=a><option>a</option></select> -->",
+    ?assertEqual(Comment, Mark(Comment)),
+    ?assertEqual(
+        ~"<select value=a><option selected>a</option><option value=a selected>A</option></select>",
+        Mark(~"<select value=a><option selected>a</option><option value=a>A</option></select>")
+    ),
+    %% No value, or an element that is not a select: untouched.
+    Plain = ~"<select><option>a</option></select><selected value=a><option>a</option>",
+    ?assertEqual(Plain, Mark(Plain)),
+    Multiple = ~"<select multiple value=\"[&quot;a&quot;,&quot;c&quot;]\">",
+    ?assertEqual(
+        Bin([
+            Multiple,
+            ~"<option selected>a</option><option>b</option>",
+            ~"<option selected>c</option></select>"
+        ]),
+        Mark([Multiple, ~"<option>a</option><option>b</option><option>c</option></select>"])
+    ),
+    %% An option's text ends at the next option, an optgroup, the select's end.
+    ?assertEqual(
+        ~"<select value=b><option>a<optgroup><option selected>b<option>c</select>",
+        Mark(~"<select value=b><option>a<optgroup><option>b<option>c</select>")
+    ).
 
 %% --------------------------------------------------------------------
 %% Diff
@@ -265,6 +414,18 @@ stream_item_update_keeps_selection(Config) when is_list(Config) ->
     [Inserted] = [H || [?OP_INSERT, _, ~"d", _, H] <- Ops],
     ?assertEqual([~"d"], selected_values(payload_html(Inserted))).
 
+%% A select the server cannot mark every option of ships its value, for the client
+%% to apply; the options it does mark move as before.
+opaque_diff_ships_the_value(Config) when is_list(Config) ->
+    {_HTML, Snap0, V0} = arizona_render:render(
+        arizona_select_value:mixed(opaque_bindings(~"a")), #{}
+    ),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        arizona_select_value:mixed(opaque_bindings(~"c")), Snap0, V0, #{v => true}
+    ),
+    ?assertEqual([{remove, ~"selected"}, {set, ~"value"}], lists:sort(attr_ops(Ops)), Ops),
+    ?assertMatch([~"c"], [V || [?OP_SET_ATTR, _, ~"value", V] <- flatten_ops(Ops)]).
+
 %% An inserted item ships as its HTML, or as statics plus values.
 payload_html(#{~"s" := [S | Statics], ~"d" := Values}) ->
     iolist_to_binary([S | lists:zipwith(fun(V, St) -> [V, St] end, Values, Statics)]);
@@ -275,59 +436,56 @@ payload_html(HTML) ->
 %% Compile
 %% --------------------------------------------------------------------
 
-%% Options the transform cannot see would render unselected at page load, so the
-%% select refuses them: a remote helper, a component, a runtime value, raw markup,
-%% and a static fragment spelling an option.
-opaque_child_is_refused(Config) when is_list(Config) ->
-    Opaque = fun
-        ({select_value, {opaque_child, _Tag, _What}}) -> true;
-        (_) -> false
-    end,
+%% Whatever may hold an option the transform cannot see compiles: the select keeps
+%% its value, and the document marks the option.
+opaque_child_compiles(Config) when is_list(Config) ->
     lists:foreach(
-        fun(Child) -> assert_parse_error(select_src(Child), Opaque) end,
-        [
-            "other_mod:options()",
+        fun({N, Child}) ->
+            Mod = compile_module(select_src_mod("sel_opaque_" ++ integer_to_list(N), Child)),
+            HTML = iolist_to_binary(
+                arizona_render:render_to_iolist(Mod:render(#{v => ~"a", opts => []}))
+            ),
+            ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"a\""), {Child, HTML})
+        end,
+        lists:enumerate([
             "arizona_template:stateless(fun opts/1, #{})",
             "arizona_template:get(opts, Bindings)",
             "arizona_template:raw(~\"<option>a</option>\")",
             "~\"<option value=\\\"a\\\">A</option>\"",
-            "{optgroup, [], [~\"<OPTION>a\"]}"
-        ]
+            "{optgroup, [], [~\"<OPTION>a\"]}",
+            "{optgroup, [], [arizona_template:target(arizona_html, {option, [], [~\"a\"]})]}"
+        ])
     ),
+    %% A remote helper compiles the same way (its module need not exist to compile).
+    _ = compile_module(select_src_mod("sel_opaque_remote", "other_mod:options()")),
     %% An `?each` handed to a helper that renders the select compiles before the
-    %% select is seen, and a nested template is built apart from it.
-    assert_parse_error(
-        "-module(sel_err_field). -export([render/1]). render(Bindings) -> "
+    %% select is seen.
+    Field = compile_module(
+        "-module(sel_field). -export([render/1]). render(Bindings) -> "
         "arizona_template:target(arizona_html, {form, [], [field(arizona_template:get(v, "
         "Bindings), arizona_template:each(fun(O) -> {option, [{value, O}], [O]} end, "
         "arizona_template:get(opts, Bindings)))]}). "
-        "field(V, Opts) -> {select, [{value, V}], [Opts]}. ",
-        fun
-            ({select_value, {opaque_child, ~"select", compiled_each}}) -> true;
-            (_) -> false
-        end
+        "field(V, Opts) -> {select, [{value, V}], [Opts]}. "
     ),
-    assert_parse_error(
-        select_src(
-            "{optgroup, [], [arizona_template:target(arizona_html, "
-            "{option, [], [~\"a\"]})]}"
-        ),
-        fun
-            ({select_value, {opaque_child, ~"select", template}}) -> true;
-            (_) -> false
-        end
+    FieldHTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Field:render(#{v => ~"b", opts => [~"a", ~"b"]}))
     ),
-    %% A plain-text static and an empty one are no options and pass.
-    _ = compile_module(select_src_mod("sel_ws", "~\" \", <<>>")).
+    ?assertEqual([~"b"], selected_values(FieldHTML), FieldHTML),
+    %% A plain-text static and an empty one are no options: the value is dropped.
+    Ws = compile_module(select_src_mod("sel_ws", "~\" \", <<>>")),
+    WsHTML = iolist_to_binary(arizona_render:render_to_iolist(Ws:render(#{v => ~"a"}))),
+    ?assertEqual(nomatch, binary:match(WsHTML, ~"value"), WsHTML).
 
-option_needs_a_static_value(Config) when is_list(Config) ->
-    assert_parse_error(
-        select_src("{option, [], [arizona_template:get(label, Bindings)]}"),
-        fun
-            ({select_value, {option_value, _Tag, _Chooser}}) -> true;
-            (_) -> false
-        end
-    ).
+%% An option without a value whose text is computed is valued by that text, which
+%% the document is marked by.
+option_with_runtime_text_compiles(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod("sel_text", "{option, [], [arizona_template:get(label, Bindings)]}")
+    ),
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{v => ~"x", label => ~" x "}))
+    ),
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>"), HTML).
 
 authored_selected_is_refused(Config) when is_list(Config) ->
     Conflict = fun
@@ -339,16 +497,36 @@ authored_selected_is_refused(Config) when is_list(Config) ->
         select_src("{option, [{value, ~\"a\"}, {<<\"SELECTED\">>, false}], []}"), Conflict
     ).
 
-%% The value is read inside every option, so an `?each` parameter shadowing a
-%% variable it reads would read the item instead.
-captured_value_is_refused(Config) when is_list(Config) ->
-    assert_parse_error(
-        select_src(
+%% The value is read inside every option the item builds, so an `?each` parameter
+%% of a name it reads is renamed: `Bindings` here is the item, and the select's
+%% value still the view's.
+shadowing_parameter_is_renamed(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod(
+            "sel_shadow",
             "arizona_template:each(fun(Bindings) -> {option, [{value, "
-            "arizona_template:get(id, Bindings)}], []} end, [])"
-        ),
+            "arizona_template:get(id, Bindings)}], []} end, "
+            "arizona_template:get(items, Bindings))"
+        )
+    ),
+    B = #{v => ~"b", items => [#{id => ~"a"}, #{id => ~"b"}]},
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B))),
+    ?assertEqual([~"b"], selected_values(HTML), HTML),
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B), #{}),
+    {_Ops, Snap1, _} = arizona_diff:diff(Mod:render(B#{v => ~"a"}), Snap0, V0, #{v => true}),
+    ?assertEqual([~"a"], selected_values(iolist_to_binary(arizona_render:snapshot_html(Snap1)))).
+
+%% A hoisted value whose definition reads a name the callback rebinds is refused
+%% like any hoisted read there.
+shadowing_hoisted_read_is_refused(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(sel_hoist_shadow). -export([render/1]). render(Bindings) -> "
+        "V = arizona_template:get(v, Bindings), "
+        "arizona_template:target(arizona_html, {select, [{value, V}], ["
+        "arizona_template:each(fun(Bindings) -> {option, [{value, "
+        "arizona_template:get(id, Bindings)}], []} end, [])]}). ",
         fun
-            ({select_value, {captured, ['Bindings']}}) -> true;
+            ({hoisted_var_captured, fun_param, 'Bindings', 'V'}) -> true;
             (_) -> false
         end
     ).
@@ -392,6 +570,32 @@ shapes() ->
         nested_each
     ].
 
+opaque_shapes() ->
+    [
+        component,
+        local_component,
+        remote_helper,
+        runtime_template,
+        raw_options,
+        text_options,
+        each_opaque_item,
+        mixed
+    ].
+
+opaque_bindings(V) ->
+    Opts = [~"a", ~"b", ~"c"],
+    #{
+        v => V,
+        vs => [~"a", ~"c"],
+        opts => Opts,
+        options_tmpl => arizona_select_value:option_items(#{opts => Opts})
+    }.
+
+opaque_ssr(Shape, V) ->
+    iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_select_value:Shape(opaque_bindings(V)))
+    ).
+
 ssr(Shape, V) ->
     iolist_to_binary(arizona_render:render_to_iolist(tmpl(Shape, V))).
 
@@ -408,19 +612,23 @@ stream_bindings(V) ->
     Items = [#{id => Id, label => string:uppercase(Id)} || Id <- [~"a", ~"b", ~"c"]],
     #{v => V, items => arizona_stream:new(fun(#{id := Id}) -> Id end, Items)}.
 
-%% The values of the options rendered `selected`, in document order.
+%% The values of the options rendered `selected`, in document order: an option's
+%% `value`, else its text.
 selected_values(HTML) ->
-    case re:run(HTML, ~"<option([^>]*)>", [global, caseless, {capture, all_but_first, binary}]) of
+    Option = ~"<option([^>]*)>(.*?)(?=</?option|</?optgroup|</select|$)",
+    case re:run(HTML, Option, [global, caseless, dotall, {capture, all_but_first, binary}]) of
         {match, Opens} ->
-            [option_value(Attrs) || [Attrs] <- Opens, is_selected(Attrs)];
+            [option_value(Attrs, Text) || [Attrs, Text] <- Opens, is_selected(Attrs)];
         nomatch ->
             []
     end.
 
-option_value(Attrs) ->
-    case re:run(Attrs, ~"value=\"([^\"]*)\"", [caseless, {capture, all_but_first, binary}]) of
+option_value(Attrs, Text) ->
+    case
+        re:run(Attrs, ~"value=[\"']([^\"']*)[\"']", [caseless, {capture, all_but_first, binary}])
+    of
         {match, [V]} -> V;
-        nomatch -> no_value
+        nomatch -> string:trim(re:replace(Text, ~"<!--.*?-->", ~"", [global, {return, binary}]))
     end.
 
 is_selected(Attrs) ->

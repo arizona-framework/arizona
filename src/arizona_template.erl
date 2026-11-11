@@ -54,6 +54,7 @@ render(Bindings) ->
 -export([with/2]).
 -export([track/1]).
 -export([chosen/3]).
+-export([chooser_value/2]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -102,6 +103,9 @@ render(Bindings) ->
 -ignore_xref([bool_attr/1]).
 %% Emitted by the parse transform as the `selected` of an option under a valued select.
 -ignore_xref([chosen/3]).
+%% Emitted by the parse transform as the `value` a select keeps when it holds an option
+%% the transform cannot mark.
+-ignore_xref([chooser_value/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -423,6 +427,30 @@ same_text(Choice, Value) ->
 %% `true` renders a bare attribute, whose value is the empty string.
 attr_text(true) -> <<>>;
 attr_text(V) -> to_bin(V).
+
+-doc """
+The value a chooser keeps when it holds a choice the parse transform cannot mark (a
+component, a runtime value, raw markup): `Value` as its attribute text, and with
+`Multiple` true a list of picks (or one pick) as a JSON array of their texts.
+`false` renders no attribute, picking nothing.
+
+Rendered outside a live process (a page served over HTTP, static generation) it also
+tells the renderer the document holds such a chooser, so that
+`c:arizona_renderer:mark_choices/1` marks the choices it picks before the page is
+served; the client keeps them in step after.
+""".
+-spec chooser_value(Value, Multiple) -> binary() | false when
+    Value :: term(),
+    Multiple :: boolean().
+chooser_value(false, _Multiple) ->
+    false;
+chooser_value(Value, Multiple) ->
+    ok = arizona_render:note_unmarked_choices(),
+    case Multiple of
+        true when is_list(Value) -> iolist_to_binary(json:encode([attr_text(V) || V <- Value]));
+        true -> iolist_to_binary(json:encode([attr_text(Value)]));
+        _Single -> attr_text(Value)
+    end.
 
 -doc """
 Converts a template value to its binary HTML representation.

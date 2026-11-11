@@ -52,7 +52,8 @@ export function applySetAttrOp(el, name, val) {
     // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
     el.setAttribute(name, val);
-    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
+    if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
+    else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
 
@@ -68,8 +69,72 @@ export function applySetAttrOp(el, name, val) {
  */
 export function applyRemAttrOp(el, name) {
     el.removeAttribute(name);
-    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
+    if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
+    else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
+}
+
+/**
+ * Is `name` the `value` of a `<select>`? HTML has no such attribute: a select the
+ * server left one on holds options it could not mark (from a component, a runtime
+ * value, raw markup), so the value is applied to the options instead -- see
+ * `applyChooser`.
+ * @param {Element} el
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isChooserValue(el, name) {
+    return (
+        name === 'value' &&
+        el.localName === 'select' &&
+        el.namespaceURI === 'http://www.w3.org/1999/xhtml'
+    );
+}
+
+/**
+ * Mark `selected` the options of `sel` its `value` attribute names: the value, or
+ * under `multiple` the JSON array of values the server renders (no attribute names
+ * none). The `selected` attribute is what a form reset returns to and what an
+ * option the user has not touched shows, so a newly rendered option the value names
+ * is picked as one the server marked would be. `force` also moves the live
+ * selection, the user's pick included: the server changed the value.
+ * @param {HTMLSelectElement} sel
+ * @param {boolean} force
+ */
+export function applyChooser(sel, force) {
+    const raw = sel.getAttribute('value');
+    const picks = raw === null ? [] : chooserPicks(sel, raw);
+    for (const o of sel.options) {
+        const on = picks.includes(o.value);
+        if (o.defaultSelected !== on) o.defaultSelected = on;
+        if (force && o.selected !== on) o.selected = on;
+    }
+}
+
+/**
+ * @param {HTMLSelectElement} sel
+ * @param {string} raw
+ * @returns {string[]}
+ */
+function chooserPicks(sel, raw) {
+    if (!sel.multiple) return [raw];
+    try {
+        const picks = JSON.parse(raw);
+        if (Array.isArray(picks)) return picks.map(String);
+    } catch {
+        // Not the server's array: one value, as the server compares it.
+    }
+    return [raw];
+}
+
+/**
+ * `applyChooser` over every select under `root` that carries a value: the page as
+ * it loads, and the documents a batch of ops rendered options or selects into.
+ * @param {Document|Element} root
+ */
+export function applyChoosers(root) {
+    for (const sel of root.querySelectorAll('select[value]'))
+        applyChooser(/** @type {HTMLSelectElement} */ (sel), false);
 }
 
 // The <input> types in the "value" value mode, the only ones whose `value` property

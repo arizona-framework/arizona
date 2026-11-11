@@ -40,6 +40,21 @@ afterEach(() => {
 });
 
 describe('static client (no server)', () => {
+    // A select whose options the server could not all mark keeps its value; the
+    // generated page marks them, and start() keeps a form reset on that choice.
+    it('applies a select value to the options it names', async () => {
+        const { start } = await fresh();
+        document.body.innerHTML =
+            '<form><select value="b"><option>a</option><option>b</option></select></form>' +
+            embed([]);
+        stop = start();
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        expect(sel.value).toBe('b');
+        sel.value = 'a';
+        /** @type {HTMLFormElement} */ (document.querySelector('form')).reset();
+        expect(sel.value).toBe('b');
+    });
+
     // `dblclick`, not `click`: the common types (click, input, ...) are delegated
     // on every page from the start, so only another type shows the embedded names
     // being read.

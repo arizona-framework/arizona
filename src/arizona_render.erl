@@ -59,6 +59,10 @@ op-code targets.
 %% note_fp_payload/0 / drain_fp_note/0).
 -define(FP_NOTE, '$arizona_fp_payload').
 
+%% Set while an SSR render produces a document holding a chooser that kept its value
+%% for the page to apply (see note_unmarked_choices/0).
+-define(UNMARKED_CHOICES_KEY, '$arizona_unmarked_choices').
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -85,6 +89,7 @@ op-code targets.
 -export([zip_stream_fp/3]).
 -export([fingerprint_payload/1]).
 -export([drain_fp_note/0]).
+-export([note_unmarked_choices/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -235,7 +240,7 @@ server response before any client is attached.
     Template :: arizona_template:template().
 render_to_iolist(#{s := Statics, d := Dynamics} = Tmpl) ->
     Backend = backend(Tmpl),
-    zip_ssr(Backend, Statics, Dynamics).
+    mark_choices(Backend, fun() -> zip_ssr(Backend, Statics, Dynamics) end).
 
 -doc """
 SSR render for a stateful handler (embedded-component style).
@@ -313,6 +318,22 @@ render_view(Handler, Opts, TmplFun) ->
             error({no_render_target, Handler}, none, [{error_info, #{module => ?MODULE}}]);
         {_Backend, _Page} = Rendered ->
             Rendered
+    end.
+
+-doc """
+Notes that the document being rendered holds a chooser that kept its value for the
+page to apply (`arizona_template:chooser_value/2`), so the SSR render that produces
+it marks the choices it picks (`c:arizona_renderer:mark_choices/1`). A live process
+renders no document and notes nothing: the client applies the value there.
+""".
+-spec note_unmarked_choices() -> ok.
+note_unmarked_choices() ->
+    case arizona_live:connected() of
+        true ->
+            ok;
+        false ->
+            _ = put(?UNMARKED_CHOICES_KEY, true),
+            ok
     end.
 
 -doc """
@@ -644,14 +665,17 @@ page_template(TmplFun, PageTmpl) -> TmplFun(PageTmpl).
 
 finish_page(PageTmpl, Bindings, Opts) ->
     Backend = backend(PageTmpl),
-    PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),
-    %% The page's own root is held to one node at compile time.
-    {DocBackend, Root, Doc} = apply_layouts(
-        Layouts, Backend, {Backend, single, PageHTML}, Bindings
-    ),
-    ok = assert_document_root(Root),
-    {DocBackend, Doc}.
+    Finish = fun() ->
+        PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
+        %% The page's own root is held to one node at compile time.
+        {DocBackend, Root, Doc} = apply_layouts(
+            Layouts, Backend, {Backend, single, PageHTML}, Bindings
+        ),
+        ok = assert_document_root(Root),
+        {DocBackend, Doc}
+    end,
+    mark_choices(Finish).
 
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
@@ -802,6 +826,33 @@ zip_d(Backend, [S | Statics], [{_Az, V} | DRest]) ->
 
 render_v(Backend, {attr, Name, V}) -> Backend:render_attr(Name, V);
 render_v(Backend, V) -> render_dyn(Backend, V).
+
+%% A chooser that kept its value holds choices the parse transform could not mark
+%% (a component, a runtime value, raw markup), so the document marks them before it
+%% is served, or the page would load on the first choice. Only a render that noted
+%% one (note_unmarked_choices/0) pays for the backend's pass over the document.
+mark_choices(Backend, Render) ->
+    {Backend, Doc} = mark_choices(fun() -> {Backend, Render()} end),
+    Doc.
+
+mark_choices(Render) ->
+    Outer = erase(?UNMARKED_CHOICES_KEY),
+    try
+        {Backend, Doc} = Render(),
+        case erase(?UNMARKED_CHOICES_KEY) of
+            true -> {Backend, Backend:mark_choices(Doc)};
+            undefined -> {Backend, Doc}
+        end
+    after
+        restore_unmarked_choices(Outer)
+    end.
+
+restore_unmarked_choices(undefined) ->
+    _ = erase(?UNMARKED_CHOICES_KEY),
+    ok;
+restore_unmarked_choices(true) ->
+    _ = put(?UNMARKED_CHOICES_KEY, true),
+    ok.
 
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly. `Backend` is the enclosing

@@ -5,6 +5,10 @@ select in (written literally, inside an `optgroup`, in a conditional branch, fro
 list or stream `?each`, from a named `?each` callback, from an inlined local helper,
 through a hoisted variable), plus `multiple`. Every one must render the option whose
 value equals the select's as `selected`, and diff a change of it to that option.
+
+The rest hold options the transform cannot see -- a component, a helper it does not
+inline, a runtime template, raw markup, an option valued by runtime text -- so the
+select keeps its value and the page marks the option it names.
 """.
 -include("arizona_stateless.hrl").
 
@@ -28,6 +32,17 @@ value equals the select's as `selected`, and diff a change of it to that option.
 -export([multiple/1]).
 -export([multiple_dynamic/1]).
 -export([nested_each/1]).
+-export([component/1]).
+-export([local_component/1]).
+-export([remote_helper/1]).
+-export([runtime_template/1]).
+-export([raw_options/1]).
+-export([text_options/1]).
+-export([each_opaque_item/1]).
+-export([mixed/1]).
+-export([multiple_component/1]).
+-export([local_value_component/1]).
+-export([option_items/1]).
 
 -spec literal(az:bindings()) -> az:template().
 literal(Bindings) ->
@@ -213,5 +228,93 @@ nested_each(Bindings) ->
                 end,
                 ?get(groups)
             )
+        ]}
+    ).
+
+%% A component renders the options: a `?stateless` from another module, and a local one.
+-spec component(az:bindings()) -> az:template().
+component(Bindings) ->
+    ?html(
+        {select, [{value, ?get(v)}], [
+            ?stateless(arizona_select_value, option_items, #{opts => ?get(opts)})
+        ]}
+    ).
+
+-spec local_component(az:bindings()) -> az:template().
+local_component(Bindings) ->
+    ?html({select, [{value, ?get(v)}], [?stateless(fun option_items/1, #{opts => ?get(opts)})]}).
+
+-spec option_items(az:bindings()) -> az:template().
+option_items(Bindings) ->
+    ?html([?each(fun(O) -> {option, [{value, O}], [O]} end, ?get(opts))]).
+
+%% A helper with two clauses is not inlined: its template is built at runtime.
+-spec remote_helper(az:bindings()) -> az:template().
+remote_helper(Bindings) ->
+    ?html({select, [{value, ?get(v)}], [option_list(?get(opts))]}).
+
+option_list([]) ->
+    ?html([]);
+option_list(Opts) ->
+    ?html([?each(fun(O) -> {option, [{value, O}], [O]} end, Opts)]).
+
+%% The options are a template the view holds as a binding.
+-spec runtime_template(az:bindings()) -> az:template().
+runtime_template(Bindings) ->
+    ?html({select, [{value, ?get(v)}], [?get(options_tmpl)]}).
+
+-spec raw_options(az:bindings()) -> az:template().
+raw_options(Bindings) ->
+    ?html(
+        {select, [{value, ?get(v)}], [
+            ?raw(~"<option value=\"a\">A</option><option>b</option><OPTION Value='c'>C")
+        ]}
+    ).
+
+%% Valued by their text, which is only known at runtime.
+-spec text_options(az:bindings()) -> az:template().
+text_options(Bindings) ->
+    ?html(
+        {select, [{value, ?get(v)}], [
+            ?each(fun(O) -> {option, [], [O]} end, ?get(opts))
+        ]}
+    ).
+
+-spec each_opaque_item(az:bindings()) -> az:template().
+each_opaque_item(Bindings) ->
+    ?html(
+        {select, [{value, ?get(v)}], [
+            ?each(
+                fun(O) ->
+                    {optgroup, [{label, O}], [?stateless(fun option_items/1, #{opts => [O]})]}
+                end,
+                ?get(opts)
+            )
+        ]}
+    ).
+
+%% Options the transform marks beside ones a component renders.
+-spec mixed(az:bindings()) -> az:template().
+mixed(Bindings) ->
+    ?html(
+        {select, [{value, ?get(v)}], [
+            {option, [{value, ~"a"}], [~"A"]},
+            ?stateless(fun option_items/1, #{opts => lists:delete(~"a", ?get(opts))})
+        ]}
+    ).
+
+-spec multiple_component(az:bindings()) -> az:template().
+multiple_component(Bindings) ->
+    ?html(
+        {select, [multiple, {value, ?get(vs)}], [
+            ?stateless(fun option_items/1, #{opts => ?get(opts)})
+        ]}
+    ).
+
+-spec local_value_component(az:bindings()) -> az:template().
+local_value_component(Bindings) ->
+    ?html(
+        {select, [{value, ?local(choice, ~"b")}], [
+            ?stateless(fun option_items/1, #{opts => ?get(opts)})
         ]}
     ).

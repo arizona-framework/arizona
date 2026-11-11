@@ -1,4 +1,4 @@
-import { applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
+import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
 import { closeOrphanedPipWindows, findViewRoot } from './arizona-docs.js';
 import {
     anyHookDefs,
@@ -333,6 +333,8 @@ function removeEl(el) {
  */
 export function applyOps(ops, resync = false) {
     let didReplace = false;
+    /** @type {Set<Document>|null} */
+    let choiceDocs = null;
     /** @type {Map<string, Resolution>} */
     const els = new Map();
     const streams = newStreamCache();
@@ -380,6 +382,10 @@ export function applyOps(ops, resync = false) {
             }
             const el = found.el;
             const az = azOf(op[1]);
+            if (touchesChoices(op, el)) {
+                choiceDocs ??= new Set();
+                choiceDocs.add(el.ownerDocument);
+            }
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
@@ -437,6 +443,9 @@ export function applyOps(ops, resync = false) {
             console.error('[arizona] op %s failed; skipping', op[0], err);
         }
     }
+    // A select the server left its value on holds options it could not mark: any it
+    // rendered or changed in this batch take the value now, as SSR marked the page's.
+    if (choiceDocs) for (const doc of choiceDocs) applyChoosers(doc);
     // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one), as
     // does a patch the server degraded to a replace. A patch kept in place has no
     // OP_REPLACE: it scrolls on its own reply, which the frame handler recognises
@@ -445,6 +454,31 @@ export function applyOps(ops, resync = false) {
         applyScroll(_pendingScroll);
         setPendingScroll(null);
     }
+}
+
+// Markup opening a select or an option, in any case.
+const CHOICE_MARKUP = /<(?:option|select)[\s/>]/i;
+
+/**
+ * Could this op have rendered or changed an option a select's value names? Its
+ * target is a select, an option or an optgroup, or it carries markup holding one
+ * (a slot re-render, an inserted item, a replaced view, nested item ops).
+ * @param {Array<*>} op
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function touchesChoices(op, el) {
+    const n = el.localName;
+    return n === 'select' || n === 'option' || n === 'optgroup' || hasChoiceMarkup(op);
+}
+
+/**
+ * @param {*} x
+ * @returns {boolean}
+ */
+function hasChoiceMarkup(x) {
+    if (typeof x === 'string') return CHOICE_MARKUP.test(x);
+    return Array.isArray(x) && x.some(hasChoiceMarkup);
 }
 
 /**

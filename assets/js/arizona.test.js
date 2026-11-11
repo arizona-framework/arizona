@@ -531,6 +531,92 @@ describe('applyOps -- OP.SET_ATTR', () => {
 });
 
 // ---------------------------------------------------------------------------
+// applyOps -- a select that kept its value
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- a select that kept its value', () => {
+    const picked = (sel) => [...sel.options].filter((o) => o.selected).map((o) => o.value);
+    const marked = (sel) => [...sel.options].filter((o) => o.defaultSelected).map((o) => o.value);
+
+    it('moves the selection and the selected attributes when the value changes', () => {
+        setupView(
+            'v',
+            '<select az="0" value="a"><option value="a" selected>A</option>' +
+                '<option value="b">B</option><option>c</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        sel.value = 'b'; // the user picks another option
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', 'c']]);
+        expect(picked(sel)).toEqual(['c']);
+        expect(marked(sel)).toEqual(['c']);
+        // A form reset returns to the server's value, not the page's first load.
+        const form = document.createElement('form');
+        sel.replaceWith(form);
+        form.append(sel);
+        sel.value = 'a';
+        form.reset();
+        expect(sel.value).toBe('c');
+    });
+
+    it('marks an option rendered after the value was set', () => {
+        setupView(
+            'v',
+            '<select value="d"><optgroup az="0"><!--az:0-->' +
+                '<option value="a">A</option><!--/az--></optgroup></select>',
+        );
+        applyOps([
+            [OP.TEXT, 'v:0', '<option value="a">A</option><option value="d">D</option>', true],
+        ]);
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        expect(sel.value).toBe('d');
+        expect(marked(sel)).toEqual(['d']);
+    });
+
+    it('marks the options of a select a batch renders', () => {
+        setupView('v', '<div az="0"><!--az:0--><!--/az--></div>');
+        applyOps([
+            [
+                OP.TEXT,
+                'v:0',
+                '<select value="b"><option>a</option><option>b</option></select>',
+                true,
+            ],
+        ]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    it('reads a multiple select value as a JSON array', () => {
+        setupView(
+            'v',
+            '<select az="0" multiple value=\'["a"]\'><option>a</option>' +
+                '<option>b</option><option>c</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', '["a","c"]']]);
+        expect(picked(sel)).toEqual(['a', 'c']);
+        expect(marked(sel)).toEqual(['a', 'c']);
+    });
+
+    it('picks nothing when the value is removed', () => {
+        setupView(
+            'v',
+            '<select az="0" multiple value=\'["a"]\'><option selected>a</option>' +
+                '<option>b</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        applyOps([[OP.REM_ATTR, 'v:0', 'value']]);
+        expect(picked(sel)).toEqual([]);
+        expect(marked(sel)).toEqual([]);
+    });
+
+    it('leaves a select without a value alone', () => {
+        setupView('v', '<select><option az="0">a</option><option selected>b</option></select>');
+        applyOps([[OP.TEXT, 'v:0', 'z', false]]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 5. applyOps -- OP.REM_ATTR
 // ---------------------------------------------------------------------------
 

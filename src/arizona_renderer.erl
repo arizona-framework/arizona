@@ -243,7 +243,22 @@ the transform also looks for in compiled markup to refuse a choice it cannot mar
     | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
     | {choice, #{value := binary(), selected := binary()}}.
 
--optional_callbacks([selection_role/1]).
+-doc """
+Marks picked, in a whole document of this backend, every choice under a chooser that
+kept its value. The parse transform keeps a chooser's value (rendering it with
+`arizona_template:chooser_value/2`) when something under it may render a choice it
+cannot mark at compile time: a component, a remote helper, a runtime value, raw
+markup. The renderer calls this on the document an SSR render produced (a page
+served over HTTP, static generation) when such a chooser rendered in it, so the page
+loads on the right choice before any script runs; a live client keeps the choices in
+step after. For HTML: `selected` on every `<option>` of such a `<select>` whose value
+its `value` names.
+
+Optional, and required of a backend that implements `selection_role/1`.
+""".
+-callback mark_choices(Document :: iodata()) -> iodata().
+
+-optional_callbacks([selection_role/1, mark_choices/1]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
