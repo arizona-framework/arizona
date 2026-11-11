@@ -533,8 +533,8 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // Each match is toggled on its own current state. Like set_attr, it
             // proves the name only when it writes commands: a bare value is data.
             // Commands compare re-serialized on both sides: the server renders
-            // them with Erlang's encoder (`2.0`, binary-sorted keys), which
-            // JSON.stringify never reproduces, so raw text would never match.
+            // them with Erlang's encoder (`2.0`, binary-sorted keys), whose text
+            // JSON.stringify need not reproduce, so raw text may never match.
             const cmds = Array.isArray(cmd[3]);
             noteAzAttr(cmd[2], cmds);
             const a = cmds ? JSON.stringify(cmd[3]) : cmd[3];
