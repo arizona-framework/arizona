@@ -2052,12 +2052,13 @@ flow is never the client's last match), the same set the socket's connect frame
 delivers. The client runs a command only under a proven name, and that frame lands a round trip
 after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
 between would find no proof. Appending rather than splicing means the page is neither flattened
-nor searched: no case or data-island text can misplace the embed. It does not stop a forged
-set: `?raw` is trusted markup, and untrusted markup spliced through it can inject its own embed
-followed by an unclosed `<!--` (or an unclosed `xmp`/`iframe`/`noembed`), which swallows the real
-one, so the forged set is the last match. Under a strict CSP that blocks the injected markup's own
-scripts, the allowed client then runs its `az-*` data as commands. A `?json` page has nowhere to
-embed and waits for the connect frame.
+nor searched: no case or data-island text can misplace the embed. It does not stop a forged set:
+`?raw` is trusted markup, and untrusted markup spliced through it can inject its own embed
+followed by an unclosed `<!--` (or a raw-text or RCDATA element left unclosed, e.g. `textarea`,
+`title`, `style`, `script`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`, or `noscript`
+with scripting on), which swallows the real one, so the forged set is the last match. Under a
+strict CSP that blocks the injected markup's own scripts, the allowed client then runs its
+`az-*` data as commands. A `?json` page has nowhere to embed and waits for the connect frame.
 
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
