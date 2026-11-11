@@ -7435,8 +7435,10 @@ rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
     end.
 
 %% A choice without a value is valued by its text, as the browser values an option:
-%% whitespace stripped and collapsed. Only static text has one at compile time;
-%% other text is the page's to compare (`error`, an opaque child).
+%% whitespace stripped and collapsed. Static text is folded here; text holding a
+%% value is computed where the attribute renders (arizona_template:option_text/1),
+%% so it tracks and diffs like any attribute. Markup in it has no text the compiler
+%% can see (`error`, an opaque child).
 choice_value(Backend, ValueName, Attrs, Rest) ->
     case take_attr(Backend, ValueName, Attrs) of
         {ok, {tuple, _, [_Name, {atom, _, false}]}, _Others} ->
@@ -7457,15 +7459,56 @@ choice_text([Children]) ->
             true -> ast_list_to_list(Children);
             false -> [Children]
         end,
-    Texts = [T || I <- Items, {ok, T} <- [literal_text(I)]],
-    Text = iolist_to_binary(Texts),
-    case length(Texts) =:= length(Items) andalso binary:match(Text, [~"<", ~"&"]) =:= nomatch of
+    Parts = [text_part(I) || I <- Items],
+    case lists:member(markup, Parts) of
         true ->
-            Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
-            {ok, ast_binary(iolist_to_binary(lists:join(~" ", Words)))};
+            error;
         false ->
-            error
+            case [T || {text, T} <- Parts] of
+                Texts when length(Texts) =:= length(Parts) ->
+                    {ok, ast_binary(collapse_ws(iolist_to_binary(Texts)))};
+                _Computed ->
+                    {ok, option_text_call([part_ast(P) || P <- Parts], anno(Children))}
+            end
     end.
+
+%% What one child adds to an option's text. A static binary is spliced as markup,
+%% so it is text only when it holds no tag or reference; a literal list is escaped,
+%% so its text is what it says. A `?local` starts as its initial.
+text_part(Item) ->
+    case is_static_binary(Item) of
+        true ->
+            Text = binary_text(Item),
+            case binary:match(Text, [~"<", ~"&"]) of
+                nomatch -> {text, Text};
+                _Markup -> markup
+            end;
+        false ->
+            computed_text_part(Item)
+    end.
+
+computed_text_part(Item) ->
+    case {is_local_marker(Item), literal_list_text(Item)} of
+        {true, _} -> {value, local_init(Item)};
+        {false, {ok, Text}} -> {text, Text};
+        {false, error} -> value_text_part(Item)
+    end.
+
+value_text_part(Item) ->
+    case is_markup_item(Item) orelse list_has_markup_item(Item) of
+        true -> markup;
+        false -> {value, Item}
+    end.
+
+part_ast({text, Text}) -> ast_binary(Text);
+part_ast({value, AST}) -> AST.
+
+option_text_call(Parts, L) ->
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, option_text}}, [ast_list(Parts)]}.
+
+collapse_ws(Text) ->
+    Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
+    iolist_to_binary(lists:join(~" ", Words)).
 
 %% Literal on both sides and one value: decided here, a static attribute.
 chosen_ast(Value, #{fold := true, multiple := {atom, _, false}} = Sel, L) ->

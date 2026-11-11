@@ -40,6 +40,9 @@ the option it names in the document, and the client keeps it in step after.
     mark_choices_reads_the_document/1,
     opaque_child_compiles/1,
     option_with_runtime_text_compiles/1,
+    runtime_text_option_diffs/1,
+    runtime_text_option_in_each_row/1,
+    runtime_text_option_refuses_markup/1,
     authored_selected_is_refused/1,
     shadowing_parameter_is_renamed/1,
     shadowing_hoisted_read_is_refused/1,
@@ -77,11 +80,14 @@ groups() ->
             diff_is_fine_grained,
             diff_of_unrelated_binding_is_empty,
             stream_item_update_keeps_selection,
+            runtime_text_option_diffs,
+            runtime_text_option_in_each_row,
             opaque_diff_ships_the_value
         ]},
         {compile, [parallel], [
             opaque_child_compiles,
             option_with_runtime_text_compiles,
+            runtime_text_option_refuses_markup,
             authored_selected_is_refused,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
@@ -448,6 +454,50 @@ opaque_diff_ships_the_value(Config) when is_list(Config) ->
     ?assertEqual([{remove, ~"selected"}, {set, ~"value"}], lists:sort(attr_ops(Ops)), Ops),
     ?assertMatch([~"c"], [V || [?OP_SET_ATTR, _, ~"value", V] <- flatten_ops(Ops)]).
 
+%% A runtime-text option's `selected` tracks both its text and the value: a change
+%% to either ships the attribute ops, and only those.
+runtime_text_option_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod(
+            "sel_text_diff",
+            "{option, [], [arizona_template:get(label, Bindings)]}, {option, [], [~\"y\"]}"
+        )
+    ),
+    B0 = #{v => ~"x", label => ~"x"},
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = B0#{label => ~"z"},
+    {Ops1, Snap1, V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, #{label => true}),
+    ?assertEqual([{remove, ~"selected"}], attr_ops(Ops1), Ops1),
+    ?assertEqual([], selected_values(iolist_to_binary(arizona_render:snapshot_html(Snap1)))),
+    {Ops2, Snap2, _} = arizona_diff:diff(Mod:render(B1#{v => ~"y"}), Snap1, V1, #{v => true}),
+    ?assertEqual([{set, ~"selected"}], attr_ops(Ops2), Ops2),
+    ?assertEqual([~"y"], selected_values(iolist_to_binary(arizona_render:snapshot_html(Snap2)))).
+
+%% A select in each row of an `?each`, its option valued by the row's text: the row
+%% that comes to name the value is item-patched selected.
+runtime_text_option_in_each_row(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(sel_text_rows). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_html, {'div', [], [arizona_template:each(fun(R) -> "
+        "{'div', [], [{select, [{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [], [R]}, {option, [], [~\"z\"]}]}]} end, "
+        "arizona_template:get(rows, Bindings))]}). "
+    ),
+    B0 = #{rows => [~"x"], v => ~"b"},
+    HTML0 = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    ?assertEqual([], selected_values(HTML0), HTML0),
+    ?assertEqual(nomatch, re:run(HTML0, ~"<select[^>]* value[ =>]"), HTML0),
+    Hit = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0#{rows => [~"b"]}))),
+    ?assertEqual([~"b"], selected_values(Hit), Hit),
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, Snap1, _} = arizona_diff:diff(Mod:render(B0#{rows => [~"b"]}), Snap0, V0, #{
+        rows => true
+    }),
+    ?assertMatch([{set, ~"selected"}], [A || {set, ~"selected"} = A <- attr_ops(Ops)], Ops),
+    ?assertEqual(
+        [~"b"], selected_values(iolist_to_binary(arizona_render:snapshot_html(Snap1)))
+    ).
+
 %% An inserted item ships as its HTML, or as statics plus values.
 payload_html(#{~"s" := [S | Statics], ~"d" := Values}) ->
     iolist_to_binary([S | lists:zipwith(fun(V, St) -> [V, St] end, Values, Statics)]);
@@ -498,16 +548,41 @@ opaque_child_compiles(Config) when is_list(Config) ->
     WsHTML = iolist_to_binary(arizona_render:render_to_iolist(Ws:render(#{v => ~"a"}))),
     ?assertEqual(nomatch, binary:match(WsHTML, ~"value"), WsHTML).
 
-%% An option without a value whose text is computed is valued by that text, which
-%% the document is marked by.
+%% An option without a value whose text is computed is valued by that text, at
+%% compile time: an ordinary `selected` attribute, so the select keeps no value.
 option_with_runtime_text_compiles(Config) when is_list(Config) ->
     Mod = compile_module(
-        select_src_mod("sel_text", "{option, [], [arizona_template:get(label, Bindings)]}")
+        select_src_mod(
+            "sel_text",
+            "{option, [], [arizona_template:get(label, Bindings)]}, "
+            "{option, [], [~\"Tag: \", arizona_template:get(n, Bindings), ~\" \"]}, "
+            "{option, [], [[~\"a&b\", arizona_template:get(s, Bindings)]]}"
+        )
     ),
-    HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(Mod:render(#{v => ~"x", label => ~" x "}))
+    B = #{v => ~"x", label => ~" x ", n => 7, s => ~"c"},
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B))),
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>"), HTML),
+    ?assertEqual(1, count_selected(HTML), HTML),
+    ?assertEqual(nomatch, re:run(HTML, ~"<select[^>]* value[ =>]"), HTML),
+    %% Every part counts, whitespace collapsed; a literal list is text, `&` included.
+    Tag = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B#{v => ~"Tag: 7"}))),
+    ?assertMatch({match, _}, re:run(Tag, ~"<option[^>]* selected>Tag: "), Tag),
+    Amp = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B#{v => ~"a&bc"}))),
+    ?assertMatch({match, _}, re:run(Amp, ~"<option[^>]* selected>(<!--[^>]*-->)?a&amp;b"), Amp),
+    {Live, _Snap, _Views} = arizona_render:render(Mod:render(B), #{}),
+    ?assertEqual(1, count_selected(iolist_to_binary(Live))).
+
+%% An option's text is text: a template there has no value the server can compare,
+%% so the render says to give the option a value attribute.
+runtime_text_option_refuses_markup(Config) when is_list(Config) ->
+    Mod = compile_module(
+        select_src_mod("sel_text_markup", "{option, [], [arizona_template:get(label, Bindings)]}")
     ),
-    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>"), HTML).
+    Label = arizona_select_value:option_items(#{opts => [~"a"]}),
+    ?assertError(
+        {arizona_loc, _, {option_text_markup, _}},
+        arizona_render:render_to_iolist(Mod:render(#{v => ~"a", label => Label}))
+    ).
 
 authored_selected_is_refused(Config) when is_list(Config) ->
     Conflict = fun
@@ -589,7 +664,8 @@ shapes() ->
         field,
         spelled,
         hoisted,
-        nested_each
+        nested_each,
+        text_options
     ].
 
 opaque_shapes() ->
@@ -599,7 +675,6 @@ opaque_shapes() ->
         remote_helper,
         runtime_template,
         raw_options,
-        text_options,
         each_opaque_item,
         mixed
     ].

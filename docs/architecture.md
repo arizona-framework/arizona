@@ -274,10 +274,14 @@ pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under 
 compiles (`compile_each_clause/11`). A template compiled before the chooser was seen counts as
 reached only when every option element in its statics carries a `chosen/3` call.
 
+A choice without a `value` is valued by its text, as the browser values an option (ASCII
+whitespace stripped and collapsed): static text folds at compile time, and text holding a
+value compares `arizona_template:option_text/1` of the children, so it tracks and diffs like
+the value case.
+
 What the transform cannot reach -- a `?stateless`/`?stateful` component, a remote or
-non-inlined helper, a runtime value, `?raw` or static markup, an option valued by runtime
-text -- still renders under the chooser, so the chooser keeps its value instead of dropping
-it, rendered by `arizona_template:chooser_value/2` (the text, or under `multiple` a JSON array
+non-inlined helper, a runtime value, `?raw` or static markup -- still renders under the
+chooser, so the chooser keeps its value instead of dropping it, rendered by `arizona_template:chooser_value/2` (the text, or under `multiple` a JSON array
 of texts). An `?each` whose item holds such a child tells its chooser through a
 `'$arizona_choice_opaque'` mark around the compiled each, taken off where the chooser
 compiles. Rendered outside a live process, `chooser_value/2` notes the document holds such a

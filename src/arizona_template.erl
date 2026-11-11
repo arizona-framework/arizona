@@ -55,6 +55,7 @@ render(Bindings) ->
 -export([track/1]).
 -export([chosen/3]).
 -export([chooser_value/2]).
+-export([option_text/1]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -106,6 +107,9 @@ render(Bindings) ->
 %% Emitted by the parse transform as the `value` a select keeps when it holds an option
 %% the transform cannot mark.
 -ignore_xref([chooser_value/2]).
+%% Emitted by the parse transform as the value of an option without one whose text
+%% holds a runtime value, under a valued select.
+-ignore_xref([option_text/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -457,6 +461,35 @@ chooser_value(Value, Multiple) ->
     end.
 
 -doc """
+The value of a choice valued by its text: the text its children render, ASCII
+whitespace stripped and collapsed, as the browser values an `<option>` without a
+`value` attribute. `Parts` are the children in order, literal text as binaries and
+the rest as the values their content slots render (escaped there, so the text is the
+value itself; a `raw/1` from a helper is escaped too).
+
+The parse transform calls it inside `chosen/3` for an option whose text holds a
+value, so the comparison renders, tracks and diffs like any attribute. A template or
+component among the children renders markup, which has no text the server can
+compare: that raises `option_text_markup`; give the option a `value` attribute.
+""".
+-spec option_text(Parts) -> binary() when
+    Parts :: [term()].
+option_text(Parts) ->
+    Text = iolist_to_binary([option_text_part(P) || P <- Parts]),
+    Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
+    iolist_to_binary(lists:join(~" ", Words)).
+
+option_text_part(Part) when is_binary(Part) ->
+    Part;
+option_text_part(Part) when is_map(Part) ->
+    erlang:error({option_text_markup, Part}, [Part], [{error_info, #{module => ?MODULE}}]);
+option_text_part(Part) ->
+    case classify_trusted(Part) of
+        {raw, V} -> option_text_part(V);
+        _Text -> to_bin(Part)
+    end.
+
+-doc """
 Converts a template value to its binary HTML representation.
 
 Errors with `{effect_in_content, V}` for a value holding an effect command (a
@@ -572,6 +605,16 @@ format_error({effect_in_content, V}) ->
             "runs a command there. Put the command itself in an event attribute's value "
             "(e.g. {az_click, Cmd}), or return it from a handler. To show a command as "
             "text, encode it explicitly: arizona_effect:encode_json(Cmd)",
+            [V]
+        )
+    );
+format_error({option_text_markup, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "an <option> without a value attribute is valued by its text, and this child "
+            "renders markup (~0tp), whose text the server cannot compare against the "
+            "select's value. Give the option a value attribute, e.g. "
+            "{option, [{value, Id}], [Label]}",
             [V]
         )
     );

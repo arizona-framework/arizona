@@ -100,10 +100,13 @@ ships a `REM_ATTR`/`SET_ATTR` `selected` on the two options involved. With `mult
 a dynamic `{multiple, ?get(m)}`) the value is a list of values. Options written literally, inside
 an `optgroup`, in a conditional branch, from an `?each` (list, stream, named callback, nested),
 from an inlined local helper (`?MODULE:` qualified too) or a hoisted variable are all reached; an
-option without a `value` is valued by its static text. When every option is reached the select
-emits no `value`. An option the transform cannot see -- from a `?stateless`/`?stateful`
-component, a remote or non-inlined helper, a runtime value, `?raw` or static markup, or one
-valued by runtime text -- still works: the select keeps its `value`
+option without a `value` is valued by its text, whitespace stripped and collapsed: static text
+folds at compile time, and text holding a value (`{option, [], [?get(label)]}`, an `?each` item)
+compares `arizona_template:option_text/1` of its children, an ordinary tracked attribute too (a
+template among them has no text to compare: `option_text_markup`, give the option a `value`).
+When every option is reached the select emits no `value`. An option the transform cannot see --
+from a `?stateless`/`?stateful` component, a remote or non-inlined helper, a runtime value, or
+`?raw`/static markup (an option's static text holding a tag or reference included) -- still works: the select keeps its `value`
 (`arizona_template:chooser_value/2`, a JSON array of texts under `multiple`), the SSR render
 marks those options `selected` in the document it serves (`arizona_renderer:mark_choices/1`), and
 the client keeps them in step after (see [js.md](js.md)). A `?local` value stays on the select
