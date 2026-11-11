@@ -53,6 +53,7 @@ render(Bindings) ->
 -export([get_lazy/3]).
 -export([with/2]).
 -export([track/1]).
+-export([chosen/3]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -99,6 +100,8 @@ render(Bindings) ->
 -ignore_xref([raw_attr/2]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
+%% Emitted by the parse transform as the `selected` of an option under a valued select.
+-ignore_xref([chosen/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -389,6 +392,37 @@ each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).
+
+-doc """
+Whether a choice whose value is `Choice` is picked by a chooser whose value is
+`Value`: the two render as the same attribute text. With `Multiple` true a list
+`Value` holds the picked values, each compared the same way (any other value is one
+pick); otherwise a list is chardata, one text. A `false` value picks nothing, as it
+renders no attribute.
+
+The parse transform calls it for every choice under a chooser that carries a value
+(`arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
+`<select>` with a `value`.
+""".
+-spec chosen(Choice, Value, Multiple) -> boolean() when
+    Choice :: term(),
+    Value :: term(),
+    Multiple :: boolean().
+chosen(_Choice, false, _Multiple) ->
+    false;
+chosen(Choice, Values, true) when is_list(Values) ->
+    lists:any(fun(Value) -> same_text(Choice, Value) end, Values);
+chosen(Choice, Value, _Multiple) ->
+    same_text(Choice, Value).
+
+same_text(Same, Same) ->
+    true;
+same_text(Choice, Value) ->
+    attr_text(Choice) =:= attr_text(Value).
+
+%% `true` renders a bare attribute, whose value is the empty string.
+attr_text(true) -> <<>>;
+attr_text(V) -> to_bin(V).
 
 -doc """
 Converts a template value to its binary HTML representation.

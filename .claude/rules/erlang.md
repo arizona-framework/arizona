@@ -91,6 +91,24 @@ A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?h
 (appended after its attributes), so a submit made before the client script runs never puts the
 fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 
+A `value` on a `select` selects the option it names, in the `?html` target: HTML has no such
+attribute (the parser ignores it and loads on the first option), so the transform does not emit
+it and gives every `option` under the select a `selected` that tests the option's value against
+it (`arizona_template:chosen/3`, compared as the text both render as). That is an ordinary
+dynamic attribute, so the page loads on the right option (SSR and static generation alike) and a
+change ships a `REM_ATTR`/`SET_ATTR` `selected` on the two options involved. With `multiple`
+(static, or a dynamic `{multiple, ?get(m)}`) the value is a list of values. Options written
+literally, inside an `optgroup`, in a conditional branch, from an `?each` (list, stream, named
+callback, nested), from an inlined local helper or a hoisted variable are all reached; an option
+without a `value` is valued by its static text. A `?local` value stays on the select for the
+client to move, and the page loads on its initial. What could hold an option the transform cannot
+see is a compile error (`select_value`, `opaque_child`): a component, a remote or non-inlined helper, a
+runtime value, raw markup, a nested template, or an `?each` handed to the helper that renders the
+select. So are an option that also writes `selected` (`option_selected`), one whose text is
+not static and that has no `value` (`option_value`), and an `?each` callback parameter
+shadowing a name the value reads (`captured`). The backend opts in through the
+optional `arizona_renderer:selection_role/1`; `?json` keeps `value` as a prop.
+
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
 `bad_template_value`; a boolean belongs in a whole-value attribute (`{disabled, ?get(off)}`).

@@ -38,6 +38,7 @@ identical to the previous inlined emission.
 -export([supports_nodiff_keep/0]).
 -export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
+-export([selection_role/1]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -366,6 +367,23 @@ implied_attrs(Tag, Names) ->
             end;
         _Other ->
             []
+    end.
+
+-spec selection_role(arizona_renderer:tag()) ->
+    none
+    | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
+    | {choice, #{value := binary(), selected := binary()}}.
+%% `<select>` has no `value` attribute: the parser ignores it and selects the first
+%% option, so the page would load on one option and an update select another. The
+%% option's own `selected` is what the parser reads.
+selection_role(Tag) ->
+    case tag_name(Tag) of
+        ~"select" ->
+            {chooser, #{value => ~"value", multiple => ~"multiple", choice => ~"option"}};
+        ~"option" ->
+            {choice, #{value => ~"value", selected => ~"selected"}};
+        _Other ->
+            none
     end.
 
 boolean_attrs() -> presence.

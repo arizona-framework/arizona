@@ -225,6 +225,27 @@ with nothing to imply returns `[]`.
 -callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
 
 -doc """
+The part `Tag` plays when one element picks some of its descendants by a value:
+`chooser` for the element whose `value` attribute names the pick (`multiple` names
+the attribute that makes the value a list), `choice` for a descendant it picks
+from, keyed by its own `value` attribute (by its static text when it has none) and
+marked picked by its `selected` attribute; `none` for any other tag.
+
+Optional, for a target whose output has no such attribute: HTML ignores `value` on
+`<select>` and loads on the first option, so the parse transform drops the chooser's
+`value` and gives each choice a `selected` that tests the choice's value against it
+(`arizona_template:chosen/3`). A backend without the callback keeps `value` as an
+ordinary attribute. `choice` is the choice's tag name as `name/1` spells it, which
+the transform also looks for in compiled markup to refuse a choice it cannot mark.
+""".
+-callback selection_role(Tag :: tag()) ->
+    none
+    | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
+    | {choice, #{value := binary(), selected := binary()}}.
+
+-optional_callbacks([selection_role/1]).
+
+-doc """
 Whether a whole document of this backend must be a single root node. `true` for
 JSON, whose document is one JSON value; `false` where a fragment is a valid
 document (an HTML doctype beside `<html>`, terminal lines). When `true`, the parse
