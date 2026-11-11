@@ -53,6 +53,12 @@ render(Bindings) ->
 -export([get_lazy/3]).
 -export([with/2]).
 -export([track/1]).
+-export([chosen/3]).
+-export([chooser_value/2]).
+-export([choice_text/2]).
+-export([choices/3]).
+-export([picks/2]).
+-export([attr_input/1]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -99,6 +105,16 @@ render(Bindings) ->
 -ignore_xref([raw_attr/2]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
+%% Emitted by the parse transform as the `selected` of an option under a valued select.
+-ignore_xref([chosen/3]).
+%% Emitted by the parse transform as the `value` a select keeps when it holds an option
+%% the transform cannot mark.
+-ignore_xref([chooser_value/2]).
+%% Emitted by the parse transform as the value of an option without one whose text
+%% holds a runtime value, under a valued select.
+-ignore_xref([choice_text/2]).
+%% Emitted by the parse transform around a child of a valued select it cannot see into.
+-ignore_xref([choices/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -116,6 +132,7 @@ render(Bindings) ->
 -export_type([nodiff_identity/0]).
 -export_type([stateful_descriptor/0]).
 -export_type([stateless_descriptor/0]).
+-export_type([choices/0]).
 -export_type([render_fun/0]).
 
 %% --------------------------------------------------------------------
@@ -192,6 +209,12 @@ render(Bindings) ->
 -nominal nodiff_identity() :: {pos_integer() | undefined, term()}.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
+%% A child of a valued chooser the parse transform could not see into (choices/3).
+-nominal choices() :: #{
+    choices := fun(() -> {term(), term()}),
+    esc := boolean(),
+    child := term()
+}.
 -nominal stateless_descriptor() :: #{
     callback := fun((map()) -> template()),
     props := map(),
@@ -389,6 +412,149 @@ each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).
+
+-doc """
+Whether a choice whose value is `Choice` is picked by a chooser whose value is
+`Value`: the two render as the same attribute text. `Multiple` is the chooser's
+`multiple` attribute, present whatever it holds but `false` (as the attribute renders):
+present, a list `Value` holds the picked values, each compared the same way (any other
+value is one pick); absent, a list is chardata, one text. A `false` value picks
+nothing, as it renders no attribute.
+
+The parse transform calls it for every choice under a chooser that carries a value
+(`c:arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
+`<select>` with a `value`.
+""".
+-spec chosen(Choice, Value, Multiple) -> boolean() when
+    Choice :: term(),
+    Value :: term(),
+    Multiple :: term().
+chosen(_Choice, false, _Multiple) ->
+    false;
+chosen(Choice, Value, false) ->
+    same_text(Choice, Value);
+chosen(Choice, Values, _Multiple) when is_list(Values) ->
+    lists:any(fun(Value) -> same_text(Choice, Value) end, Values);
+chosen(Choice, Value, _Multiple) ->
+    same_text(Choice, Value).
+
+same_text(Same, Same) ->
+    true;
+same_text(Choice, Value) ->
+    attr_text(Choice) =:= attr_text(Value).
+
+%% `true` renders a bare attribute, whose value is the empty string. The text is read
+%% as the parser reads an attribute value (attr_input/1), so a value compares on every
+%% path -- here, the backend's mark_choices/2, the client -- as the page holds it.
+attr_text(true) -> <<>>;
+attr_text(V) -> attr_input(to_bin(V)).
+
+-doc """
+`Text` as the HTML parser preprocesses an attribute value before anything reads it:
+newlines normalized (CR LF and CR to LF), NUL replaced with U+FFFD. A choice and a
+chooser's value compare in this form (`chosen/3`, `picks/2`), so the server, the
+backend's `mark_choices/2` and the client agree on which option a value names.
+""".
+-spec attr_input(Text) -> Text when
+    Text :: binary().
+attr_input(Text) ->
+    case binary:match(Text, [~"\r", <<0>>]) of
+        nomatch ->
+            Text;
+        _Some ->
+            Lf = binary:replace(binary:replace(Text, ~"\r\n", ~"\n", [global]), ~"\r", ~"\n", [
+                global
+            ]),
+            binary:replace(Lf, <<0>>, <<16#FFFD/utf8>>, [global])
+    end.
+
+-doc """
+The value a chooser keeps when it holds a choice the parse transform cannot mark (a
+component, a runtime value, raw markup): `Value` as its attribute text, and with
+`Multiple` present (anything but `false`, as for `chosen/3`) a list of picks (or one
+pick) as a JSON array of their texts. `false` renders no attribute, picking nothing.
+The client applies it to the options a live update renders; the page loads on the
+ones `choices/3` marked.
+""".
+-spec chooser_value(Value, Multiple) -> binary() | false when
+    Value :: term(),
+    Multiple :: term().
+chooser_value(false, _Multiple) ->
+    false;
+chooser_value(Value, false) ->
+    attr_text(Value);
+chooser_value(Value, Multiple) ->
+    iolist_to_binary(json:encode(picks(Value, Multiple))).
+
+-doc """
+The texts of the values a chooser's `Value` picks, compared as `chosen/3` compares
+them: none for `false`, each element of a list `Value` when `Multiple` is present
+(anything but `false`), else the one text `Value` renders as.
+""".
+-spec picks(Value, Multiple) -> [binary()] when
+    Value :: term(),
+    Multiple :: term().
+picks(false, _Multiple) ->
+    [];
+picks(Value, false) ->
+    [attr_text(Value)];
+picks(Values, _Multiple) when is_list(Values) ->
+    [attr_text(V) || V <- Values];
+picks(Value, _Multiple) ->
+    [attr_text(Value)].
+
+-doc """
+Wraps `Child`, a child of a chooser carrying a value that the parse transform could not
+see into (a component, a remote or non-inlined helper, a runtime value, raw markup),
+so the page loads on the choice the value names however the child renders it.
+
+`Picks` returns the chooser's `{Value, Multiple}`; `Esc` is whether the child's slot
+escapes (the slot's own rule, decided on `Child`). The SSR render renders `Child` in
+place and has the backend mark, in that output alone, the choices the value picks
+(`c:arizona_renderer:mark_choices/2`). A live render and every diff see `Child` itself,
+and `Picks` is never called there: the chooser keeps its value
+(`chooser_value/2`) and the client applies it.
+""".
+-spec choices(Picks, Esc, Child) -> choices() when
+    Picks :: fun(() -> {term(), term()}),
+    Esc :: boolean(),
+    Child :: term().
+choices(Picks, Esc, Child) ->
+    #{choices => Picks, esc => Esc, child => Child}.
+
+-doc """
+The value of a choice valued by its text (`c:arizona_renderer:selection_role/1`): the
+text its children render, ASCII whitespace stripped and collapsed. `Parts` are the
+children in order, literal text as binaries and the rest as the values their content
+slots render (escaped there, so the text is the value itself; a `raw/1` from a helper
+is escaped too). A value that renders markup (a template, a component) adds the text
+that markup shows, as `Backend` reads it (`c:arizona_renderer:markup_text/1`) from
+what it renders (`arizona_render:render_markup/2`).
+
+The parse transform calls it inside `chosen/3` for a choice whose text holds a value,
+so the comparison renders, tracks and diffs like any attribute.
+""".
+-spec choice_text(Backend, Parts) -> binary() when
+    Backend :: module(),
+    Parts :: [term()].
+choice_text(Backend, Parts) ->
+    %% A NUL in text is dropped; splitting folds CR away.
+    Text = binary:replace(
+        iolist_to_binary([choice_text_part(Backend, P) || P <- Parts]), <<0>>, <<>>, [global]
+    ),
+    Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
+    iolist_to_binary(lists:join(~" ", Words)).
+
+choice_text_part(_Backend, Part) when is_binary(Part) ->
+    Part;
+choice_text_part(Backend, Part) when is_map(Part) ->
+    {_Kind, Text} = Backend:markup_text(arizona_render:render_markup(Backend, Part)),
+    Text;
+choice_text_part(Backend, Part) ->
+    case classify_trusted(Part) of
+        {raw, V} -> choice_text_part(Backend, V);
+        _Text -> to_bin(Part)
+    end.
 
 -doc """
 Converts a template value to its binary HTML representation.
@@ -809,6 +975,7 @@ scope_slot(_Az, Value) ->
 %% something other than hand its argument back. Keep the two in step -- a shape that
 %% answers `false` here can never be prefixed, however `scope_val/2` treats it.
 scopable({arizona_esc, Val}) -> scopable(Val);
+scopable({arizona_choices, _Picks, Val}) -> scopable(Val);
 scopable(#{view_id := _}) -> false;
 scopable(#{t := ?EACH}) -> false;
 scopable(#{az_local := _}) -> false;
@@ -995,6 +1162,7 @@ scope_az(Prefix, Az) -> <<Prefix:(byte_size(Prefix))/binary, "-", Az/binary>>.
 %% their bodies are left alone -- only the container/element `az` in the enclosing
 %% statics (already scoped above) and this dynamic's own `az` are prefixed.
 scope_val(Prefix, {arizona_esc, V}) -> {arizona_esc, scope_val(Prefix, V)};
+scope_val(Prefix, {arizona_choices, Picks, V}) -> {arizona_choices, Picks, scope_val(Prefix, V)};
 scope_val(_Prefix, #{view_id := _} = Child) -> Child;
 scope_val(_Prefix, #{t := ?EACH} = Each) -> Each;
 scope_val(_Prefix, #{az_local := _} = Local) -> Local;

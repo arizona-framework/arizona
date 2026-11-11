@@ -531,6 +531,200 @@ describe('applyOps -- OP.SET_ATTR', () => {
 });
 
 // ---------------------------------------------------------------------------
+// applyOps -- a select that kept its value
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- a select that kept its value', () => {
+    const picked = (sel) => [...sel.options].filter((o) => o.selected).map((o) => o.value);
+    const marked = (sel) => [...sel.options].filter((o) => o.defaultSelected).map((o) => o.value);
+
+    it('moves the selection and the selected attributes when the value changes', () => {
+        setupView(
+            'v',
+            '<select az="0" value="a"><option value="a" selected>A</option>' +
+                '<option value="b">B</option><option>c</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        sel.value = 'b'; // the user picks another option
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', 'c']]);
+        expect(picked(sel)).toEqual(['c']);
+        expect(marked(sel)).toEqual(['c']);
+        // A form reset returns to the server's value, not the page's first load.
+        const form = document.createElement('form');
+        sel.replaceWith(form);
+        form.append(sel);
+        sel.value = 'a';
+        form.reset();
+        expect(sel.value).toBe('c');
+    });
+
+    it('marks an option rendered after the value was set', () => {
+        setupView(
+            'v',
+            '<select value="d"><optgroup az="0"><!--az:0-->' +
+                '<option value="a">A</option><!--/az--></optgroup></select>',
+        );
+        applyOps([
+            [OP.TEXT, 'v:0', '<option value="a">A</option><option value="d">D</option>', true],
+        ]);
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        expect(sel.value).toBe('d');
+        expect(marked(sel)).toEqual(['d']);
+    });
+
+    it('marks the options of a select a batch renders', () => {
+        setupView('v', '<div az="0"><!--az:0--><!--/az--></div>');
+        applyOps([
+            [
+                OP.TEXT,
+                'v:0',
+                '<select value="b"><option>a</option><option>b</option></select>',
+                true,
+            ],
+        ]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    it('reads a multiple select value as a JSON array', () => {
+        setupView(
+            'v',
+            '<select az="0" multiple value=\'["a"]\'><option>a</option>' +
+                '<option>b</option><option>c</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', '["a","c"]']]);
+        expect(picked(sel)).toEqual(['a', 'c']);
+        expect(marked(sel)).toEqual(['a', 'c']);
+    });
+
+    it('picks nothing when the value is removed', () => {
+        setupView(
+            'v',
+            '<select az="0" multiple value=\'["a"]\'><option selected>a</option>' +
+                '<option>b</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        applyOps([[OP.REM_ATTR, 'v:0', 'value']]);
+        expect(picked(sel)).toEqual([]);
+        expect(marked(sel)).toEqual([]);
+    });
+
+    it('leaves a select without a value alone', () => {
+        setupView('v', '<select><option az="0">a</option><option selected>b</option></select>');
+        applyOps([[OP.TEXT, 'v:0', 'z', false]]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    // A select inside a stream item: the item patch targets the option, not the
+    // select or the container, so the batch must still apply the select's value.
+    const row =
+        '<div az="0"><div az-key="k1"><select value="b"><option>z</option>' +
+        '<option az="1">a</option></select></div></div>';
+
+    it('marks an option an item patch revalues', () => {
+        setupView('v', row);
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '1', 'value', 'b']]]]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    it('marks an option whose text an item patch changes', () => {
+        setupView('v', row);
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', 'b']]]]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    it('marks an option a list patch changes', () => {
+        setupView(
+            'v',
+            '<div az="0"><!--az:0--><div><select value="b"><option>z</option>' +
+                '<option az="1">a</option></select></div><!--/az--></div>',
+        );
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.ITEM_PATCH, 0, [[OP.TEXT, '1', 'b']]]]]]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    it('marks an option a child view batch inside an item changes', () => {
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><select value="b"><option>z</option>' +
+                '<optgroup id="c" az-view><option az="1">a</option></optgroup>' +
+                '</select></div></div>',
+        );
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [['c', [[OP.TEXT, '1', 'b']]]]]]);
+        expect(document.querySelector('select').value).toBe('b');
+    });
+
+    // Option markup on a page with no valued select (a datalist, say) has nothing to
+    // apply: the page is not searched for one.
+    it('looks for valued selects only where one can be', () => {
+        setupView('v', '<datalist az="0"><!--az:0--><!--/az--></datalist>');
+        const search = vi.spyOn(Document.prototype, 'querySelectorAll');
+        applyOps([[OP.TEXT, 'v:0', '<option value="a">', true]]);
+        expect(search.mock.calls.filter(([q]) => q === 'select[value]')).toEqual([]);
+        applyOps([[OP.TEXT, 'v:0', '<select value="a"><option>a</option></select>', true]]);
+        expect(search.mock.calls.filter(([q]) => q === 'select[value]').length).toBe(1);
+        search.mockRestore();
+    });
+
+    // The value compares as the parser reads an attribute: newlines normalized, NUL
+    // replaced, whether it arrives as markup, as a JSON array or through a live write.
+    it('compares the value as the parser reads it', () => {
+        setupView(
+            'v',
+            '<select az="0" multiple value="[&quot;a\\r\\nb&quot;,&quot;c\\u0000&quot;]">' +
+                '<option value="z">z</option><option value="a&#10;b">x</option>' +
+                '<option value="c&#xFFFD;">y</option></select>' +
+                '<select az="1"><option value="z">z</option><option value="a&#10;b">x</option></select>',
+        );
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', '["a\\r\\nb","c\\u0000"]']]);
+        const many = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
+        expect([...many.selectedOptions].map((o) => o.text)).toEqual(['x', 'y']);
+        applyOps([[OP.SET_ATTR, 'v:1', 'value', 'a\r\nb']]);
+        expect(/** @type {HTMLSelectElement} */ (resolveEl('v:1')).value).toBe('a\nb');
+    });
+
+    // An update that inserts an option sharing the value before the selected one: the
+    // last of them stays selected, as a reload of the same markup would show.
+    it('keeps the last of options sharing the value when an earlier one arrives', () => {
+        setupView(
+            'v',
+            '<select value="x"><optgroup az="0"><!--az:0--><!--/az--></optgroup>' +
+                '<option value="a">a</option><option value="x" selected>x2</option></select>',
+        );
+        applyOps([[OP.TEXT, 'v:0', '<option value="x">x0</option>', true]]);
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        expect(sel.options[sel.selectedIndex].text).toBe('x2');
+    });
+
+    // The user's own pick among options sharing the value stays when an update brings
+    // an unrelated option: only a selection the marking itself moved goes to the last.
+    it('keeps the user pick among options sharing the value', () => {
+        setupView(
+            'v',
+            '<select value="x"><optgroup az="0"><!--az:0--><!--/az--></optgroup>' +
+                '<option value="x">x0</option><option value="x" selected>x2</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        sel.selectedIndex = 0;
+        applyOps([[OP.TEXT, 'v:0', '<option value="b" selected>b</option>', true]]);
+        expect(sel.options[sel.selectedIndex].text).toBe('x0');
+    });
+
+    // Options sharing a value: the last one the value names is the one selected, as
+    // the parser picks the last `selected` option (the `.value` setter would pick the
+    // first).
+    it('selects the last of options sharing the value', () => {
+        setupView(
+            'v',
+            '<select az="0" value="z"><option>a</option><option>b</option>' +
+                '<option>a</option></select>',
+        );
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', 'a']]);
+        expect(document.querySelector('select').selectedIndex).toBe(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 5. applyOps -- OP.REM_ATTR
 // ---------------------------------------------------------------------------
 
@@ -1659,6 +1853,28 @@ describe('applyEffects -- attribute effects (canonical writer)', () => {
         input.value = 'a';
         applyEffects([[21, '#i', 'value', 'a', 'b']]);
         expect(input.value).toBe('b');
+    });
+
+    // `value` on a select means the same from an effect as from a template: it picks
+    // the option(s) it names, the user's pick included; removing it names none, so a
+    // single select falls back to its first option and a multiple one to none.
+    it('set_attr / remove_attr / toggle_attr of value on a select pick its option', () => {
+        document.body.innerHTML =
+            '<select id="s"><option>a</option><option>b</option><option>c</option></select>' +
+            '<select id="m" multiple><option>a</option><option>b</option><option>c</option></select>';
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('#s'));
+        const many = /** @type {HTMLSelectElement} */ (document.querySelector('#m'));
+        sel.value = 'c';
+        applyEffects([[7, '#s', 'value', 'b']]);
+        expect(sel.value).toBe('b');
+        applyEffects([[21, '#s', 'value', 'b', 'c']]);
+        expect(sel.value).toBe('c');
+        applyEffects([[8, '#s', 'value']]);
+        expect(sel.value).toBe('a');
+        applyEffects([[7, '#m', 'value', '["a","c"]']]);
+        expect([...many.selectedOptions].map((o) => o.value)).toEqual(['a', 'c']);
+        applyEffects([[8, '#m', 'value']]);
+        expect(many.selectedOptions.length).toBe(0);
     });
 
     it('set_attr fires updated() on a hooked element', () => {

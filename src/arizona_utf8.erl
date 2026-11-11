@@ -338,6 +338,8 @@ wrap_val(#{stateful := H, props := Props} = Desc, mount) ->
     Desc#{stateful := ?MODULE, props := Props#{?CHILD => H}};
 wrap_val(#{callback := Callback} = Desc, Mode) ->
     Desc#{callback := fun(P) -> wrap_val(Callback(P), Mode) end};
+wrap_val(#{choices := _, child := Child} = Choices, Mode) ->
+    Choices#{child := wrap_val(Child, Mode)};
 wrap_val(#{az_local := _, v := V} = Local, Mode) ->
     Local#{v := wrap_val(V, Mode)};
 wrap_val(#{s := _, d := _} = Tmpl, Mode) ->

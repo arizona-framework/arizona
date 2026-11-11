@@ -17,6 +17,7 @@
  * frame carries them on a live one.
  */
 
+import { applyChoosers } from './arizona-attrs.js';
 import { closeAllPip } from './arizona-docs.js';
 import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
 import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
@@ -68,6 +69,7 @@ function start(opts = {}) {
     bindDocumentEvents(document, controller.signal);
     noteAzAttrs(opts.attrs ?? embeddedAttrs());
     mountHooks(document);
+    applyChoosers(document);
     let stopped = false;
     const stop = () => {
         if (stopped) return;

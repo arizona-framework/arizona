@@ -55,6 +55,9 @@ op-code targets.
 %% Set while a layout layer renders (see render_layout/3).
 -define(IN_LAYOUT, '$arizona_in_layout').
 
+%% Set while a value renders for its text to be read (see render_markup/2).
+-define(IN_TEXT, '$arizona_in_text').
+
 %% Set whenever a fingerprint wire payload is built in this process (see
 %% note_fp_payload/0 / drain_fp_note/0).
 -define(FP_NOTE, '$arizona_fp_payload').
@@ -77,6 +80,7 @@ op-code targets.
 -export([render_view/2]).
 -export([render_view/3]).
 -export([current_layout/0]).
+-export([render_markup/2]).
 -export([resolve_id/1]).
 -export([zip/2]).
 -export([zip_item/2]).
@@ -385,6 +389,10 @@ render_dyn(Backend, #{s := InnerS, d := InnerD} = Nested) ->
     zip_d(NestedBackend, InnerS, InnerD);
 render_dyn(_Backend, V) when is_binary(V) ->
     V;
+render_dyn(Backend, {arizona_choices, Picks, Inner}) ->
+    %% A child of a chooser the parse transform could not see into, rendered at SSR
+    %% (render_ssr_val/2): only its own output is searched for the choices to mark.
+    Backend:mark_choices(render_dyn(Backend, Inner), Picks);
 render_dyn(Backend, V) ->
     text_leaf(Backend, arizona_template:to_bin(V)).
 
@@ -605,6 +613,16 @@ format_error({multi_root_layout, Mod, Fun, Backend}, _ST) ->
             [Mod, Fun, macro_of(Backend), macro_of(Backend), macro_of(Backend)]
         )
     };
+format_error({stateful_in_text, Handler}, _ST) ->
+    #{
+        general => io_lib:format(
+            "?stateful(~s, ...) renders in the text of a choice valued by its text, so "
+            "reading that text would mount the component a second time, outside the "
+            "live view tree, subscribing and arming its timers twice. Give the choice "
+            "its value as an attribute, or render the text with ?stateless.",
+            [Handler]
+        )
+    };
 format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
     #{
         general => io_lib:format(
@@ -765,6 +783,34 @@ render_layout(Mod, Fun, Tmpl) ->
         erlang:erase(?IN_LAYOUT)
     end.
 
+-doc """
+What `Value`, a content value holding markup (a template, a component), renders as
+in the SSR form, for its text to be read: the value of a choice valued by its text
+(`arizona_template:choice_text/2`), on the SSR, live and diff paths alike. A
+`?stateful` in it raises `stateful_in_text`: reading its text would mount it a second
+time, outside the view tree. The reads its own closures make are not recorded on
+the caller's dependency scope, as the slot rendering the same value records none of
+them, so the two re-run on the same changes.
+""".
+-spec render_markup(Backend, Value) -> iodata() when
+    Backend :: module(),
+    Value :: term().
+render_markup(Backend, Value) ->
+    Outer = erlang:put(?IN_TEXT, true),
+    Deps = erlang:erase('$arizona_deps'),
+    try
+        render_dyn(Backend, render_ssr_val(Backend, Value))
+    after
+        case Deps of
+            undefined -> undefined;
+            _Scope -> erlang:put('$arizona_deps', Deps)
+        end,
+        case Outer of
+            undefined -> erlang:erase(?IN_TEXT);
+            true -> true
+        end
+    end.
+
 %% A layout renders once at SSR, outside any live process, so nothing it renders
 %% is registered in the live `views` map. The `az-view` marker is baked into a
 %% stateful module's compiled statics, so it cannot be stripped here -- and the
@@ -779,6 +825,20 @@ refuse_stateful_in_layout(H) ->
             erlang:error(
                 {stateful_in_layout, Mod, Fun, H}, none, [{error_info, #{module => ?MODULE}}]
             )
+    end.
+
+refuse_stateful(H) ->
+    ok = refuse_stateful_in_layout(H),
+    refuse_stateful_in_text(H).
+
+%% A live process already mounts the component where the slot renders it, and mount/1
+%% runs connected there, so a second mount would subscribe and arm timers twice.
+refuse_stateful_in_text(H) ->
+    case erlang:get(?IN_TEXT) of
+        undefined ->
+            ok;
+        true ->
+            erlang:error({stateful_in_text, H}, none, [{error_info, #{module => ?MODULE}}])
     end.
 
 %% Triple walker -- like zip/3 but consumes `[{Az, V, Deps}]` directly
@@ -850,14 +910,17 @@ render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
     render_ssr_esc_val(Backend, Fun());
 render_ssr_val(Backend, Fun) when is_function(Fun, 0) ->
     render_ssr_val(Backend, Fun());
-render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
+render_ssr_val(Backend, #{
+    t := ?EACH, source := Items, template := #{s := ItemStatics, d := DynamicsFun}
+}) when
+    is_list(Items)
+->
     %% SSR keeps no snapshot, so render the items and keep nothing else. Going through
     %% the item-snapshot shape instead materialised a `{Az, Value, Deps}` triple per
     %% dynamic, a list of those per item, and a list of those -- all of it read once,
     %% by the walk that turns it into exactly this output, and then dropped. The live
     %% paths still build it, because their snapshot is what the next diff reads.
     %% What the items render TO is the backend's concern, as everywhere else here.
-    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
     {ssr_rendered,
         join_items(Backend, [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items])};
 render_ssr_val(Backend, #{
@@ -867,25 +930,27 @@ render_ssr_val(Backend, #{
         order = Order,
         limit = Limit
     },
-    template := Tmpl
+    template := #{s := ItemStatics, d := DynamicsFun}
 }) ->
-    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
     {ssr_rendered,
         join_items(Backend, [
             zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
          || K <- arizona_template:visible_keys(Order, Limit)
         ])};
-render_ssr_val(Backend, #{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
+render_ssr_val(Backend, #{
+    t := ?EACH, source := Source, template := #{s := ItemStatics, d := DynamicsFun}
+}) when
+    is_map(Source)
+->
     %% Same entry order as the live path (`arizona_eval:render_map_items_simple/2`),
     %% so a later diff lines up with what SSR put on the page.
-    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
     {ssr_rendered,
         join_items(Backend, [
             zip_ssr(Backend, ItemStatics, DynamicsFun(K, V))
          || K := V <- Source
         ])};
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
-    ok = refuse_stateful_in_layout(H),
+    ok = refuse_stateful(H),
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
     %% Enforce restricted keys (e.g. `id`) at SSR too -- the live child-mount path
     %% (arizona_eval:fresh_mount_stateful) already does, so a handler that rewrites
@@ -912,6 +977,8 @@ render_ssr_val(Backend, #{az_local := _, v := V}) ->
     %% Escape the content `?local` init to match the client's text-node semantics
     %% (see render_dyn/2); a raw splice here is an XSS vector for a seeded init.
     arizona_template:escape_value(Backend, V);
+render_ssr_val(Backend, #{choices := _} = Choices) ->
+    render_ssr_choices(Backend, Choices);
 render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     %% A nested template carries its own backend, so render its dynamics through
     %% that rather than the enclosing one -- but only when the two agree. They
@@ -930,6 +997,20 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     arizona_template:maybe_propagate(Tmpl, Snap0);
 render_ssr_val(Backend, Val) ->
     text_leaf(Backend, arizona_template:to_bin(Val)).
+
+%% A child of a chooser the parse transform could not see into (arizona_template:choices/3),
+%% rendered here like any child -- the slot scopes it, scope_slot/2 sees through the tag --
+%% for render_dyn/2 to mark the choices in its output alone. The value is read here,
+%% inside the slot's located evaluation.
+render_ssr_choices(Backend, #{choices := Picks, esc := Esc, child := Child}) ->
+    {Value, Multiple} = Picks(),
+    Texts = arizona_template:picks(Value, Multiple),
+    Inner =
+        case Esc of
+            true -> render_ssr_esc_val(Backend, Child);
+            false -> render_ssr_val(Backend, Child)
+        end,
+    {arizona_choices, Texts, Inner}.
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`

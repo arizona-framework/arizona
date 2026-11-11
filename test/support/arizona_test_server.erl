@@ -80,6 +80,10 @@ routes() ->
             bindings => #{title => <<"RawText">>},
             layouts => Layouts
         }},
+        {live, <<"/select-value">>, arizona_select_value_page, #{
+            bindings => #{title => <<"Select value">>},
+            layouts => Layouts
+        }},
         %% Room-scoped: the pubsub channel is `{chat, Room}`, so each e2e test
         %% gets a private channel on the long-lived shared test server.
         {live, <<"/chat/:room">>, arizona_chat, #{

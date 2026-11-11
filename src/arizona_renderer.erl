@@ -225,6 +225,62 @@ with nothing to imply returns `[]`.
 -callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
 
 -doc """
+The part `Tag` plays when one element picks some of its descendants by a value:
+`chooser` for the element whose `value` attribute names the pick (`multiple` names
+the attribute that makes the value a list), `choice` for a descendant it picks
+from, keyed by its own `value` attribute (by its static text when it has none) and
+marked picked by its `selected` attribute; `none` for any other tag.
+
+Optional, for a target whose output has no such attribute: HTML ignores `value` on
+`<select>` and loads on the first option, so the parse transform drops the chooser's
+`value` and gives each choice a `selected` that tests the choice's value against it
+(`arizona_template:chosen/3`). A backend without the callback keeps `value` as an
+ordinary attribute. `choice` is the choice's tag name as `name/1` spells it, which
+the transform also looks for in compiled markup to refuse a choice it cannot mark.
+""".
+-callback selection_role(Tag :: tag()) ->
+    none
+    | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
+    | {choice, #{value := binary(), selected := binary()}}.
+
+-doc """
+Marks picked the choices in `Fragment` whose value is one of `Picks`, the texts the
+chooser's value picks (`arizona_template:picks/2`), compared as the backend's own
+parser would read both. `Fragment` is what
+one child of a chooser with a value rendered when the parse transform could not see the
+choices in it (a component, a remote helper, a runtime value, raw markup): the
+transform wraps such a child (`arizona_template:choices/3`), and the SSR render
+(a page served over HTTP, static generation) renders it in place and hands this
+callback only its own output, so the page loads on the right choice before any script
+runs; a live client applies the chooser's value after. For HTML: `selected` on every
+`<option>` in the fragment whose value (its `value`, else its text) is a pick, read as
+the parser reads it (newlines and NUL preprocessed, references decoded).
+
+Optional, and required of a backend that implements `selection_role/1`.
+""".
+-callback mark_choices(Fragment :: iodata(), Picks :: [binary()]) -> iodata().
+
+-doc """
+The text `Markup` of this backend shows as the text of a choice valued by its text
+(`selection_role/1`), and whether it holds markup syntax. Read at compile time for a
+static binary in such a choice, which is spliced as markup: `{text, Text}` folds to the
+choice's value, while `{markup, _}` (a tag) is left for `mark_choices/2`, since static
+markup can end the choice and open others. Read at render time for a value there that
+renders markup (a template, a component; `arizona_render:render_markup/2`), whose
+`Text` the choice's value takes either way (`arizona_template:choice_text/2`), so the
+comparison stays an ordinary attribute that renders, tracks and diffs. For HTML: what
+the option's `text` reads, tags and comments left out, character references decoded,
+up to what would end the option.
+
+Optional. A backend that implements `selection_role/1` without it cannot compile a
+choice whose text holds a value (a `select_value` compile error), and its static text
+holding markup syntax is left for `mark_choices/2`.
+""".
+-callback markup_text(Markup :: iodata()) -> {text | markup, binary()}.
+
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/1]).
+
+-doc """
 Whether a whole document of this backend must be a single root node. `true` for
 JSON, whose document is one JSON value; `false` where a fragment is a valid
 document (an HTML doctype beside `<html>`, terminal lines). When `true`, the parse
