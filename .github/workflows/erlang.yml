@@ -239,12 +239,6 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
-      - name: Install inotify tools
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        with:
-          packages: inotify-tools
-          version: 1.0
-
       - name: Test
         run: make test-erl
 
@@ -285,12 +279,6 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-\
             config-${{ hashFiles('rebar.config') }}"
           restore-keys: rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-
-      - name: Install inotify tools
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        with:
-          packages: inotify-tools
-          version: 1.0
 
       - name: Test
         run: make test-erl
@@ -341,7 +329,7 @@ jobs:
   #
   # Container details:
   # - Base: Ubuntu 24.04 (noble) matching runner OS
-  # - User: root (required for apt package caching)
+  # - User: root (the runner-mounted workspace and tool cache are root-owned)
   # - Browsers: Chromium and Firefox pre-installed
   e2e-parallel:
     name: E2E Tests (Parallel)
@@ -378,20 +366,6 @@ jobs:
           version-type: strict
           version-file: .tool-versions
 
-      # Composite actions don't work in container jobs, use manual apt caching
-      # Ref: https://github.com/orgs/community/discussions/53771
-      - name: Cache apt packages
-        id: cache-apt
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-inotify-tools
-
-      - name: Install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y inotify-tools make
-
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -423,11 +397,15 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
-      - name: Compile Arizona for test
-        run: make compile-test
+      # The Playwright image has no `make`, so the steps below run the Makefile
+      # recipes' commands directly rather than installing it with apt: that would
+      # tie every run to an Ubuntu mirror being reachable. Keep them in step with
+      # the Makefile targets named beside each one.
+      - name: Compile Arizona for test # make compile-test
+        run: rebar3 as test compile
 
-      - name: Run parallel E2E tests
-        run: make test-e2e-parallel
+      - name: Run parallel E2E tests # make test-e2e-parallel
+        run: npx playwright test --project parallel
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -476,20 +454,6 @@ jobs:
           version-type: strict
           version-file: .tool-versions
 
-      # Composite actions don't work in container jobs, use manual apt caching
-      # Ref: https://github.com/orgs/community/discussions/53771
-      - name: Cache apt packages
-        id: cache-apt
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-inotify-tools
-
-      - name: Install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y inotify-tools make
-
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -521,11 +485,15 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
-      - name: Compile Arizona for test
-        run: make compile-test
+      # The Playwright image has no `make`, so the steps below run the Makefile
+      # recipes' commands directly rather than installing it with apt: that would
+      # tie every run to an Ubuntu mirror being reachable. Keep them in step with
+      # the Makefile targets named beside each one.
+      - name: Compile Arizona for test # make compile-test
+        run: rebar3 as test compile
 
-      - name: Run sequential E2E tests
-        run: make test-e2e-sequential
+      - name: Run sequential E2E tests # make test-e2e-sequential
+        run: npx playwright test --project sequential --no-deps
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -574,20 +542,6 @@ jobs:
           version-type: strict
           version-file: .tool-versions
 
-      # Composite actions don't work in container jobs, use manual apt caching
-      # Ref: https://github.com/orgs/community/discussions/53771
-      - name: Cache apt packages
-        id: cache-apt
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-inotify-tools
-
-      - name: Install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y inotify-tools make
-
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -619,11 +573,15 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
-      - name: Compile Arizona for test
-        run: make compile-test
+      # The Playwright image has no `make`, so the steps below run the Makefile
+      # recipes' commands directly rather than installing it with apt: that would
+      # tie every run to an Ubuntu mirror being reachable. Keep them in step with
+      # the Makefile targets named beside each one.
+      - name: Compile Arizona for test # make compile-test
+        run: rebar3 as test compile
 
-      - name: Run JSON E2E tests
-        run: make test-e2e-json
+      - name: Run JSON E2E tests # make test-e2e-json
+        run: npx playwright test --project json
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
