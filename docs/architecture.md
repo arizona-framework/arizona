@@ -281,8 +281,8 @@ the value case.
 
 What the transform cannot reach -- a `?stateless`/`?stateful` component, a remote or
 non-inlined helper, a runtime value, `?raw` or static markup -- still renders under the
-chooser, so the chooser keeps its value instead of dropping it, rendered by `arizona_template:chooser_value/2` (the text, or under `multiple` a JSON array
-of texts). An `?each` whose item holds such a child tells its chooser through a
+chooser, so the chooser keeps its value instead of dropping it, rendered by
+`arizona_template:chooser_value/2` (the text, or under `multiple` a JSON array of texts). An `?each` whose item holds such a child tells its chooser through a
 `'$arizona_choice_opaque'` mark around the compiled each, taken off where the chooser
 compiles. Rendered outside a live process, `chooser_value/2` notes the document holds such a
 chooser, and the SSR render (`finish_page`, `render_to_iolist/1`) then hands the document to
