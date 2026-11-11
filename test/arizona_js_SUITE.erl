@@ -18,6 +18,9 @@
 -export([toggle_attr_toggles_between_commands/1]).
 -export([toggle_attr_refuses_a_command_and_a_string/1]).
 -export([toggle_attr_refuses_commands_under_another_name/1]).
+-export([set_attr_refuses_a_value_neither_binary_nor_command/1]).
+-export([toggle_attr_refuses_a_value_neither_binary_nor_command/1]).
+-export([attr_errors_name_the_public_function/1]).
 
 all() ->
     [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
@@ -41,7 +44,10 @@ groups() ->
             set_attr_refuses_a_command_under_another_name,
             toggle_attr_toggles_between_commands,
             toggle_attr_refuses_a_command_and_a_string,
-            toggle_attr_refuses_commands_under_another_name
+            toggle_attr_refuses_commands_under_another_name,
+            set_attr_refuses_a_value_neither_binary_nor_command,
+            toggle_attr_refuses_a_value_neither_binary_nor_command,
+            attr_errors_name_the_public_function
         ]}
     ].
 
@@ -221,6 +227,36 @@ toggle_attr_refuses_commands_under_another_name(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, string:find(Message, ~"a command value needs an az-* attribute")),
     ?assertNotEqual(nomatch, string:find(Message, ~"title")).
 
+%% A charlist is not a command: suggesting an az-* name would turn the text
+%% into a command nothing can run, so the value itself is named.
+set_attr_refuses_a_value_neither_binary_nor_command(Config) when is_list(Config) ->
+    [
+        assert_value_error(fun() -> arizona_js:set_attr(~"#x", Attr, "hello") end)
+     || Attr <- [~"title", ~"az-select"]
+    ],
+    assert_value_error(fun() ->
+        arizona_js:set_attr(~"#x", ~"az-select", [arizona_js:push_event(~"a"), "b"])
+    end).
+
+toggle_attr_refuses_a_value_neither_binary_nor_command(Config) when is_list(Config) ->
+    assert_value_error(fun() -> arizona_js:toggle_attr(~"#x", ~"type", "password", "text") end),
+    assert_value_error(fun() -> arizona_js:toggle_attr(~"#x", ~"type", ~"password", "text") end),
+    assert_value_error(fun() ->
+        arizona_js:toggle_attr(~"#x", ~"az-click", arizona_js:push_event(~"a"), "b")
+    end).
+
+attr_errors_name_the_public_function(Config) when is_list(Config) ->
+    ?assertMatch(
+        {arizona_js, set_attr, [~"#x", ~"title", "hello"], _},
+        top_frame(fun() -> arizona_js:set_attr(~"#x", ~"title", "hello") end)
+    ),
+    ?assertMatch(
+        {arizona_js, toggle_attr, [~"#x", ~"title", ~"a", _], _},
+        top_frame(fun() ->
+            arizona_js:toggle_attr(~"#x", ~"title", ~"a", arizona_js:push_event(~"b"))
+        end)
+    ).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -233,4 +269,21 @@ formatted_error(Fun) ->
     catch
         error:Reason:Stacktrace ->
             unicode:characters_to_binary(erl_error:format_exception(error, Reason, Stacktrace))
+    end.
+
+assert_value_error(Fun) ->
+    Message = formatted_error(Fun),
+    ?assertNotEqual(
+        nomatch, string:find(Message, ~"a value must be a binary, or under an az-* name a command")
+    ),
+    ?assertEqual(nomatch, string:find(Message, ~"needs an az-* attribute")),
+    ?assertEqual(nomatch, string:find(Message, ~"must both be binaries or both commands")).
+
+top_frame(Fun) ->
+    try Fun() of
+        Result -> error({no_error, Result})
+    catch
+        error:_:Stacktrace ->
+            [Frame | _] = Stacktrace,
+            Frame
     end.

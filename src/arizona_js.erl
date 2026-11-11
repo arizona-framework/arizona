@@ -234,10 +234,23 @@ otherwise use the name, `set_attr(~"#x", ~"az-select", ~"[1,2,3]")` runs nothing
     Value :: binary() | arizona_effect:cmd() | arizona_effect:cmds().
 set_attr(Sel, Attr, Val) when is_binary(Val) ->
     {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]};
-set_attr(Sel, <<"az-", _/binary>> = Attr, Cmds) ->
-    {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Cmds)]};
-set_attr(_Sel, Attr, Cmds) when is_binary(Attr), is_tuple(Cmds); is_binary(Attr), is_list(Cmds) ->
-    attr_error({command_needs_az_attr, set_attr, Attr}).
+set_attr(Sel, Attr, Val) when is_binary(Attr) ->
+    case {value_kind(Val), Attr} of
+        {command, <<"az-", _/binary>>} ->
+            {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, arizona_effect:nest(deferred, Val)]};
+        {command, _} ->
+            erlang:error(
+                {command_needs_az_attr, set_attr, Attr},
+                [Sel, Attr, Val],
+                [{error_info, #{module => ?MODULE}}]
+            );
+        {other, _} ->
+            erlang:error(
+                {not_a_value, set_attr, Attr, Val},
+                [Sel, Attr, Val],
+                [{error_info, #{module => ?MODULE}}]
+            )
+    end.
 
 -doc "Removes an attribute from all elements matching the selector.".
 -spec remove_attr(Selector, Attr) -> arizona_effect:cmd() when
@@ -274,18 +287,32 @@ they run, not by their text: a command and a list of just it (`Cmd`, `[Cmd]`,
     ValueB :: binary() | arizona_effect:cmd() | arizona_effect:cmds().
 toggle_attr(Sel, Attr, A, B) when is_binary(A), is_binary(B) ->
     {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr, A, B]};
-toggle_attr(Sel, <<"az-", _/binary>> = Attr, A, B) when not is_binary(A), not is_binary(B) ->
-    {arizona_effect, [
-        ?EFFECT_TOGGLE_ATTR,
-        Sel,
-        Attr,
-        arizona_effect:nest(deferred, A),
-        arizona_effect:nest(deferred, B)
-    ]};
-toggle_attr(_Sel, Attr, A, B) when is_binary(Attr), is_binary(A) xor is_binary(B) ->
-    attr_error({mixed_toggle_values, Attr});
-toggle_attr(_Sel, Attr, A, B) when is_binary(Attr), not is_binary(A), not is_binary(B) ->
-    attr_error({command_needs_az_attr, toggle_attr, Attr}).
+toggle_attr(Sel, Attr, A, B) when is_binary(Attr) ->
+    Reason =
+        case {value_kind(A), value_kind(B), Attr} of
+            {command, command, <<"az-", _/binary>>} ->
+                ok;
+            {command, command, _} ->
+                {command_needs_az_attr, toggle_attr, Attr};
+            {other, _, _} ->
+                {not_a_value, toggle_attr, Attr, A};
+            {_, other, _} ->
+                {not_a_value, toggle_attr, Attr, B};
+            {_, _, _} ->
+                {mixed_toggle_values, Attr}
+        end,
+    case Reason of
+        ok ->
+            {arizona_effect, [
+                ?EFFECT_TOGGLE_ATTR,
+                Sel,
+                Attr,
+                arizona_effect:nest(deferred, A),
+                arizona_effect:nest(deferred, B)
+            ]};
+        _ ->
+            erlang:error(Reason, [Sel, Attr, A, B], [{error_info, #{module => ?MODULE}}])
+    end.
 
 -doc "Dispatches a custom DOM event with a payload.".
 -spec dispatch_event(Name, Payload) -> arizona_effect:cmd() when
@@ -646,6 +673,14 @@ format_error({command_needs_az_attr, Fun, Attr}, _Stacktrace) ->
             [Fun, Attr]
         )
     };
+format_error({not_a_value, Fun, Attr, Value}, _Stacktrace) ->
+    #{
+        general => io_lib:format(
+            "~ts: a value must be a binary, or under an az-* name a command, got ~tp "
+            "(attribute ~tp)",
+            [Fun, Value, Attr]
+        )
+    };
 format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
     #{
         general => io_lib:format(
@@ -659,10 +694,21 @@ format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
--spec attr_error(Reason) -> no_return() when
-    Reason :: term().
-attr_error(Reason) ->
-    erlang:error(Reason, none, [{error_info, #{module => ?MODULE}}]).
+%% A command is a command or a command list as arizona_effect flattens it: lists
+%% nested to any depth whose leaves are commands, `[]` none. Anything else that is
+%% not a binary (a charlist, an atom) is no value an attribute can take.
+-spec value_kind(Value) -> binary | command | other when
+    Value :: term().
+value_kind(Value) when is_binary(Value) -> binary;
+value_kind(Value) ->
+    case is_cmds(Value) of
+        true -> command;
+        false -> other
+    end.
+
+is_cmds({arizona_effect, Cmd}) when is_list(Cmd) -> true;
+is_cmds(Cmds) when is_list(Cmds) -> lists:all(fun is_cmds/1, Cmds);
+is_cmds(_) -> false.
 
 encode_key(Key) when is_atom(Key) -> [Key];
 encode_key(Keys) when is_list(Keys) -> Keys;
