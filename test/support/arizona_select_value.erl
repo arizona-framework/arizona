@@ -41,6 +41,7 @@ select keeps its value and the page marks the option it names.
 -export([each_opaque_item/1]).
 -export([mixed/1]).
 -export([multiple_component/1]).
+-export([multiple_component_dynamic/1]).
 -export([local_value_component/1]).
 -export([option_items/1]).
 
@@ -307,6 +308,15 @@ mixed(Bindings) ->
 multiple_component(Bindings) ->
     ?html(
         {select, [multiple, {value, ?get(vs)}], [
+            ?stateless(fun option_items/1, #{opts => ?get(opts)})
+        ]}
+    ).
+
+%% `multiple` decided at runtime, under a select whose options a component renders.
+-spec multiple_component_dynamic(az:bindings()) -> az:template().
+multiple_component_dynamic(Bindings) ->
+    ?html(
+        {select, [{multiple, ?get(many)}, {value, ?get(vs)}], [
             ?stateless(fun option_items/1, #{opts => ?get(opts)})
         ]}
     ).

@@ -20,6 +20,7 @@ the option it names in the document, and the client keeps it in step after.
     option_without_value_uses_its_text/1,
     multiple_selects_every_listed_value/1,
     multiple_decided_at_runtime/1,
+    multiple_is_any_value_but_false/1,
     nothing_selected_without_a_match/1,
     diff_moves_selected_to_the_new_option/1,
     diff_is_fine_grained/1,
@@ -57,6 +58,7 @@ groups() ->
             option_without_value_uses_its_text,
             multiple_selects_every_listed_value,
             multiple_decided_at_runtime,
+            multiple_is_any_value_but_false,
             nothing_selected_without_a_match,
             static_generation_marks_the_chosen_option,
             nodiff_select_marks_the_chosen_option,
@@ -154,6 +156,26 @@ multiple_decided_at_runtime(Config) when is_list(Config) ->
         )
     ),
     ?assertEqual([], selected_values(One)).
+
+%% `multiple` is present whatever it holds but `false`, as the attribute renders: a
+%% `~"multiple"` makes the value a list of picks, on the options the transform marks
+%% and on the value a select with a component keeps for the client.
+multiple_is_any_value_but_false(Config) when is_list(Config) ->
+    Many = iolist_to_binary(
+        arizona_render:render_to_iolist(
+            arizona_select_value:multiple_dynamic(#{many => ~"multiple", vs => [~"a", ~"b"]})
+        )
+    ),
+    ?assertEqual([~"a", ~"b"], selected_values(Many), Many),
+    Kept = iolist_to_binary(
+        arizona_render:render_to_iolist(
+            arizona_select_value:multiple_component_dynamic(
+                (opaque_bindings(~"b"))#{many => ~"multiple"}
+            )
+        )
+    ),
+    ?assertEqual([~"a", ~"c"], selected_values(Kept), Kept),
+    ?assertNotEqual(nomatch, binary:match(Kept, ~"value=\"[&quot;a&quot;,&quot;c&quot;]\""), Kept).
 
 %% A value no option has selects none, as the `.value` property would; integers
 %% compare by the text they render as.

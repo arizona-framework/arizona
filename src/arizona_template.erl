@@ -399,10 +399,11 @@ each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
 
 -doc """
 Whether a choice whose value is `Choice` is picked by a chooser whose value is
-`Value`: the two render as the same attribute text. With `Multiple` true a list
-`Value` holds the picked values, each compared the same way (any other value is one
-pick); otherwise a list is chardata, one text. A `false` value picks nothing, as it
-renders no attribute.
+`Value`: the two render as the same attribute text. `Multiple` is the chooser's
+`multiple` attribute, present whatever it holds but `false` (as the attribute renders):
+present, a list `Value` holds the picked values, each compared the same way (any other
+value is one pick); absent, a list is chardata, one text. A `false` value picks
+nothing, as it renders no attribute.
 
 The parse transform calls it for every choice under a chooser that carries a value
 (`c:arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
@@ -411,10 +412,12 @@ The parse transform calls it for every choice under a chooser that carries a val
 -spec chosen(Choice, Value, Multiple) -> boolean() when
     Choice :: term(),
     Value :: term(),
-    Multiple :: boolean().
+    Multiple :: term().
 chosen(_Choice, false, _Multiple) ->
     false;
-chosen(Choice, Values, true) when is_list(Values) ->
+chosen(Choice, Value, false) ->
+    same_text(Choice, Value);
+chosen(Choice, Values, _Multiple) when is_list(Values) ->
     lists:any(fun(Value) -> same_text(Choice, Value) end, Values);
 chosen(Choice, Value, _Multiple) ->
     same_text(Choice, Value).
@@ -431,7 +434,8 @@ attr_text(V) -> to_bin(V).
 -doc """
 The value a chooser keeps when it holds a choice the parse transform cannot mark (a
 component, a runtime value, raw markup): `Value` as its attribute text, and with
-`Multiple` true a list of picks (or one pick) as a JSON array of their texts.
+`Multiple` present (anything but `false`, as for `chosen/3`) a list of picks (or one
+pick) as a JSON array of their texts.
 `false` renders no attribute, picking nothing.
 
 Rendered outside a live process (a page served over HTTP, static generation) it also
@@ -441,15 +445,15 @@ served; the client keeps them in step after.
 """.
 -spec chooser_value(Value, Multiple) -> binary() | false when
     Value :: term(),
-    Multiple :: boolean().
+    Multiple :: term().
 chooser_value(false, _Multiple) ->
     false;
 chooser_value(Value, Multiple) ->
     ok = arizona_render:note_unmarked_choices(),
     case Multiple of
-        true when is_list(Value) -> iolist_to_binary(json:encode([attr_text(V) || V <- Value]));
-        true -> iolist_to_binary(json:encode([attr_text(Value)]));
-        _Single -> attr_text(Value)
+        false -> attr_text(Value);
+        _Present when is_list(Value) -> iolist_to_binary(json:encode([attr_text(V) || V <- Value]));
+        _Present -> iolist_to_binary(json:encode([attr_text(Value)]))
     end.
 
 -doc """
