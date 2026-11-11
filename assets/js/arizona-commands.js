@@ -64,7 +64,7 @@ export function applyEffects(effects) {
         } catch (err) {
             console.error(
                 '[arizona] effect %s failed; skipping',
-                Array.isArray(eff[0]) ? eff[0][0] : eff[0],
+                Array.isArray(eff?.[0]) ? eff[0][0] : eff?.[0],
                 err,
             );
         }

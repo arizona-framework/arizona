@@ -370,6 +370,64 @@ function armPendingTransition(t) {
     _transitionRef = null;
 }
 
+// Frames that arrived while an earlier frame's apply waits in a transition's
+// update callback, which the browser runs later. Each frame is a delta against
+// the one before, so applying one early leaves the older frame to land last and
+// overwrite it, with nothing to show the page is stale. `null` when no apply is
+// deferred; `disconnect()` drops it, so a torn-down connection's frames neither
+// apply nor hold the next connection's.
+/** @type {Array<() => void>|null} */
+let _heldFrames = null;
+
+// Bumped by `disconnect()`. A held frame can tear the connection down while the
+// held frames are being applied (an effect whose listener reconnects), and the
+// frames after it belong to the torn-down connection.
+let _frameGen = 0;
+
+/**
+ * Apply a server frame in arrival order, wrapped in a view transition when
+ * `transition` is set.
+ * @param {() => void} apply
+ * @param {{types?: string[]}|null} transition
+ */
+function applyFrame(apply, transition) {
+    if (_heldFrames) {
+        _heldFrames.push(() => applyFrame(apply, transition));
+        return;
+    }
+    if (!transition) {
+        apply();
+        return;
+    }
+    /** @type {Array<() => void>} */
+    const held = [];
+    _heldFrames = held;
+    runTransition(transition, () => {
+        if (_heldFrames !== held) return;
+        // Each frame on its own: once `_heldFrames` is cleared, a throw would
+        // drop every frame after it with nothing left to apply them. The first
+        // error is rethrown after the rest have run.
+        /** @type {unknown[]} */
+        const errors = [];
+        const gen = _frameGen;
+        try {
+            apply();
+        } catch (err) {
+            errors.push(err);
+        }
+        _heldFrames = null;
+        for (const f of held) {
+            if (_frameGen !== gen) break;
+            try {
+                f();
+            } catch (err) {
+                errors.push(err);
+            }
+        }
+        if (errors.length) throw errors[0];
+    });
+}
+
 // Reply refs, unique per page: a frame tagged with one is answered by exactly one
 // frame carrying it back (`"r"`), even when it changes nothing -- the protocol
 // otherwise sends nothing for such a frame, which no client can tell from a slow
@@ -1223,11 +1281,7 @@ export function connect(endpoint, params = {}) {
                         (pt.kind === 'replace' || answers) &&
                         opsMatchTransition(msg[1], pt.kind);
                     if (wrap || answers) armPendingTransition(null);
-                    if (wrap) {
-                        runTransition({ types: pt.types }, apply);
-                    } else {
-                        apply();
-                    }
+                    applyFrame(apply, wrap ? { types: pt.types } : null);
                     if (_onmessageHook) {
                         _onmessageHook({
                             data: JSON.stringify({
@@ -1419,6 +1473,8 @@ export function connect(endpoint, params = {}) {
         setPendingScroll(null);
         _unloadingToOtherPage = false;
         armPendingTransition(null);
+        _heldFrames = null;
+        _frameGen++;
         _navRefs.clear();
         _navAwaitResync = false;
         _connectQs = '';

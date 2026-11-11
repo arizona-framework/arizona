@@ -5,6 +5,7 @@ import { connect, executeJS, OP } from './arizona.js';
 const JS_PUSH_EVENT = 0;
 const JS_TOGGLE = 1;
 const JS_ADD_CLASS = 4;
+const JS_DISPATCH_EVENT = 9;
 const JS_NAVIGATE = 10;
 const JS_PATCH = 24;
 const JS_SET_TITLE = 14;
@@ -653,5 +654,180 @@ describe('view transitions -- reply binding', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Frame order across a deferred apply
+// ---------------------------------------------------------------------------
+
+describe('view transitions -- frame order', () => {
+    // The browser runs the update callback later; hold it until the test runs it.
+    function deferViewTransitions() {
+        const pending = [];
+        document.startViewTransition = vi.fn((arg) => {
+            pending.push(typeof arg === 'object' ? arg.update : arg);
+            return { ready: Promise.resolve() };
+        });
+        return () => {
+            for (const f of pending.splice(0)) f();
+        };
+    }
+
+    function wrappedEvent(name) {
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, name]]);
+        return _mock.lastRef();
+    }
+
+    const value = () => document.querySelector('input').getAttribute('value');
+
+    // The error a frame's apply throws: a failing effect is caught and logged, so
+    // the log is made to throw, once per name, in order.
+    /** @type {import('vitest').MockInstance|null} */
+    let logSpy = null;
+    function throwOnErrorLog(...names) {
+        logSpy = vi.spyOn(console, 'error');
+        for (const name of names) {
+            logSpy.mockImplementationOnce(() => {
+                throw new Error(name);
+            });
+        }
+    }
+
+    beforeEach(() => {
+        document.body.innerHTML = '<div id="page" az-view><input az="0" value="x"></div>';
+    });
+
+    afterEach(() => {
+        logSpy?.mockRestore();
+        logSpy = null;
+    });
+
+    it('a later frame waits for a deferred earlier one', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
+        expect(value()).toBe('x');
+        runPending();
+        expect(value()).toBe('ab');
+    });
+
+    it('keeps arrival order for every frame held behind it', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'abc']]);
+        runPending();
+        expect(value()).toBe('abc');
+    });
+
+    // A held frame that is itself wrapped defers again, and the frames behind it
+    // keep waiting for it.
+    it('a held frame that is wrapped holds the frames behind it', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']], null, wrappedEvent('b'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'abc']]);
+        runPending();
+        expect(document.startViewTransition).toHaveBeenCalledTimes(2);
+        expect(value()).toBe('a');
+        runPending();
+        expect(value()).toBe('abc');
+    });
+
+    // A frame whose apply throws must not hold the frames behind it forever.
+    it('a deferred frame that throws still releases the frames behind it', () => {
+        const runPending = deferViewTransitions();
+        throwOnErrorLog('first');
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], [null], wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
+        expect(runPending).toThrow('first');
+        expect(value()).toBe('ab');
+    });
+
+    // A held frame that throws must not drop the held frames after it.
+    it('a held frame that throws still applies the held frames after it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        throwOnErrorLog('first');
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage(null, [null]);
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'b']]);
+        expect(runPending).toThrow('first');
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('a');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('b');
+    });
+
+    // The first error is the one reported, and a held frame that defers again
+    // still holds the frames after it, even past one that threw.
+    it('a throwing held frame keeps the order behind a held frame that defers again', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        throwOnErrorLog('first', 'second');
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], [null], wrappedEvent('a'));
+        _mock.simulateMessage(null, [null]);
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'ab']], null, wrappedEvent('b'));
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'b']]);
+        expect(runPending).toThrow('first');
+        expect(logSpy).toHaveBeenCalledTimes(2);
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('a');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('ab');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('b');
+    });
+
+    // A new connection must not wait on, or receive, frames of a torn-down one.
+    it('disconnect drops the deferred frame and the frames held behind it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML =
+            '<div id="page" az-view><p az="0">x</p><p az="1">y</p><p az="2">z</p></div>';
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'old-1']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'old-2']]);
+        _mock.restore();
+        _mock = setupMockWorker();
+        _mock.simulateMessage([[OP.TEXT, 'page:2', 'new']]);
+        expect(document.querySelector('[az="2"]').innerHTML).toBe('new');
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('x');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
+        expect(document.querySelector('[az="2"]').innerHTML).toBe('new');
+    });
+
+    // A held frame can tear the connection down itself (an effect whose listener
+    // reconnects); the frames held after it belong to the torn-down connection.
+    it('a disconnect while held frames apply drops the ones after it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        const reconnect = () => {
+            _mock.restore();
+            _mock = setupMockWorker();
+        };
+        document.addEventListener('reconnect-now', reconnect, { once: true });
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'old']], null, wrappedEvent('a'));
+        _mock.simulateMessage(null, [[JS_DISPATCH_EVENT, 'reconnect-now']]);
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'old-after-disconnect']]);
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('old');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
+    });
+
+    it('a disconnect by the deferred frame drops the frames held behind it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        const reconnect = () => {
+            _mock.restore();
+            _mock = setupMockWorker();
+        };
+        document.addEventListener('reconnect-now', reconnect, { once: true });
+        _mock.simulateMessage(
+            [[OP.TEXT, 'page:0', 'old']],
+            [[JS_DISPATCH_EVENT, 'reconnect-now']],
+            wrappedEvent('a'),
+        );
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'old-after-disconnect']]);
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('old');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
     });
 });

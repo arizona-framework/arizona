@@ -291,7 +291,7 @@ The client picks sync vs async from the wrapped command:
 
 Wrapping a **mix** of sync and async commands (`transition([toggle(...), push_event(...)])`) animates the async result; sync siblings apply immediately, unwrapped. Wrap one kind per call.
 
-The wrap is applied at the **worker message handler**, so a message's ops **and** effects animate together, in order.
+The wrap is applied at the **worker message handler**, so a message's ops **and** effects animate together, in order. The browser runs the update callback later, so frames arriving meanwhile are held (`_heldFrames`) and applied after it, in arrival order: each frame is a delta against the one before, and an older frame landing last would silently overwrite a newer one. Each is applied on its own, so one that throws does not drop the frames after it; the first error is rethrown once they have all run. `disconnect()` drops the deferred frame and those held behind it, also when a frame being applied tears the connection down (an effect whose listener reconnects): the held frames after it are not applied.
 
 Behaviour:
 - **Guards:** no-ops (instant swap) when `document.startViewTransition` is absent or `prefers-reduced-motion: reduce` matches. `types` use the object form `startViewTransition({update, types})` only when `CSS.supports('selector(:active-view-transition-type(x))')`; otherwise the bare-callback form (older engines still cross-fade, ignore types).
