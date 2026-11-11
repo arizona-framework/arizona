@@ -961,6 +961,67 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         delete hooks.W;
     });
 
+    it('carries no az-nodiff widget from a window an earlier op made stale', async () => {
+        // The view moves from slot R-1 to slot R-2 in one batch: the first op takes
+        // its placeholder and retires the window's copy, widget included, so the
+        // second op's fresh copy mounts its own widget, as inline.
+        const mounted = vi.fn();
+        const destroyed = vi.fn();
+        hooks.W = { mounted, destroyed };
+        const child =
+            '<div id="v" az-view az="V-0"><div az-nodiff="tok1" az-hook="W">w</div></div>';
+        document.body.innerHTML =
+            `<div id="root" az-view az="R-0"><!--az:R-1-->${child}<!--/az-->` +
+            '<!--az:R-2--><p>slot2</p><!--/az--></div>';
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([
+            [OP.TEXT, 'root:R-1', '', true],
+            [OP.TEXT, 'root:R-2', child, true],
+        ]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#v [az-nodiff]')).not.toBeNull();
+        expect([mounted.mock.calls.length, destroyed.mock.calls.length]).toEqual([2, 1]);
+        pip.fire('pagehide');
+        delete hooks.W;
+    });
+
+    it('carries no placeholder of a nested window back from a stale window', async () => {
+        // C's placeholder sits in an az-nodiff element of P's copy. P moves slots
+        // in one batch and its new render no longer holds C: C is gone, and its
+        // window closes rather than coming back to life with its hooks destroyed.
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        const c = '<div id="c" az-view az="C-0"><span az-hook="H">x</span></div>';
+        const p = (/** @type {string} */ inner) =>
+            `<div id="p" az-view az="P-0"><div az-nodiff="tokN">${inner}</div></div>`;
+        document.body.innerHTML =
+            `<div id="root" az-view az="R-0"><!--az:R-1-->${p(c)}<!--/az-->` +
+            '<!--az:R-2--><p>slot2</p><!--/az--></div>';
+        mountHooks(document);
+        const wc = makePipWindow();
+        stubPip(wc);
+        await requestPip('c');
+        const wp = makePipWindow();
+        stubPip(wp);
+        await requestPip('p');
+
+        applyOps([
+            [OP.TEXT, 'root:R-1', '', true],
+            [OP.TEXT, 'root:R-2', p(''), true],
+        ]);
+
+        expect([wc.closed, wp.closed]).toEqual([true, false]);
+        expect(destroyed).toHaveBeenCalledOnce();
+        expect(document.body.innerHTML).not.toContain('az-pip:c');
+        wp.fire('pagehide');
+        delete hooks.H;
+    });
+
     it("keeps a popped-out child's az-nodiff widget across a parent re-render", async () => {
         const mounted = vi.fn();
         const destroyed = vi.fn();

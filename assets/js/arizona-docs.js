@@ -87,7 +87,7 @@ function homeChain(entry) {
  * @param {PipEntry} entry
  * @returns {boolean}
  */
-function isStale(entry) {
+export function isStale(entry) {
     return homeChain(entry) === null;
 }
 

@@ -3,6 +3,7 @@ import {
     _pipWindows,
     _viewDocs,
     findViewRoot,
+    isStale,
     reconcilePipWindows,
     retireStaleCopies,
 } from './arizona-docs.js';
@@ -164,9 +165,13 @@ function carryNodiff(oldTops, newTops, newParent, resync, kept) {
  * @param {Set<Element>} kept
  */
 function carryPoppedNodiff(frag, resync, kept) {
-    for (const { id, win } of _pipWindows.values()) {
-        const fresh = frag.getElementById(id);
-        const stale = win.document.getElementById(id);
+    for (const entry of _pipWindows.values()) {
+        // A window an earlier op in the batch made stale had its copy retired,
+        // widgets included: carrying from it would hand the fresh view dead
+        // widgets, and placeholders that bring nested windows back to life.
+        if (isStale(entry)) continue;
+        const fresh = frag.getElementById(entry.id);
+        const stale = entry.win.document.getElementById(entry.id);
         if (!fresh?.hasAttribute('az-view') || !stale || stale === fresh) continue;
         carryNodiff([stale], [fresh], /** @type {ParentNode} */ (fresh.parentNode), resync, kept);
     }
