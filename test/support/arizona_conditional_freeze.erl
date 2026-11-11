@@ -531,11 +531,11 @@ title_helper_raw_value(Bindings) ->
 %% text (`doc_title/2` is multi-clause, so it is a call, not inlined markup).
 -spec title_text_template_prop(az:bindings()) -> az:template().
 title_text_template_prop(Bindings) ->
-    ?html({head, [], [{title, [], [doc_title(docs, ?get(page))]}]}).
+    ?html({head, [], [{title, [], [doc_title(?get(kind, docs), ?get(page))]}]}).
 
 -spec textarea_text_template_prop(az:bindings()) -> az:template().
 textarea_text_template_prop(Bindings) ->
-    ?html({'div', [], [{textarea, [], [doc_title(docs, ?get(page))]}]}).
+    ?html({'div', [], [{textarea, [], [doc_title(?get(kind, docs), ?get(page))]}]}).
 
 doc_title(docs, Page) -> ?html([~"Docs - ", Page]);
 doc_title(plain, Page) -> Page.
