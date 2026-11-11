@@ -401,7 +401,7 @@ pick); otherwise a list is chardata, one text. A `false` value picks nothing, as
 renders no attribute.
 
 The parse transform calls it for every choice under a chooser that carries a value
-(`arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
+(`c:arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
 `<select>` with a `value`.
 """.
 -spec chosen(Choice, Value, Multiple) -> boolean() when
