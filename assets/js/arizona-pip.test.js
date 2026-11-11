@@ -1158,4 +1158,57 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             w2.fire('pagehide');
         });
     });
+
+    it('tears the stale copy down before the fresh one mounts, as inline', async () => {
+        const log = vi.fn();
+        hooks.H = {
+            mounted() {
+                log(`mounted:${this.el.dataset.n}`);
+            },
+            destroyed() {
+                log(`destroyed:${this.el.dataset.n}`);
+            },
+        };
+        const child = (/** @type {string} */ n) =>
+            `<div id="v" az-view az="V-0"><i az-hook="H" data-n="${n}"></i></div>`;
+        document.body.innerHTML = `<div id="root" az-view az="R-0"><!--az:R-1-->${child('a')}<!--/az--></div>`;
+        mountHooks(document);
+        // Inline, the slot's old content is torn down before the new one mounts.
+        applyOps([[OP.TEXT, 'root:R-1', child('b'), true]]);
+        expect(log.mock.calls.slice(1)).toEqual([['destroyed:a'], ['mounted:b']]);
+        log.mockClear();
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([[OP.TEXT, 'root:R-1', child('c'), true]]);
+
+        expect(log.mock.calls).toEqual([['destroyed:b'], ['mounted:c']]);
+        expect(pip.document.querySelector('#v i')?.dataset.n).toBe('c');
+        pip.fire('pagehide');
+        expect(log.mock.calls).toEqual([['destroyed:b'], ['mounted:c']]);
+        delete hooks.H;
+    });
+
+    it('leaves a live window view alone when unrelated content mounts', async () => {
+        // Another element under the same id elsewhere (not a re-render of the
+        // view) is no reason to tear the popped-out view down.
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        document.body.innerHTML =
+            '<div id="root" az-view az="R-0"><div id="v" az-view az="V-0" az-hook="H"></div>' +
+            '<p id="v">not the view</p><!--az:R-1--><!--/az--></div>';
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        expect(pip.document.getElementById('v')?.hasAttribute('az-view')).toBe(true);
+
+        applyOps([[OP.TEXT, 'root:R-1', '<span az-hook="H">x</span>', true]]);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.H;
+    });
 });
