@@ -93,8 +93,10 @@ function isStale(entry) {
 
 /**
  * The view `id` a batch rendered again outside `own` (its window): in the page,
- * or in another window when its parent is popped out too. A view, not just an
- * element under its id: anything else stays where it was rendered.
+ * or in another window when an ancestor is popped out too. A view, not just an
+ * element under its id: anything else stays where it was rendered. A copy in a
+ * stale window is not one: it lies inside a copy the batch superseded, so two
+ * re-renders in one batch hand over the newer.
  * @param {string} id
  * @param {Document} own
  * @returns {Element|null}
@@ -103,7 +105,9 @@ function renderedAgain(id, own) {
     for (const doc of allDocs()) {
         if (doc === own) continue;
         const el = doc.getElementById(id);
-        if (el?.hasAttribute('az-view')) return el;
+        if (!el?.hasAttribute('az-view')) continue;
+        const pip = windowOf(doc);
+        if (!pip || !isStale(pip)) return el;
     }
     return null;
 }

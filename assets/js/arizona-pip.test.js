@@ -1195,6 +1195,65 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
             w1.fire('pagehide');
             w2.fire('pagehide');
         });
+
+        it('moves the newest fresh copy in when two re-renders in one batch rendered it', async () => {
+            // G > P > C, popped out C, P, G. The batch re-renders P's slot in P's
+            // window, then G's slot in G's window: the first copy of C ends up in
+            // P's stale copy, the newest one inside the fresh P, in G's window.
+            const c = (/** @type {string} */ t) =>
+                `<div id="C" az-view az="C-0"><b az="C-1">${t}</b></div>`;
+            const p = (/** @type {string} */ t) =>
+                `<div id="P" az-view az="P-0"><!--az:P-1-->${c(t)}<!--/az--></div>`;
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0"><div id="G" az-view az="G-0"><!--az:G-1-->' +
+                `${p('c0')}<!--/az--></div></div>`;
+            const wins = [];
+            for (const id of ['C', 'P', 'G']) {
+                const w = makePipWindow();
+                stubPip(w);
+                await requestPip(id);
+                wins.push(w);
+            }
+            const [wC, wP, wG] = wins;
+
+            applyOps([
+                [OP.TEXT, 'P:P-1', c('older'), true],
+                [OP.TEXT, 'G:G-1', p('newest'), true],
+            ]);
+
+            const all = [document, wC.document, wP.document, wG.document].flatMap((d) => [
+                ...d.querySelectorAll('#C'),
+            ]);
+            expect(all).toHaveLength(1);
+            expect(wC.document.getElementById('C')?.textContent).toBe('newest');
+            expect(wins.map((w) => w.closed)).toEqual([false, false, false]);
+            for (const w of wins) w.fire('pagehide');
+        });
+
+        it('closes the window when only a superseded copy renders its view again', async () => {
+            // The batch re-renders C in P's window, then drops P from G's slot:
+            // that copy of C lies in P's stale copy, so C is gone.
+            const c = '<div id="C" az-view az="C-0">older</div>';
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0"><div id="G" az-view az="G-0"><!--az:G-1-->' +
+                `<div id="P" az-view az="P-0"><!--az:P-1-->${c}<!--/az--></div><!--/az--></div></div>`;
+            const wins = [];
+            for (const id of ['C', 'P', 'G']) {
+                const w = makePipWindow();
+                stubPip(w);
+                await requestPip(id);
+                wins.push(w);
+            }
+
+            applyOps([
+                [OP.TEXT, 'P:P-1', c, true],
+                [OP.TEXT, 'G:G-1', 'gone', true],
+            ]);
+
+            expect(wins.map((w) => w.closed)).toEqual([true, true, false]);
+            wins[2].fire('pagehide');
+            expect(document.getElementById('C')).toBeNull();
+        });
     });
 
     it('tears the stale copy down before the fresh one mounts, as inline', async () => {
