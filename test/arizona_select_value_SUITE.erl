@@ -385,6 +385,7 @@ shapes() ->
         helper_each,
         helper_returns_each,
         helper_arg_each,
+        helper_arg_each_qualified,
         field,
         spelled,
         hoisted,

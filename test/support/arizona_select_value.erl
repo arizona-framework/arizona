@@ -18,6 +18,7 @@ value equals the select's as `selected`, and diff a change of it to that option.
 -export([helper_each/1]).
 -export([helper_returns_each/1]).
 -export([helper_arg_each/1]).
+-export([helper_arg_each_qualified/1]).
 -export([field/1]).
 -export([nodiff/1]).
 -export([spelled/1]).
@@ -124,6 +125,15 @@ helper_arg_each(Bindings) ->
 
 group(Label, Options) ->
     {optgroup, [{label, Label}], [Options]}.
+
+%% The same helper called as `?MODULE:group/2`, which resolves like a bare local call.
+-spec helper_arg_each_qualified(az:bindings()) -> az:template().
+helper_arg_each_qualified(Bindings) ->
+    ?html(
+        {select, [{value, ?get(v)}], [
+            ?MODULE:group(~"G", ?each(fun(O) -> {option, [{value, O}], [O]} end, ?get(opts)))
+        ]}
+    ).
 
 -spec nodiff(az:bindings()) -> az:template().
 nodiff(Bindings) ->

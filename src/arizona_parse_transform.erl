@@ -7160,6 +7160,12 @@ choice_kind({map, _, Fields}) ->
     compiled_kind(is_compiled_template_map(Fields), template);
 choice_kind({call, _, {atom, _, _Name}, _Args}) ->
     helper;
+%% `?MODULE:helper(...)` inlines like a bare local call (ih/4), so an `?each` it is
+%% handed lands under the chooser all the same.
+choice_kind({call, _, {remote, _, {atom, _, Mod}, {atom, _, _Name}}, _Args}) when
+    Mod =/= arizona_template, Mod =/= az, Mod =/= ?NODIFF_MOD
+->
+    helper;
 choice_kind(Child) ->
     case is_control_flow_ast(Child) of
         true ->
