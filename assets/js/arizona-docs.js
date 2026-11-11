@@ -13,12 +13,14 @@ import { destroyHooks } from './arizona-hooks.js';
 /** @type {Map<string, Document>} */
 export const _viewDocs = new Map();
 
-// The PiP window and inline placeholder per popped-out view, so a navigate's
-// OP_REPLACE -- which destroys the placeholder with the outgoing subtree -- can
-// close the now-orphaned window instead of leaving it floating over dead server
-// state. Entries live and die with `_viewDocs` (set in requestPip, removed by
-// the window's pagehide handler).
-/** @type {Map<string, {win: Window, placeholder: Comment}>} */
+// The PiP window and inline placeholder per popped-out view, keyed by the id of
+// the view the window shows, so each op batch can bring the window in line with
+// what it did (`reconcilePipWindows`). An entry is mutable: a navigate inside
+// the window re-keys it, a re-render inline moves a fresh placeholder in. Entries
+// live and die with `_viewDocs` (set in requestPip, removed by the window's
+// pagehide handler).
+/** @typedef {{id: string, win: Window, placeholder: Comment}} PipEntry */
+/** @type {Map<string, PipEntry>} */
 export const _pipWindows = new Map();
 
 /**
@@ -38,22 +40,164 @@ export function closeAllPip() {
 }
 
 /**
- * Close any popped-out (PiP) window whose inline placeholder is no longer in
- * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page),
- * so the floating view shows dead server state. Closing fires the window's
- * pagehide handler, which discards the stale view and unregisters the maps.
- * Same reconciliation `disconnect` performs, driven here by the page swap.
+ * The views a PiP document holds: the `az-view` elements of its body, not
+ * whatever else a hook may have put there.
+ * @param {Document} doc
+ * @returns {Element[]}
  */
-export function closeOrphanedPipWindows() {
-    for (const pip of [..._pipWindows.values()]) {
-        if (!pip.placeholder.isConnected) {
-            try {
-                pip.win.close();
-            } catch {
-                /* window already gone */
-            }
-        }
+function viewsIn(doc) {
+    return Array.from(doc.body.children).filter((e) => e.hasAttribute('az-view'));
+}
+
+/**
+ * The window whose document is `doc`, or null for the main document or a window
+ * no longer registered.
+ * @param {Document} doc
+ * @returns {PipEntry|null}
+ */
+function windowOf(doc) {
+    for (const e of _pipWindows.values()) if (e.win.document === doc) return e;
+    return null;
+}
+
+/**
+ * The windows `entry`'s placeholder sits under: each window's placeholder can lie
+ * inside another window's copy (a child popped out before its parent), up to the
+ * main document. Null when the chain is broken -- a placeholder gone, or lying
+ * in a window no longer registered -- so the view is stale: the copy in its
+ * window no longer stands for anything the page holds.
+ * @param {PipEntry} entry
+ * @returns {PipEntry[]|null}
+ */
+function homeChain(entry) {
+    const chain = [];
+    for (let e = entry; ; ) {
+        if (!e.placeholder.isConnected || chain.length > _pipWindows.size) return null;
+        const home = e.placeholder.ownerDocument;
+        if (home === document) return chain;
+        const up = windowOf(home);
+        if (!up) return null;
+        chain.push(up);
+        e = up;
     }
+}
+
+/**
+ * Whether the view in `entry`'s window is stale: see `homeChain`.
+ * @param {PipEntry} entry
+ * @returns {boolean}
+ */
+export function isStale(entry) {
+    return homeChain(entry) === null;
+}
+
+/**
+ * The view `id` a batch rendered again outside `own` (its window): in the page,
+ * or in another window when an ancestor is popped out too. A view, not just an
+ * element under its id: anything else stays where it was rendered. A copy in a
+ * stale window is not one: it lies inside a copy the batch superseded, so two
+ * re-renders in one batch hand over the newer.
+ * @param {string} id
+ * @param {Document} own
+ * @returns {Element|null}
+ */
+function renderedAgain(id, own) {
+    for (const doc of allDocs()) {
+        if (doc === own) continue;
+        const el = doc.getElementById(id);
+        if (!el?.hasAttribute('az-view')) continue;
+        const pip = windowOf(doc);
+        if (!pip || !isStale(pip)) return el;
+    }
+    return null;
+}
+
+/**
+ * Tear down the hooks of every stale window's copy (see `homeChain`), before an
+ * op mounts its new content. Inline, a re-render destroys the old content before
+ * the new mounts; a popped-out view's old content is in its window, and the op
+ * that took its placeholder is the one that would have destroyed it. Staleness
+ * never reverts, so the copy is gone either way -- replaced by a fresh one or
+ * closed with its window once the batch ends (`reconcilePipWindows`), whose own
+ * teardown then finds nothing left to run.
+ */
+export function retireStaleCopies() {
+    if (_pipWindows.size === 0) return;
+    for (const entry of _pipWindows.values()) {
+        if (!isStale(entry)) continue;
+        for (const e of viewsIn(entry.win.document)) destroyHooks(e);
+    }
+}
+
+/**
+ * Bring each popped-out (PiP) window in line with the op batch just applied:
+ * - A replace in the window under a new id (a navigate of a popped-out root)
+ *   re-keys it, so `exit_pip`/`request_pip` from the new page name it.
+ * - A stale window (see `homeChain`) whose view the batch rendered again (a
+ *   reconnect's resync, a wholesale re-render of an ancestor) gets the fresh
+ *   element, found in the page or in an ancestor's window: it moves in place of
+ *   the stale one and leaves a new placeholder, as a pop-out does.
+ * - Otherwise the view is gone (removed, or the page navigated: a new page's
+ *   views are new, whatever their ids), so the window closes; its pagehide
+ *   handler discards the stale view.
+ * Order does not matter: staleness follows the chain of windows up to the page,
+ * so a child is judged right whether its parent's window is settled yet or not,
+ * and a stale parent copy holds only the child's placeholder, never a copy of it.
+ * @param {boolean} navigated -- the batch replaced the page (a navigate)
+ */
+export function reconcilePipWindows(navigated) {
+    if (_pipWindows.size === 0) return;
+    for (const entry of [..._pipWindows.values()]) {
+        const doc = entry.win.document;
+        if (!isStale(entry)) {
+            if (doc.getElementById(entry.id)) continue;
+            const id = viewsIn(doc)[0]?.id;
+            if (!id) continue;
+            _viewDocs.delete(entry.id);
+            _pipWindows.delete(entry.id);
+            entry.id = id;
+            _viewDocs.set(id, doc);
+            _pipWindows.set(id, entry);
+            continue;
+        }
+        const fresh = navigated ? null : renderedAgain(entry.id, doc);
+        if (fresh) {
+            for (const e of viewsIn(doc)) {
+                destroyHooks(e);
+                e.remove();
+            }
+            entry.placeholder = fresh.ownerDocument.createComment(`az-pip:${entry.id}`);
+            fresh.before(entry.placeholder);
+            doc.body.append(fresh);
+            continue;
+        }
+        closeStale(entry);
+    }
+}
+
+/**
+ * Close a stale window and forget it now: its pagehide may come after `close()`
+ * returns, and until then a later batch must neither hand it a view nor count
+ * it as a home for the placeholders in it.
+ * @param {PipEntry} entry
+ */
+function closeStale(entry) {
+    forget(entry);
+    try {
+        entry.win.close();
+    } catch {
+        /* window already gone */
+    }
+}
+
+/**
+ * Unregister `entry`, unless a newer window took its id since.
+ * @param {PipEntry} entry
+ */
+function forget(entry) {
+    if (_pipWindows.get(entry.id) !== entry) return;
+    _pipWindows.delete(entry.id);
+    _viewDocs.delete(entry.id);
 }
 
 /**
@@ -85,11 +229,19 @@ export function allDocs() {
 export function findViewRoot(viewId) {
     const el = document.getElementById(viewId);
     if (el || _viewDocs.size === 0) return el;
+    // Between a re-render that takes a popped-out view's placeholder and the
+    // batch's end (`reconcilePipWindows`), its window still holds the stale copy,
+    // with every view inside it, while the fresh one sits in another window: a
+    // stale window is searched last.
+    let found = null;
     for (const doc of _viewDocs.values()) {
-        const found = doc.getElementById(viewId);
-        if (found) return found;
+        const e = doc.getElementById(viewId);
+        if (!e) continue;
+        const pip = windowOf(doc);
+        if (!pip || !isStale(pip)) return e;
+        found = e;
     }
-    return null;
+    return found;
 }
 
 /**
@@ -149,7 +301,9 @@ export async function requestPip(viewId, opts = {}) {
     copyStyles(document, pip.document);
     pip.document.body.append(view);
     _viewDocs.set(viewId, pip.document);
-    _pipWindows.set(viewId, { win: pip, placeholder });
+    /** @type {PipEntry} */
+    const entry = { id: viewId, win: pip, placeholder };
+    _pipWindows.set(viewId, entry);
 
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
@@ -159,23 +313,28 @@ export async function requestPip(viewId, opts = {}) {
         'pagehide',
         () => {
             controller.abort();
-            _viewDocs.delete(viewId);
-            _pipWindows.delete(viewId);
+            forget(entry);
             _eventDocs.delete(pip.document);
             _passiveBound.delete(pip.document);
-            // isConnected, not parentNode: a replaced (navigate) outgoing
-            // subtree is detached wholesale, so the placeholder still HAS a
-            // parent -- inside a dead tree.
-            if (placeholder.isConnected) {
-                placeholder.replaceWith(view);
+            // The views the window holds now, not the element moved out: a replace
+            // there swaps it for a fresh one, under a new id when it navigates a
+            // popped-out root to another page.
+            const current = viewsIn(pip.document);
+            // Not just isConnected: a replaced (navigate) outgoing subtree is
+            // detached wholesale, and a placeholder can sit in another window's
+            // stale copy, still connected there (see `homeChain`).
+            if (!isStale(entry)) {
+                entry.placeholder.replaceWith(...current);
             } else {
                 // The view's inline home was destroyed while it was popped out
-                // (a navigate OP_REPLACE swapped the page): the new page has its
-                // own content, so discard the stale element -- appending it to
-                // the new page's body would resurrect dead server state. Tear
-                // its hooks down like any removed subtree.
-                destroyHooks(view);
-                view.remove();
+                // (a navigate swapped the page, a removal took it): the page has
+                // its own content there now, so discard the stale element --
+                // appending it to the body would resurrect dead server state.
+                // Tear its hooks down like any removed subtree.
+                for (const e of current) {
+                    destroyHooks(e);
+                    e.remove();
+                }
             }
             if (opts.onClose) opts.onClose();
         },

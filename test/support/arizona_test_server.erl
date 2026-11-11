@@ -114,6 +114,10 @@ routes() ->
             bindings => #{id => ~"pip_demo", title => <<"PiP">>},
             layouts => Layouts
         }},
+        {live, <<"/pip-parent">>, arizona_pip_parent, #{
+            bindings => #{title => <<"PiP parent">>},
+            layouts => Layouts
+        }},
         {live, <<"/events">>, arizona_events_demo, #{
             bindings => #{title => <<"Events">>},
             layouts => Layouts

@@ -165,6 +165,69 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // restore
     });
 
+    // A replace of the popped-out view (a reconnect's resync re-renders it in its
+    // window) leaves the element moved out a stale copy: closing the window brings
+    // back the view as it is now.
+    it('brings back the view a replace re-rendered in the PiP document', async () => {
+        document.body.innerHTML = '<div id="v20" az-view az="0"><span>old</span></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v20');
+        applyOps([[OP.REPLACE, 'v20', '<div id="v20" az-view az="0"><span>new</span></div>']]);
+        expect(pip.document.querySelector('#v20 span')?.textContent).toBe('new');
+
+        pip.fire('pagehide');
+
+        expect(document.querySelector('#v20 span')?.textContent).toBe('new');
+        expect(pip.document.getElementById('v20')).toBeNull();
+    });
+
+    // A navigate of a popped-out ROOT view lands in its window (the root is
+    // resolved there) under the new page's id, while the placeholder stays inline:
+    // closing the window brings back the new page, not the stale element moved out.
+    it('brings back the page a navigate replaced a popped-out root with', async () => {
+        document.body.innerHTML = '<div id="r1" az-view az="0"><span>old</span></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('r1');
+        applyOps([[OP.REPLACE, 'r1', '<div id="r2" az-view az="0"><span>new</span></div>']]);
+        expect(pip.closed).toBe(false);
+        // A node a hook put in the window is not a view: it stays there.
+        pip.document.body.append(pip.document.createElement('aside'));
+
+        pip.fire('pagehide');
+
+        expect(document.getElementById('r1')).toBeNull();
+        expect(document.querySelector('aside')).toBeNull();
+        expect(document.querySelector('#r2 span')?.textContent).toBe('new');
+        expect(resolveEl('r2')?.ownerDocument).toBe(document);
+    });
+
+    it('re-keys the window to the page a navigate swapped into it', async () => {
+        // exit_pip/request_pip from the new page name the new view id.
+        document.body.innerHTML = '<div id="r1" az-view az="0"><span>old</span></div>';
+        const pip = makePipWindow();
+        Object.defineProperty(pip.document, 'defaultView', { value: pip });
+        stubPip(pip);
+        await requestPip('r1');
+        applyOps([[OP.REPLACE, 'r1', '<div id="r2" az-view az="0"><span>new</span></div>']]);
+
+        expect(await requestPip('r2')).toBeNull();
+        expect(resolveEl('r2')?.ownerDocument).toBe(pip.document);
+        exitPip('r1');
+        expect(pip.closed).toBe(false);
+        exitPip('r2');
+        expect(pip.closed).toBe(true);
+        expect(document.querySelector('#r2 span')?.textContent).toBe('new');
+
+        // Closing forgot the window under the new id: the page pops out again.
+        const again = makePipWindow();
+        stubPip(again);
+        expect(await requestPip('r2')).toBe(again);
+        expect(again.document.getElementById('r2')).not.toBeNull();
+        again.fire('pagehide');
+    });
+
     it("preserves a popped-out form's typed values across a reconnect", async () => {
         document.body.innerHTML =
             '<div id="v7" az-view az="0"><form id="pf"><input name="note" /></form></div>';
@@ -597,12 +660,157 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // cleanup
     });
 
-    it('discards the stale view on close when its placeholder is gone', async () => {
-        // The placeholder is wiped by an inner re-render (not a REPLACE, so no
-        // auto-close); when the user then closes the window, the stale element
-        // must be discarded, not appended to the page body.
+    it('tears down the view a resync moved into the window when a navigate orphans it', async () => {
+        // The resync re-rendered the popped-out child, so the element in the window
+        // is not the one moved out: the navigate's teardown must reach it.
         document.body.innerHTML =
-            '<div id="root" az-view az="0"><div id="player" az-view az="0" az-hook="H"></div></div>';
+            '<div id="root" az-view az="0">' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = {
+            destroyed() {
+                destroyed(this.el.dataset.n);
+            },
+        };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        const resync =
+            '<div id="root" az-view az="0">' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="new"></i></div></div>';
+        applyOps([[OP.REPLACE, 'root', resync]], true);
+
+        applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="0">x</div>']]);
+
+        expect(pip.closed).toBe(true);
+        expect(destroyed.mock.calls).toEqual([['old'], ['new']]);
+        expect(pip.document.getElementById('v')).toBeNull();
+
+        delete hooks.H;
+    });
+
+    it('keeps a popped-out child in its window across a reconnect', async () => {
+        // The resync re-renders the whole root, child included, inline: the fresh
+        // child moves into the window and leaves a placeholder, as a pop-out does.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><p>a</p>' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = {
+            destroyed() {
+                destroyed(this.el.dataset.n);
+            },
+        };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        const resync =
+            '<div id="root" az-view az="0"><p>b</p>' +
+            '<div id="v" az-view az="0"><i az-hook="H" data-n="new"></i></div></div>';
+        applyOps([[OP.REPLACE, 'root', resync]], true);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed.mock.calls).toEqual([['old']]);
+        expect(pip.document.querySelectorAll('#v')).toHaveLength(1);
+        expect(pip.document.querySelector('#v i')?.dataset.n).toBe('new');
+        expect(document.getElementById('v')).toBeNull();
+        expect(resolveEl('v')?.ownerDocument).toBe(pip.document);
+
+        // Closing brings it back where the fresh render put it.
+        pip.fire('pagehide');
+        expect(document.querySelector('#root > p + #v i')?.dataset.n).toBe('new');
+        expect(destroyed.mock.calls).toEqual([['old']]);
+
+        delete hooks.H;
+    });
+
+    it('closes the window when the resync no longer renders the popped-out child', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="v" az-view az="0" az-hook="H"></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([[OP.REPLACE, 'root', '<div id="root" az-view az="0">gone</div>']], true);
+
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('v')).toBeNull();
+        expect(destroyed).toHaveBeenCalledOnce();
+
+        delete hooks.H;
+    });
+
+    it('closes the window when a navigate renders a view under the same id', async () => {
+        // A navigate mounts a new page: its views are new, whatever their ids.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="v" az-view az="0">old</div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([
+            [
+                OP.REPLACE,
+                'root',
+                '<div id="p2" az-view az="0"><div id="v" az-view az="0">new</div></div>',
+            ],
+        ]);
+
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('v')?.textContent).toBe('new');
+        expect(pip.document.getElementById('v')).toBeNull();
+    });
+
+    it('keeps the window when a parent re-render renders the popped-out view again', async () => {
+        // A parent's wholesale re-render wipes the placeholder and renders the
+        // child view inline again: the fresh copy moves into the window, so the
+        // window shows the live view and the page keeps a placeholder.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="player" az-view az="0"><i az-hook="H" data-n="old"></i></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = {
+            destroyed() {
+                destroyed(this.el.dataset.n);
+            },
+        };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([
+            [
+                OP.TEXT,
+                'root:0',
+                '<div id="player" az-view az="0"><i az-hook="H" data-n="new"></i></div>',
+                true,
+            ],
+        ]);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed.mock.calls).toEqual([['old']]);
+        expect(pip.document.querySelector('#player i')?.dataset.n).toBe('new');
+        expect(document.getElementById('player')).toBeNull();
+        expect(resolveEl('player')?.ownerDocument).toBe(pip.document);
+
+        pip.fire('pagehide');
+        expect(document.querySelector('#root > #player i')?.dataset.n).toBe('new');
+
+        delete hooks.H;
+    });
+
+    it('closes the window when a stream remove takes the placeholder with its item', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><ul az="1">' +
+            '<li az-key="a"><div id="player" az-view az="0" az-hook="H"></div></li>' +
+            '<li az-key="b">b</li></ul></div>';
         const destroyed = vi.fn();
         hooks.H = { destroyed };
         mountHooks(document);
@@ -610,14 +818,682 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         stubPip(pip);
         await requestPip('player');
 
-        // A wholesale OP.TEXT on the root wipes the inline placeholder.
-        applyOps([[OP.TEXT, 'root:0', 'wiped', true]]);
-        pip.fire('pagehide'); // user closes the floating window
+        applyOps([[OP.REMOVE, 'root:1', 'a']]);
 
+        // Closed and discarded, not dumped into the page.
+        expect(pip.closed).toBe(true);
         expect(document.getElementById('player')).toBeNull();
-        expect(document.body.contains(pip.document.getElementById('player'))).toBe(false);
         expect(destroyed).toHaveBeenCalledOnce();
+        expect(resolveEl('player')).toBeNull();
 
+        delete hooks.H;
+    });
+
+    it('keeps the window when an item patch renders the popped-out view again', async () => {
+        // The re-render is nested in a stream item's ops, not a top-level op.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><ul az="1">' +
+            '<li az-key="a" az="2"><div id="player" az-view az="0"></div></li></ul></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'root:1',
+                'a',
+                [[OP.TEXT, '2', '<div id="player" az-view az="0">new</div>', true]],
+            ],
+        ]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.getElementById('player')?.textContent).toBe('new');
+        expect(document.getElementById('player')).toBeNull();
+        pip.fire('pagehide');
+        expect(document.querySelector('li[az-key="a"] > #player')?.textContent).toBe('new');
+    });
+
+    it('closes the window when a re-render puts a non-view element under its id', async () => {
+        // Only a view is the view: a <p> reusing the id stays where it was rendered.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="player" az-view az="0">p</div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([[OP.TEXT, 'root:0', '<p id="player">just a paragraph</p>', true]]);
+
+        expect(pip.closed).toBe(true);
+        expect(document.querySelector('#root > p#player')?.textContent).toBe('just a paragraph');
+        expect(pip.document.getElementById('player')).toBeNull();
+    });
+
+    it('keeps a popped-out child in its window when its popped-out parent re-renders it', async () => {
+        // Child C in one window, its parent P in another: P's re-render renders C
+        // inside P's window, not in the page, and C's window takes it from there.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="P" az-view az="0"><div id="C" az-view az="0">c</div></div></div>';
+        const w1 = makePipWindow();
+        stubPip(w1);
+        await requestPip('C');
+        const w2 = makePipWindow();
+        stubPip(w2);
+        await requestPip('P');
+
+        applyOps([[OP.TEXT, 'P:0', '<div id="C" az-view az="0">c2</div>', true]]);
+
+        expect(w1.closed).toBe(false);
+        expect(w1.document.querySelectorAll('#C')).toHaveLength(1);
+        expect(w1.document.getElementById('C')?.textContent).toBe('c2');
+        expect(w2.document.getElementById('C')).toBeNull();
+        expect(resolveEl('C')?.ownerDocument).toBe(w1.document);
+
+        // Closing C's window brings it back into P, in P's window.
+        w1.fire('pagehide');
+        expect(w2.document.querySelector('#P > #C')?.textContent).toBe('c2');
+        w2.fire('pagehide');
+    });
+
+    it('patches the fresh view, not the stale one in the window, later in the same batch', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="player" az-view az="0"><b az="1">x</b></div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([
+            [OP.SET_ATTR, 'player:1', 'class', 'one'],
+            [OP.TEXT, 'root:0', '<div id="player" az-view az="0"><b az="1">x</b></div>', true],
+            [OP.SET_ATTR, 'player:1', 'class', 'two'],
+        ]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#player b')?.getAttribute('class')).toBe('two');
+    });
+
+    it('patches the fresh child inside a popped-out parent later in the same batch', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="P" az-view az="0"><div id="C" az-view az="0"><b az="1">c</b></div></div></div>';
+        const w1 = makePipWindow();
+        stubPip(w1);
+        await requestPip('C');
+        const w2 = makePipWindow();
+        stubPip(w2);
+        await requestPip('P');
+
+        applyOps([
+            [OP.TEXT, 'P:0', '<div id="C" az-view az="0"><b az="1">c</b></div>', true],
+            [OP.SET_ATTR, 'C:1', 'class', 'two'],
+        ]);
+
+        expect(w1.document.querySelector('#C b')?.getAttribute('class')).toBe('two');
+        w1.fire('pagehide');
+        w2.fire('pagehide');
+    });
+
+    it("keeps a popped-out child's az-nodiff widget across a reconnect", async () => {
+        // The resync re-renders the child inline; its widget is the one in the
+        // window, carried over as an inline resync carries it, never remounted.
+        const mounted = vi.fn();
+        const destroyed = vi.fn();
+        hooks.W = { mounted, destroyed };
+        const html = (/** @type {string} */ n) =>
+            `<div id="root" az-view az="0"><p>${n}</p>` +
+            '<div id="v" az-view az="0"><div az-nodiff="tok1" az-hook="W">w</div></div></div>';
+        document.body.innerHTML = html('a');
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        const widget = pip.document.querySelector('[az-nodiff]');
+
+        applyOps([[OP.REPLACE, 'root', html('b')]], true);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#v [az-nodiff]')).toBe(widget);
+        expect(mounted).toHaveBeenCalledOnce();
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.W;
+    });
+
+    it('carries no az-nodiff widget from a window an earlier op made stale', async () => {
+        // The view moves from slot R-1 to slot R-2 in one batch: the first op takes
+        // its placeholder and retires the window's copy, widget included, so the
+        // second op's fresh copy mounts its own widget, as inline.
+        const mounted = vi.fn();
+        const destroyed = vi.fn();
+        hooks.W = { mounted, destroyed };
+        const child =
+            '<div id="v" az-view az="V-0"><div az-nodiff="tok1" az-hook="W">w</div></div>';
+        document.body.innerHTML =
+            `<div id="root" az-view az="R-0"><!--az:R-1-->${child}<!--/az-->` +
+            '<!--az:R-2--><p>slot2</p><!--/az--></div>';
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([
+            [OP.TEXT, 'root:R-1', '', true],
+            [OP.TEXT, 'root:R-2', child, true],
+        ]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#v [az-nodiff]')).not.toBeNull();
+        expect([mounted.mock.calls.length, destroyed.mock.calls.length]).toEqual([2, 1]);
+        pip.fire('pagehide');
+        delete hooks.W;
+    });
+
+    it('carries no placeholder of a nested window back from a stale window', async () => {
+        // C's placeholder sits in an az-nodiff element of P's copy. P moves slots
+        // in one batch and its new render no longer holds C: C is gone, and its
+        // window closes rather than coming back to life with its hooks destroyed.
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        const c = '<div id="c" az-view az="C-0"><span az-hook="H">x</span></div>';
+        const p = (/** @type {string} */ inner) =>
+            `<div id="p" az-view az="P-0"><div az-nodiff="tokN">${inner}</div></div>`;
+        document.body.innerHTML =
+            `<div id="root" az-view az="R-0"><!--az:R-1-->${p(c)}<!--/az-->` +
+            '<!--az:R-2--><p>slot2</p><!--/az--></div>';
+        mountHooks(document);
+        const wc = makePipWindow();
+        stubPip(wc);
+        await requestPip('c');
+        const wp = makePipWindow();
+        stubPip(wp);
+        await requestPip('p');
+
+        applyOps([
+            [OP.TEXT, 'root:R-1', '', true],
+            [OP.TEXT, 'root:R-2', p(''), true],
+        ]);
+
+        expect([wc.closed, wp.closed]).toEqual([true, false]);
+        expect(destroyed).toHaveBeenCalledOnce();
+        expect(document.body.innerHTML).not.toContain('az-pip:c');
+        wp.fire('pagehide');
+        delete hooks.H;
+    });
+
+    it("keeps a popped-out child's az-nodiff widget across a parent re-render", async () => {
+        const mounted = vi.fn();
+        const destroyed = vi.fn();
+        hooks.W = { mounted, destroyed };
+        const child =
+            '<div id="v" az-view az="V-0"><div az-nodiff="tok1" az-hook="W">w</div></div>';
+        document.body.innerHTML = `<div id="root" az-view az="R-0"><!--az:R-1-->${child}<!--/az--></div>`;
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        const widget = pip.document.querySelector('[az-nodiff]');
+
+        applyOps([[OP.TEXT, 'root:R-1', child, true]]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#v [az-nodiff]')).toBe(widget);
+        expect(mounted).toHaveBeenCalledOnce();
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.W;
+    });
+
+    describe('nested pop-outs', () => {
+        // root > P > C: C popped out first, then P, so C's placeholder sits inside
+        // P's copy in P's window.
+        const nested = () => {
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0"><!--az:R-1-->' +
+                '<div id="P" az-view az="P-0"><div id="C" az-view az="C-0"><b az="C-1">c</b></div></div>' +
+                '<!--/az--></div>';
+        };
+        const freshP =
+            '<div id="P" az-view az="P-0"><div id="C" az-view az="C-0"><b az="C-1">c2</b></div></div>';
+        const popBoth = async () => {
+            nested();
+            const w1 = makePipWindow();
+            stubPip(w1);
+            await requestPip('C');
+            const w2 = makePipWindow();
+            stubPip(w2);
+            await requestPip('P');
+            return { w1, w2 };
+        };
+        /** @param {Document[]} docs */
+        const copiesOfC = (docs) => docs.flatMap((d) => [...d.querySelectorAll('#C')]);
+
+        it('keeps both windows live when a re-render above the parent renders both again', async () => {
+            const { w1, w2 } = await popBoth();
+
+            applyOps([[OP.TEXT, 'root:R-1', freshP, true]]);
+
+            expect([w1.closed, w2.closed]).toEqual([false, false]);
+            expect(copiesOfC([document, w1.document, w2.document])).toHaveLength(1);
+            expect(w1.document.getElementById('C')?.textContent).toBe('c2');
+            // C's placeholder now sits in the fresh P, in P's window.
+            expect(w2.document.querySelector('#P')?.innerHTML).toContain('az-pip:C');
+            expect(resolveEl('C')?.ownerDocument).toBe(w1.document);
+            w1.fire('pagehide');
+            expect(w2.document.querySelector('#P > #C')?.textContent).toBe('c2');
+            w2.fire('pagehide');
+        });
+
+        it('keeps both windows live across a reconnect', async () => {
+            const { w1, w2 } = await popBoth();
+
+            applyOps(
+                [
+                    [
+                        OP.REPLACE,
+                        'root',
+                        `<div id="root" az-view az="R-0"><!--az:R-1-->${freshP}<!--/az--></div>`,
+                    ],
+                ],
+                true,
+            );
+
+            expect([w1.closed, w2.closed]).toEqual([false, false]);
+            expect(copiesOfC([document, w1.document, w2.document])).toHaveLength(1);
+            expect(w1.document.getElementById('C')?.textContent).toBe('c2');
+            w1.fire('pagehide');
+            w2.fire('pagehide');
+            expect(document.querySelector('#root > #P > #C')?.textContent).toBe('c2');
+        });
+
+        it('closes both windows on a navigate, though a closed window hides later', async () => {
+            const { w1, w2 } = await popBoth();
+            // A real window's pagehide comes after close() returns.
+            w2.close = function () {
+                this.closed = true;
+            };
+
+            applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="O-0">new page</div>']]);
+
+            expect([w1.closed, w2.closed]).toEqual([true, true]);
+        });
+
+        it('does not hand a closed window to a view the new page renders under its id', async () => {
+            const { w1 } = await popBoth();
+
+            applyOps([
+                [
+                    OP.REPLACE,
+                    'root',
+                    '<div id="other" az-view az="O-0"><div id="C" az-view az="C-0">new</div></div>',
+                ],
+            ]);
+            applyOps([[OP.SET_ATTR, 'other', 'class', 'x']]);
+
+            expect(w1.closed).toBe(true);
+            expect(document.querySelector('#other > #C')?.textContent).toBe('new');
+        });
+
+        it('settles windows whose pagehide comes after close returns', async () => {
+            // A real window hides later: the windows a navigate closed are gone at
+            // once, and their pagehide, in either order, only discards their own.
+            const destroyed = vi.fn();
+            hooks.H = {
+                destroyed() {
+                    destroyed(this.el.ownerDocument === document ? 'page' : 'window');
+                },
+            };
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0">' +
+                '<div id="P" az-view az="P-0"><div id="C" az-view az="C-0" az-hook="H">c</div></div></div>';
+            mountHooks(document);
+            const w1 = makePipWindow();
+            const w2 = makePipWindow();
+            for (const w of [w1, w2]) {
+                w.close = function () {
+                    this.closed = true;
+                };
+            }
+            stubPip(w1);
+            await requestPip('C');
+            stubPip(w2);
+            await requestPip('P');
+
+            applyOps([
+                [
+                    OP.REPLACE,
+                    'root',
+                    '<div id="other" az-view az="O-0"><div id="C" az-view az="C-0">new</div></div>',
+                ],
+            ]);
+            applyOps([[OP.SET_ATTR, 'other', 'class', 'x']]);
+
+            expect([w1.closed, w2.closed]).toEqual([true, true]);
+            expect(document.querySelector('#other > #C')?.textContent).toBe('new');
+            // Nothing of the closed windows is left registered: the new page's C
+            // pops out, and the old windows hiding later leave its window alone.
+            const again = makePipWindow();
+            stubPip(again);
+            expect(await requestPip('C')).toBe(again);
+            // C's placeholder still sits in P's stale copy, in w2: C's own
+            // pagehide discards it rather than putting it back there.
+            w1.fire('pagehide');
+            expect(destroyed.mock.calls).toEqual([['window']]);
+            expect(w2.document.getElementById('C')).toBeNull();
+            w2.fire('pagehide');
+            expect(destroyed.mock.calls).toEqual([['window']]);
+            expect(w2.document.getElementById('C')).toBeNull();
+            expect(resolveEl('C')?.ownerDocument).toBe(again.document);
+            expect(again.document.getElementById('C')?.textContent).toBe('new');
+            again.fire('pagehide');
+            expect(document.querySelector('#other > #C')?.textContent).toBe('new');
+            delete hooks.H;
+        });
+
+        it('patches the fresh copy two windows down a re-rendered ancestor later in the batch', async () => {
+            // G > P > C > K, popped out C, then P, then G. G's re-render in its
+            // window leaves P's copy stale (placeholder gone) and C's copy stale
+            // through it: C's placeholder is still connected, in P's stale copy.
+            document.body.innerHTML =
+                '<div id="root" az-view az="0"><div id="G" az-view az="0"><div id="P" az-view az="0">' +
+                '<div id="C" az-view az="0"><div id="K" az-view az="0"><b az="1">k</b></div></div>' +
+                '</div></div></div>';
+            const wins = [];
+            for (const id of ['C', 'P', 'G']) {
+                const w = makePipWindow();
+                stubPip(w);
+                await requestPip(id);
+                wins.push(w);
+            }
+            const [wC, wP, wG] = wins;
+
+            applyOps([
+                [
+                    OP.TEXT,
+                    'G:0',
+                    '<div id="P" az-view az="0"><div id="C" az-view az="0">' +
+                        '<div id="K" az-view az="0"><b az="1">k</b></div></div></div>',
+                    true,
+                ],
+                [OP.SET_ATTR, 'K:1', 'class', 'two'],
+            ]);
+
+            expect(wins.map((w) => w.closed)).toEqual([false, false, false]);
+            expect(wC.document.querySelector('#K b')?.getAttribute('class')).toBe('two');
+            expect(wP.document.querySelector('#P')?.innerHTML).toContain('az-pip:C');
+            expect(wG.document.querySelector('#G')?.innerHTML).toContain('az-pip:P');
+            for (const w of wins) w.fire('pagehide');
+            expect(document.querySelector('#G > #P > #C > #K b')?.getAttribute('class')).toBe(
+                'two',
+            );
+        });
+
+        it("patches the fresh copy of a re-rendered window's child view later in the batch", async () => {
+            // K is a view inside C, not popped out itself: the stale C in w1 holds
+            // a stale K too, and the fresh one is in w2 until the batch ends.
+            document.body.innerHTML =
+                '<div id="root" az-view az="0"><div id="P" az-view az="0">' +
+                '<div id="C" az-view az="0"><div id="K" az-view az="0"><b az="1">k</b></div></div></div></div>';
+            const w1 = makePipWindow();
+            stubPip(w1);
+            await requestPip('C');
+            const w2 = makePipWindow();
+            stubPip(w2);
+            await requestPip('P');
+
+            applyOps([
+                [
+                    OP.TEXT,
+                    'P:0',
+                    '<div id="C" az-view az="0"><div id="K" az-view az="0"><b az="1">k</b></div></div>',
+                    true,
+                ],
+                [OP.SET_ATTR, 'K:1', 'class', 'two'],
+            ]);
+
+            expect(w1.document.querySelector('#K b')?.getAttribute('class')).toBe('two');
+            w1.fire('pagehide');
+            w2.fire('pagehide');
+        });
+
+        it('moves the newest fresh copy in when two re-renders in one batch rendered it', async () => {
+            // G > P > C, popped out C, P, G. The batch re-renders P's slot in P's
+            // window, then G's slot in G's window: the first copy of C ends up in
+            // P's stale copy, the newest one inside the fresh P, in G's window.
+            const c = (/** @type {string} */ t) =>
+                `<div id="C" az-view az="C-0"><b az="C-1">${t}</b></div>`;
+            const p = (/** @type {string} */ t) =>
+                `<div id="P" az-view az="P-0"><!--az:P-1-->${c(t)}<!--/az--></div>`;
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0"><div id="G" az-view az="G-0"><!--az:G-1-->' +
+                `${p('c0')}<!--/az--></div></div>`;
+            const wins = [];
+            for (const id of ['C', 'P', 'G']) {
+                const w = makePipWindow();
+                stubPip(w);
+                await requestPip(id);
+                wins.push(w);
+            }
+            const [wC, wP, wG] = wins;
+
+            applyOps([
+                [OP.TEXT, 'P:P-1', c('older'), true],
+                [OP.TEXT, 'G:G-1', p('newest'), true],
+            ]);
+
+            const all = [document, wC.document, wP.document, wG.document].flatMap((d) => [
+                ...d.querySelectorAll('#C'),
+            ]);
+            expect(all).toHaveLength(1);
+            expect(wC.document.getElementById('C')?.textContent).toBe('newest');
+            expect(wins.map((w) => w.closed)).toEqual([false, false, false]);
+            for (const w of wins) w.fire('pagehide');
+        });
+
+        it('closes the window when only a superseded copy renders its view again', async () => {
+            // The batch re-renders C in P's window, then drops P from G's slot:
+            // that copy of C lies in P's stale copy, so C is gone.
+            const c = '<div id="C" az-view az="C-0">older</div>';
+            document.body.innerHTML =
+                '<div id="root" az-view az="R-0"><div id="G" az-view az="G-0"><!--az:G-1-->' +
+                `<div id="P" az-view az="P-0"><!--az:P-1-->${c}<!--/az--></div><!--/az--></div></div>`;
+            const wins = [];
+            for (const id of ['C', 'P', 'G']) {
+                const w = makePipWindow();
+                stubPip(w);
+                await requestPip(id);
+                wins.push(w);
+            }
+
+            applyOps([
+                [OP.TEXT, 'P:P-1', c, true],
+                [OP.TEXT, 'G:G-1', 'gone', true],
+            ]);
+
+            expect(wins.map((w) => w.closed)).toEqual([true, true, false]);
+            wins[2].fire('pagehide');
+            expect(document.getElementById('C')).toBeNull();
+        });
+    });
+
+    it('tears the stale copy down before the fresh one mounts, as inline', async () => {
+        const log = vi.fn();
+        hooks.H = {
+            mounted() {
+                log(`mounted:${this.el.dataset.n}`);
+            },
+            destroyed() {
+                log(`destroyed:${this.el.dataset.n}`);
+            },
+        };
+        const child = (/** @type {string} */ n) =>
+            `<div id="v" az-view az="V-0"><i az-hook="H" data-n="${n}"></i></div>`;
+        document.body.innerHTML = `<div id="root" az-view az="R-0"><!--az:R-1-->${child('a')}<!--/az--></div>`;
+        mountHooks(document);
+        // Inline, the slot's old content is torn down before the new one mounts.
+        applyOps([[OP.TEXT, 'root:R-1', child('b'), true]]);
+        expect(log.mock.calls.slice(1)).toEqual([['destroyed:a'], ['mounted:b']]);
+        log.mockClear();
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([[OP.TEXT, 'root:R-1', child('c'), true]]);
+
+        expect(log.mock.calls).toEqual([['destroyed:b'], ['mounted:c']]);
+        expect(pip.document.querySelector('#v i')?.dataset.n).toBe('c');
+        pip.fire('pagehide');
+        expect(log.mock.calls).toEqual([['destroyed:b'], ['mounted:c']]);
+        delete hooks.H;
+    });
+
+    it('leaves a live window view alone when a non-view element takes its id', async () => {
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        document.body.innerHTML =
+            '<div id="root" az-view az="R-0"><div id="v" az-view az="V-0" az-hook="H">v</div>' +
+            '<!--az:R-1--><!--/az--></div>';
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+
+        applyOps([[OP.TEXT, 'root:R-1', '<span id="v">label</span>', true]]);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
+        delete hooks.H;
+    });
+
+    it('tears the stale copy down before any of the re-rendered slot mounts', async () => {
+        const log = vi.fn();
+        hooks.A = {
+            mounted() {
+                log(`mount ${this.el.id}`);
+            },
+            destroyed() {
+                log(`destroy ${this.el.id}`);
+            },
+        };
+        const body = (/** @type {string} */ t) =>
+            `<i id="s" az-hook="A">${t}</i><div id="v" az-view az="V-0" az-hook="A">${t}</div>`;
+        document.body.innerHTML = `<div id="root" az-view az="R-0"><!--az:R-1-->${body('a')}<!--/az--></div>`;
+        mountHooks(document);
+        // Inline: the whole slot is torn down, then the whole slot mounts.
+        log.mockClear();
+        applyOps([[OP.TEXT, 'root:R-1', body('b'), true]]);
+        expect(log.mock.calls).toEqual([['destroy s'], ['destroy v'], ['mount s'], ['mount v']]);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        log.mockClear();
+
+        applyOps([[OP.TEXT, 'root:R-1', body('c'), true]]);
+
+        expect(log.mock.calls).toEqual([['destroy s'], ['destroy v'], ['mount s'], ['mount v']]);
+        pip.fire('pagehide');
+        delete hooks.A;
+    });
+
+    describe('stale copy teardown before mounting, on every path that mounts', () => {
+        /** @type {ReturnType<typeof vi.fn>} */
+        let log;
+        const view = (/** @type {string} */ n) =>
+            `<div id="v" az-view az="V-0" az-hook="A" data-n="${n}"></div>`;
+        /** @param {string} html */
+        const popWithin = async (html) => {
+            log = vi.fn();
+            hooks.A = {
+                mounted() {
+                    log(`mount ${this.el.dataset.n}`);
+                },
+                destroyed() {
+                    log(`destroy ${this.el.dataset.n}`);
+                },
+            };
+            document.body.innerHTML = html;
+            mountHooks(document);
+            const pip = makePipWindow();
+            stubPip(pip);
+            await requestPip('v');
+            log.mockClear();
+            return pip;
+        };
+        const settle = (/** @type {ReturnType<typeof makePipWindow>} */ pip) => {
+            pip.fire('pagehide');
+            delete hooks.A;
+        };
+
+        it('a resync replace', async () => {
+            const page = (/** @type {string} */ n) =>
+                `<div id="root" az-view az="R-0">${view(n)}</div>`;
+            const pip = await popWithin(page('a'));
+            applyOps([[OP.REPLACE, 'root', page('b')]], true);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+
+        it('a re-render of an element with no slot markers', async () => {
+            const pip = await popWithin(`<div id="root" az-view az="R-0">${view('a')}</div>`);
+            applyOps([[OP.TEXT, 'root:R-0', view('b'), true]]);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+
+        it('a stream insert', async () => {
+            const li = (/** @type {string} */ k, /** @type {string} */ n) =>
+                `<li az-key="${k}">${view(n)}</li>`;
+            const pip = await popWithin(
+                `<div id="root" az-view az="R-0"><ul az="1">${li('a', 'a')}</ul></div>`,
+            );
+            applyOps([
+                [OP.REMOVE, 'root:1', 'a'],
+                [OP.INSERT, 'root:1', 'b', -1, li('b', 'b')],
+            ]);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+
+        it('a list insert', async () => {
+            const pip = await popWithin(
+                `<div id="root" az-view az="R-0"><ul az="L"><!--az:L--><li az="0">${view('a')}</li><!--/az--></ul></div>`,
+            );
+            applyOps([
+                [
+                    OP.LIST_PATCH,
+                    'root:L',
+                    [
+                        [OP.REMOVE, 0],
+                        [OP.INSERT, 0, `<li az="0">${view('b')}</li>`],
+                    ],
+                ],
+            ]);
+            expect(log.mock.calls).toEqual([['destroy a'], ['mount b']]);
+            settle(pip);
+        });
+    });
+
+    it('leaves a live window view alone when unrelated content mounts', async () => {
+        // Another element under the same id elsewhere (not a re-render of the
+        // view) is no reason to tear the popped-out view down.
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        document.body.innerHTML =
+            '<div id="root" az-view az="R-0"><div id="v" az-view az="V-0" az-hook="H"></div>' +
+            '<p id="v">not the view</p><!--az:R-1--><!--/az--></div>';
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v');
+        expect(pip.document.getElementById('v')?.hasAttribute('az-view')).toBe(true);
+
+        applyOps([[OP.TEXT, 'root:R-1', '<span az-hook="H">x</span>', true]]);
+
+        expect(pip.closed).toBe(false);
+        expect(destroyed).not.toHaveBeenCalled();
+        pip.fire('pagehide');
         delete hooks.H;
     });
 });

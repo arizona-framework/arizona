@@ -1,5 +1,12 @@
 import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
-import { closeOrphanedPipWindows, findViewRoot } from './arizona-docs.js';
+import {
+    _pipWindows,
+    _viewDocs,
+    findViewRoot,
+    isStale,
+    reconcilePipWindows,
+    retireStaleCopies,
+} from './arizona-docs.js';
 import {
     anyHookDefs,
     destroyChildHooks,
@@ -115,10 +122,26 @@ function keepNodiff(oldNodes, frag, resync) {
     // An empty old slot (a conditional switching from `<<>>` to an az-nodiff element)
     // holds nothing to keep, and has no node to find its parent from.
     if (tops.length === 0) return NO_KEPT;
-    const fresh = nodiffByIdentity(Array.from(frag.childNodes), frag);
-    if (fresh.size === 0) return NO_KEPT;
-    const old = nodiffByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
+    /** @type {Set<Element>} */
     const kept = new Set();
+    carryNodiff(tops, Array.from(frag.childNodes), frag, resync, kept);
+    if (_pipWindows.size !== 0) carryPoppedNodiff(frag, resync, kept);
+    return kept.size === 0 ? NO_KEPT : kept;
+}
+
+/**
+ * Carry each az-nodiff element under `oldTops` into the range `newTops` (children
+ * of `newParent`) where a new one of the same identity stands, adding it to `kept`.
+ * @param {Node[]} oldTops
+ * @param {Node[]} newTops
+ * @param {ParentNode} newParent
+ * @param {boolean} resync
+ * @param {Set<Element>} kept
+ */
+function carryNodiff(oldTops, newTops, newParent, resync, kept) {
+    const fresh = nodiffByIdentity(newTops, newParent);
+    if (fresh.size === 0) return;
+    const old = nodiffByIdentity(oldTops, /** @type {ParentNode} */ (oldTops[0].parentNode));
     for (const [id, news] of fresh) {
         const olds = old.get(id);
         // Two az-nodiff elements under one name at one place are items the server could not
@@ -130,7 +153,28 @@ function keepNodiff(oldNodes, frag, resync) {
         news[0].replaceWith(o);
         kept.add(o);
     }
-    return kept;
+}
+
+/**
+ * A popped-out (PiP) view the re-render in `frag` renders again is not in the
+ * content being replaced -- its window holds it, and the fresh copy moves there
+ * once the batch ends (`reconcilePipWindows`). Carry its az-nodiff elements from
+ * the window's copy, so it keeps them exactly as an inline view would.
+ * @param {DocumentFragment} frag
+ * @param {boolean} resync
+ * @param {Set<Element>} kept
+ */
+function carryPoppedNodiff(frag, resync, kept) {
+    for (const entry of _pipWindows.values()) {
+        // A window an earlier op in the batch made stale had its copy retired,
+        // widgets included: carrying from it would hand the fresh view dead
+        // widgets, and placeholders that bring nested windows back to life.
+        if (isStale(entry)) continue;
+        const fresh = frag.getElementById(entry.id);
+        const stale = entry.win.document.getElementById(entry.id);
+        if (!fresh?.hasAttribute('az-view') || !stale || stale === fresh) continue;
+        carryNodiff([stale], [fresh], /** @type {ParentNode} */ (fresh.parentNode), resync, kept);
+    }
 }
 
 /**
@@ -268,11 +312,13 @@ function applyTextOp(el, az, val, isHtml) {
             console.warn(`[arizona] slot az:${az} has no closing marker; skipping`);
             return;
         }
+        retireStaleCopies();
         forEachElementBetweenMarkers(marker, (e) => mountHooksOutside(e, kept));
     } else {
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;
+            retireStaleCopies();
             mountHooks(el);
         } else {
             // In-place when the element holds exactly one text node: `textContent =`
@@ -352,7 +398,15 @@ export function applyOps(ops, resync = false) {
         // `MARKER_UNSAFE_OPS` deliberately does not cover. So re-check the marker
         // itself; a failed check falls through to a fresh resolve, which finds
         // nothing and warns exactly as an unresolvable target does.
-        if (hit?.el.isConnected && (!hit.marker || findMarker(hit.el, azOf(target)))) return hit;
+        // A hit in a PiP window is resolved afresh: a re-render later in the batch
+        // can render that view again elsewhere, leaving the window's copy stale
+        // but connected until the batch ends (see findViewRoot).
+        if (
+            hit?.el.isConnected &&
+            (_viewDocs.size === 0 || hit.el.ownerDocument === document) &&
+            (!hit.marker || findMarker(hit.el, azOf(target)))
+        )
+            return hit;
         const found = resolveOpTarget(target);
         if (found) els.set(target, found);
         return found;
@@ -407,10 +461,8 @@ export function applyOps(ops, resync = false) {
                     destroyHooks(el);
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);
+                    retireStaleCopies();
                     for (const e of added) mountHooksOutside(e, kept);
-                    // A popped-out (PiP) view whose placeholder just went with
-                    // the outgoing subtree is orphaned -- close its window.
-                    closeOrphanedPipWindows();
                     didReplace = true;
                     break;
                 }
@@ -442,6 +494,12 @@ export function applyOps(ops, resync = false) {
             console.error('[arizona] op %s failed; skipping', op[0], err);
         }
     }
+    // A popped-out (PiP) view's placeholder can go with any subtree this batch
+    // replaced, re-rendered or removed, an item patch's nested re-render
+    // included, and a navigate can re-key a popped-out root: bring the windows in
+    // line once, after every op. A resync is not a navigate -- it re-renders the
+    // same views.
+    reconcilePipWindows(didReplace && !resync);
     // A select the server left its value on holds options it could not mark: any it
     // rendered or changed in this batch take the value now, as SSR marked the page's.
     // noteChoices fills it, so it is not the `null` set above.
@@ -818,6 +876,7 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
     }
     if (item) {
         cachedKeyMap(streams, el, az)?.set(key, item);
+        retireStaleCopies();
         mountHooks(item);
     } else {
         console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
@@ -1087,6 +1146,7 @@ function applyListPatch(el, az, subOps) {
                 // but honoring idx keeps this correct for any sub-op ordering).
                 const ref = roots[sub[1]] ?? endMarker;
                 ref.before(frag);
+                retireStaleCopies();
                 for (const e of added) mountHooks(e);
                 childListChanged = true;
                 break;
