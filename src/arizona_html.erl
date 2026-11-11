@@ -40,6 +40,7 @@ identical to the previous inlined emission.
 -export([implied_attrs/2]).
 -export([selection_role/1]).
 -export([mark_choices/2]).
+-export([static_text/1]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -393,6 +394,15 @@ selection_role(Tag) ->
             {choice, #{value => ~"value", selected => ~"selected"}};
         _Other ->
             none
+    end.
+
+-spec static_text(binary()) -> {ok, binary()} | error.
+%% Static content is spliced as markup: its text is what the parser makes of it,
+%% references decoded, unless it opens a tag (or anything else `<` starts).
+static_text(Markup) ->
+    case binary:match(Markup, ~"<") of
+        nomatch -> {ok, decode_refs(Markup, text)};
+        _Tag -> error
     end.
 
 -spec mark_choices(iodata(), fun((binary()) -> boolean())) -> iodata().

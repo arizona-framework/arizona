@@ -106,9 +106,10 @@ compile time, and text holding a value (`{option, [], [?get(label)]}`, an `?each
 among them has no text to compare: `option_text_markup`, give the option a `value`). When every
 option is reached the select emits no `value`. An option the transform cannot see -- from a
 `?stateless`/`?stateful` component, a remote or non-inlined helper, a runtime value, or
-`?raw`/static markup (an option's static text holding a tag or reference included) -- still works.
-Each such child is wrapped (`arizona_template:choices/3`): the SSR render renders it in place and
-the backend marks `selected`, in that child's output alone, the options the value names
+`?raw`/static markup (an option's static text holding a tag included; a character reference in it is
+decoded at compile time through the backend's `static_text/1`, so such an option stays static) --
+still works. Each such child is wrapped (`arizona_template:choices/3`): the SSR render renders it in
+place and the backend marks `selected`, in that child's output alone, the options the value names
 (`arizona_renderer:mark_choices/2`; for HTML a tokenizer pass that skips attribute values, comments,
 raw text and `<template>` content, decodes every named character reference, and stops at what closes
 the select), so a page costs nothing more unless it holds such a select, and then only that child's

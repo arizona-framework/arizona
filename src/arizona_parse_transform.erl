@@ -7502,24 +7502,24 @@ rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
 choice_value(Backend, ValueName, Attrs, Rest) ->
     case take_attr(Backend, ValueName, Attrs) of
         {ok, {tuple, _, [_Name, {atom, _, false}]}, _Others} ->
-            choice_text(Rest);
+            choice_text(Backend, Rest);
         {ok, {tuple, _, [_Name, Value]}, _Others} ->
             {ok, local_inits(Value)};
         {ok, _Bare, _Others} ->
             {ok, ast_binary(<<>>)};
         error ->
-            choice_text(Rest)
+            choice_text(Backend, Rest)
     end.
 
-choice_text([]) ->
+choice_text(_Backend, []) ->
     {ok, ast_binary(<<>>)};
-choice_text([Children]) ->
+choice_text(Backend, [Children]) ->
     Items =
         case is_list_ast(Children) of
             true -> ast_list_to_list(Children);
             false -> [Children]
         end,
-    Parts = [text_part(I) || I <- Items],
+    Parts = [text_part(Backend, I) || I <- Items],
     case lists:member(markup, Parts) of
         true ->
             error;
@@ -7532,19 +7532,21 @@ choice_text([Children]) ->
             end
     end.
 
-%% What one child adds to an option's text. A static binary is spliced as markup,
-%% so it is text only when it holds no tag or reference; a literal list is escaped,
-%% so its text is what it says. A `?local` starts as its initial.
-text_part(Item) ->
+%% What one child adds to an option's text. A static binary is spliced as markup, so
+%% its text is what the backend reads from it (a tag in it makes it markup); a literal
+%% list is escaped, so its text is what it says. A `?local` starts as its initial.
+text_part(Backend, Item) ->
     case is_static_binary(Item) of
-        true ->
-            Text = binary_text(Item),
-            case binary:match(Text, [~"<", ~"&"]) of
-                nomatch -> {text, Text};
-                _Markup -> markup
-            end;
-        false ->
-            computed_text_part(Item)
+        true -> static_text_part(Backend, binary_text(Item));
+        false -> computed_text_part(Item)
+    end.
+
+%% The backend reads its own markup (arizona_renderer:static_text/1): the text it
+%% shows, character references decoded, or `error` when it holds a tag.
+static_text_part(Backend, Markup) ->
+    case erlang:function_exported(Backend, static_text, 1) andalso Backend:static_text(Markup) of
+        {ok, Text} -> {text, Text};
+        _Markup -> markup
     end.
 
 computed_text_part(Item) ->

@@ -50,7 +50,8 @@ and the select keeps its value for the client to apply after.
     authored_selected_is_refused/1,
     shadowing_parameter_is_renamed/1,
     shadowing_hoisted_read_is_refused/1,
-    static_value_selects_at_compile_time/1
+    static_value_selects_at_compile_time/1,
+    static_text_with_references_folds/1
 ]).
 
 all() ->
@@ -99,7 +100,8 @@ groups() ->
             authored_selected_is_refused,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
-            static_value_selects_at_compile_time
+            static_value_selects_at_compile_time,
+            static_text_with_references_folds
         ]}
     ].
 
@@ -714,7 +716,7 @@ opaque_child_is_marked_in_its_own_slot(Config) when is_list(Config) ->
         lists:enumerate([
             {"arizona_template:stateless(fun opts/1, #{o => [~\"a\", ~\"b\"]})", 1, 0},
             {"{option, [], [arizona_template:raw(~\"<b>b</b>\")]}", 1, 0},
-            {"{option, [], [~\"a &amp; b\"]}, {option, [], [~\"b\"]}", 1, 1},
+            {"{option, [], [~\"<b>b</b>\"]}, {option, [], [~\"c\"]}", 1, 0},
             {"{optgroup, [], [arizona_template:raw(~\"<option>b\")]}", 1, 0},
             {
                 "case arizona_template:get(more, Bindings) of "
@@ -847,6 +849,31 @@ static_value_selects_at_compile_time(Config) when is_list(Config) ->
         ~"<select><option value=\"a\"></option><option value=\"b\" selected></option></select>",
         iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
     ).
+
+%% Static option text is markup, so a reference in it is decoded as the parser decodes
+%% it, at compile time: the option is valued by that text and stays static, no slot.
+static_text_with_references_folds(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(sel_refs). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:target(arizona_html, {select, [{value, ~\"R&D\"}], "
+        "[{option, [], [~\"R&amp;D\"]}, {option, [], [<<\"Caf&eacute;\">>]}]}). "
+    ),
+    Tmpl = Mod:render(#{}),
+    ?assertEqual([], maps:get(d, Tmpl)),
+    ?assertEqual(
+        ~"<select><option selected>R&amp;D</option><option>Caf&eacute;</option></select>",
+        iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
+    ),
+    Dyn = compile_module(
+        select_src_mod(
+            "sel_refs_dyn", "{option, [], [<<\"Caf&eacute;\">>]}, {option, [], [~\"x\"]}"
+        )
+    ),
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Dyn:render(#{v => <<"Caf", 16#E9/utf8>>}))
+    ),
+    ?assertEqual(nomatch, binary:match(HTML, [~"<!--az", ~" value="]), HTML),
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>Caf&eacute;"), HTML).
 
 %% --------------------------------------------------------------------
 %% Helpers

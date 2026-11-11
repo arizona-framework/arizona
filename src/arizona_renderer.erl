@@ -259,7 +259,19 @@ Optional, and required of a backend that implements `selection_role/1`.
 -callback mark_choices(Fragment :: iodata(), Picked :: fun((binary()) -> boolean())) ->
     iodata().
 
--optional_callbacks([selection_role/1, mark_choices/2]).
+-doc """
+The text static markup of this backend shows, read at compile time: a choice valued by
+its text (`selection_role/1`) whose text is a static binary, which is spliced as markup,
+is valued by what it shows. `error` when the markup holds anything but text (a tag),
+which the parse transform then leaves for `mark_choices/2`. For HTML: the text with its
+character references decoded as the parser decodes them.
+
+Optional, beside `selection_role/1`; without it static text holding markup syntax is
+left for `mark_choices/2`.
+""".
+-callback static_text(Markup :: binary()) -> {ok, binary()} | error.
+
+-optional_callbacks([selection_role/1, mark_choices/2, static_text/1]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
