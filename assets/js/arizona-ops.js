@@ -1,5 +1,5 @@
 import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
-import { findViewRoot, reconcilePipWindows } from './arizona-docs.js';
+import { _viewDocs, findViewRoot, reconcilePipWindows } from './arizona-docs.js';
 import {
     anyHookDefs,
     destroyChildHooks,
@@ -352,7 +352,15 @@ export function applyOps(ops, resync = false) {
         // `MARKER_UNSAFE_OPS` deliberately does not cover. So re-check the marker
         // itself; a failed check falls through to a fresh resolve, which finds
         // nothing and warns exactly as an unresolvable target does.
-        if (hit?.el.isConnected && (!hit.marker || findMarker(hit.el, azOf(target)))) return hit;
+        // A hit in a PiP window is resolved afresh: a re-render later in the batch
+        // can render that view again elsewhere, leaving the window's copy stale
+        // but connected until the batch ends (see findViewRoot).
+        if (
+            hit?.el.isConnected &&
+            (_viewDocs.size === 0 || hit.el.ownerDocument === document) &&
+            (!hit.marker || findMarker(hit.el, azOf(target)))
+        )
+            return hit;
         const found = resolveOpTarget(target);
         if (found) els.set(target, found);
         return found;

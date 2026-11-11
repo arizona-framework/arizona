@@ -142,11 +142,19 @@ export function allDocs() {
 export function findViewRoot(viewId) {
     const el = document.getElementById(viewId);
     if (el || _viewDocs.size === 0) return el;
+    // Between a re-render that takes a popped-out view's placeholder and the
+    // batch's end (`reconcilePipWindows`), its window still holds the stale copy
+    // while the fresh one sits in another window: the fresh one wins.
+    const pip = _pipWindows.get(viewId);
+    const stale = pip && !pip.placeholder.isConnected ? pip.win.document : null;
+    let found = null;
     for (const doc of _viewDocs.values()) {
-        const found = doc.getElementById(viewId);
-        if (found) return found;
+        const e = doc.getElementById(viewId);
+        if (!e) continue;
+        if (doc !== stale) return e;
+        found = e;
     }
-    return null;
+    return found;
 }
 
 /**

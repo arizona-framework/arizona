@@ -895,4 +895,43 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(w2.document.querySelector('#P > #C')?.textContent).toBe('c2');
         w2.fire('pagehide');
     });
+
+    it('patches the fresh view, not the stale one in the window, later in the same batch', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="player" az-view az="0"><b az="1">x</b></div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([
+            [OP.SET_ATTR, 'player:1', 'class', 'one'],
+            [OP.TEXT, 'root:0', '<div id="player" az-view az="0"><b az="1">x</b></div>', true],
+            [OP.SET_ATTR, 'player:1', 'class', 'two'],
+        ]);
+
+        expect(pip.closed).toBe(false);
+        expect(pip.document.querySelector('#player b')?.getAttribute('class')).toBe('two');
+    });
+
+    it('patches the fresh child inside a popped-out parent later in the same batch', async () => {
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">' +
+            '<div id="P" az-view az="0"><div id="C" az-view az="0"><b az="1">c</b></div></div></div>';
+        const w1 = makePipWindow();
+        stubPip(w1);
+        await requestPip('C');
+        const w2 = makePipWindow();
+        stubPip(w2);
+        await requestPip('P');
+
+        applyOps([
+            [OP.TEXT, 'P:0', '<div id="C" az-view az="0"><b az="1">c</b></div>', true],
+            [OP.SET_ATTR, 'C:1', 'class', 'two'],
+        ]);
+
+        expect(w1.document.querySelector('#C b')?.getAttribute('class')).toBe('two');
+        w1.fire('pagehide');
+        w2.fire('pagehide');
+    });
 });
