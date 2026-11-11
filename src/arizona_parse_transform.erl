@@ -4853,7 +4853,7 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
     %% The descriptor reads the locals as written: a chooser's value is rewritten
     %% to one whole local (kept_value/4) whose affixes the client still needs.
     Attrs = maybe_inject_local_descriptor(
-        Backend, AuthoredAttrs, Attrs1, Children, RawKind, Line
+        Backend, Tag, AuthoredAttrs, Attrs1, Children, RawKind, Line
     ),
     State1 = State0#state{root = false, nodiff_mark = none},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
@@ -5307,9 +5307,9 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
 %% for the attribute context (the client reads it via getAttribute, which decodes
 %% the entities back). No separate escape here -- that would double-escape.
-maybe_inject_local_descriptor(Backend, LocalAttrs, Attrs, Children, RawKind, Line) ->
+maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind, Line) ->
     AttrLocals = collect_attr_locals(Backend, LocalAttrs, Line),
-    AttrAffixes = collect_attr_affixes(Backend, LocalAttrs, Line),
+    AttrAffixes = collect_attr_affixes(Backend, Tag, LocalAttrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
     case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
         false ->
@@ -5378,13 +5378,28 @@ collect_attr_locals(Backend, Attrs, Line) ->
     ]).
 
 %% The static prefix/suffix around an interpolated attribute local, keyed by
-%% attribute name -- the client recomposes `prefix ++ value ++ suffix` on set.
-collect_attr_affixes(Backend, Attrs, Line) ->
+%% attribute name -- the client recomposes `prefix ++ value ++ suffix` on set. A
+%% chooser's value hands over the static parts on either side as lists instead
+%% (`[[Before...], [After...]]`): under `multiple` each one is a pick of its own,
+%% and the client keeps them around the picks the local owns.
+collect_attr_affixes(Backend, Tag, Attrs, Line) ->
+    ChooserValue =
+        case selection_role(Backend, Tag) of
+            {chooser, #{value := ValueName}} -> attr_key(Backend, ValueName);
+            _None -> none
+        end,
     maps:from_list([
-        {extract_attr_name(Backend, NameAST), [Prefix, Suffix]}
+        {Name, local_affixes(attr_key(Backend, Name) =:= ChooserValue, ValueAST, Prefix, Suffix)}
      || {tuple, _, [NameAST, ValueAST]} <- Attrs,
-        {interp, _LC, Prefix, Suffix} <- [attr_local_spec(ValueAST, Line)]
+        {interp, _LC, Prefix, Suffix} <- [attr_local_spec(ValueAST, Line)],
+        Name <- [extract_attr_name(Backend, NameAST)]
     ]).
+
+local_affixes(false, _ValueAST, Prefix, Suffix) ->
+    [Prefix, Suffix];
+local_affixes(true, ValueAST, _Prefix, _Suffix) ->
+    {Before, After} = local_parts(ValueAST),
+    [Before, After].
 
 local_call({whole, LocalCall}) -> LocalCall;
 local_call({interp, LocalCall, _Prefix, _Suffix}) -> LocalCall.
@@ -7156,11 +7171,12 @@ chooser_sel(Backend, Tag, Attrs) ->
                     none;
                 {ok, Attr, Rest} ->
                     Value = chooser_value(Attr),
+                    Multiple = multiple_value(Backend, MultipleName, Rest),
                     Sel = #{
                         backend => Backend,
                         tag => Backend:name(Tag),
-                        value => compared_value(Backend, Value),
-                        multiple => multiple_value(Backend, MultipleName, Rest),
+                        value => compared_value(Backend, Value, Multiple),
+                        multiple => Multiple,
                         choice => Choice,
                         fold => false,
                         local => has_local(Value)
@@ -7181,10 +7197,13 @@ chooser_value(_Bare) -> ast_binary(<<>>).
 %% the markup it is and a raw any other part returns (a helper's) as the text it
 %% renders. Only the parts are marked, not assembled: under `multiple` each one is a
 %% pick, and arizona_template:attr_text/2 assembles them when it is one value. A
-%% `?local` stands for its initial, which renders as text.
+%% `?local` stands for its initial (local_inits/3); a choice's value is one text.
 compared_value(Backend, Value) ->
+    compared_value(Backend, Value, {atom, 0, false}).
+
+compared_value(Backend, Value, Multiple) ->
     case has_local(Value) of
-        true -> local_inits(Backend, Value);
+        true -> local_inits(Backend, Value, Multiple);
         false -> compared_parts(Backend, Value, is_list_ast(Value))
     end.
 
@@ -7218,14 +7237,36 @@ markup_ast(Backend, Raw) ->
         {atom, L, Backend}, {cons, L, Raw, {nil, L}}
     ]}.
 
-%% A `?local` stands for its initial value: a whole one for its init, an
-%% interpolated one for the one text it renders, its static parts included.
-local_inits(Backend, Value) ->
-    case attr_local_spec(Value, anno(Value)) of
-        none -> Value;
-        {whole, LocalCall} -> local_init(LocalCall);
-        {interp, LocalCall, Prefix, Suffix} -> local_text_ast(Backend, LocalCall, Prefix, Suffix)
+%% A `?local` stands for its initial value: a whole one for its init. One in a list
+%% with static parts is, without `multiple`, the one text it renders, those parts
+%% included, and with it a pick per part, the local its own
+%% (arizona_template:local_choice/5).
+local_inits(Backend, Value, Multiple) ->
+    case {attr_local_spec(Value, anno(Value)), Multiple} of
+        {none, _Multiple} ->
+            Value;
+        {{whole, LocalCall}, _Multiple} ->
+            local_init(LocalCall);
+        {{interp, LocalCall, Prefix, Suffix}, {atom, _, false}} ->
+            local_text_ast(Backend, LocalCall, Prefix, Suffix);
+        {{interp, LocalCall, _Prefix, _Suffix}, _Multiple} ->
+            L = anno(LocalCall),
+            {Before, After} = local_parts(Value),
+            {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, local_choice}}, [
+                {atom, L, Backend},
+                ast_list([ast_binary(P) || P <- Before]),
+                local_init(LocalCall),
+                ast_list([ast_binary(P) || P <- After]),
+                Multiple
+            ]}
     end.
+
+%% The static parts before and after the one `?local` of a list value, each as written.
+local_parts(Value) ->
+    {Before, [_Local | After]} = lists:splitwith(
+        fun(E) -> not is_local_marker(E) end, attr_value_parts(Value)
+    ),
+    {[extract_binary_value(E) || E <- Before], [extract_binary_value(E) || E <- After]}.
 
 %% The text an interpolated local's attribute holds (local_attr_interp_expr_ast/4):
 %% folded for a literal init, so the choices still fold at compile time, else

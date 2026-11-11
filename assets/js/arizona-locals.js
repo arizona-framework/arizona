@@ -1,4 +1,11 @@
-import { applyRemAttrOp, applySetAttrOp, isMultipleChooser, syncsProp } from './arizona-attrs.js';
+import {
+    applyRemAttrOp,
+    applySetAttrOp,
+    attrInput,
+    isChooserValue,
+    isMultipleChooser,
+    syncsProp,
+} from './arizona-attrs.js';
 import { resolveTarget } from './arizona-commands.js';
 import { allDocs, findViewRoot } from './arizona-docs.js';
 import { destroyChildHooks, destroyHooks, notifyUpdated } from './arizona-hooks.js';
@@ -23,10 +30,16 @@ function localMarkerAz(el, slot) {
 }
 
 /**
+ * One bound slot: `['content', slot]`, `['attr', name]`, or `['attr', name, prefix,
+ * suffix]` for an interpolated attribute (a select value's affixes are lists of
+ * static parts).
+ * @typedef {['content', string] | ['attr', string] | ['attr', string, string | string[], string | string[]]} LocalTarget
+ */
+
+/**
  * Write a value to one bound slot.
  * @param {Element} el
- * @param {string[]} target -- ['content', slot], ['attr', name], or
- *   ['attr', name, prefix, suffix] (interpolated attribute)
+ * @param {LocalTarget} target
  * @param {*} value
  */
 function writeLocalValue(el, target, value) {
@@ -51,21 +64,19 @@ function writeLocalValue(el, target, value) {
         return;
     }
     const name = target[1];
-    if (target.length === 4) {
+    if (target.length === 4 && isMultipleChooser(el, name)) {
+        // A select's value beside static parts (lists, see `forEachLocal`): under
+        // `multiple` each part is a pick, kept around the picks the local owns.
+        applySetAttrOp(el, name, [...target[2], ...ownPicks(value), ...target[3]]);
+    } else if (target.length === 4) {
         // Interpolated: recompose prefix + value + suffix (always a string attr). An
-        // absent value interpolates as empty, as a content slot renders it. On a
-        // multiple select that one text is one pick of the array its value holds.
-        const text = target[2] + (value == null ? '' : String(value)) + target[3];
-        applySetAttrOp(el, name, isMultipleChooser(el, name) ? [text] : text);
+        // absent value interpolates as empty, as a content slot renders it.
+        const text = affix(target[2]) + (value == null ? '' : String(value)) + affix(target[3]);
+        applySetAttrOp(el, name, text);
     } else if (isMultipleChooser(el, name) && value !== false && value != null) {
         // The JSON array of the texts it picks, as the server renders it: a list holds
         // the picks, anything else is one, a string reading as JSON included.
-        const picks = Array.isArray(value) ? value : [value];
-        applySetAttrOp(
-            el,
-            name,
-            picks.map((p) => (p === true ? '' : String(p))),
-        );
+        applySetAttrOp(el, name, ownPicks(value));
     } else if (value === false || value == null) {
         // Through the canonical writer, like a set: after user interaction the
         // dirty value/checkedness flags detach `.checked`/`.selected`/`.value` from
@@ -82,8 +93,7 @@ function writeLocalValue(el, target, value) {
 /**
  * Read the current value of one bound slot from the DOM.
  * @param {Element} el
- * @param {string[]} target -- ['content', slot], ['attr', name], or
- *   ['attr', name, prefix, suffix] (interpolated attribute)
+ * @param {LocalTarget} target
  * @returns {*}
  */
 function readLocalValue(el, target) {
@@ -99,16 +109,30 @@ function readLocalValue(el, target) {
         return text;
     }
     const name = target[1];
-    if (target.length === 4) {
-        // Interpolated: strip the known prefix/suffix to recover the local value (on a
-        // multiple select, from the one pick its value holds).
-        let v = el.getAttribute(name) ?? '';
-        if (isMultipleChooser(el, name)) v = onePick(v);
-        return v.slice(target[2].length, v.length - target[3].length);
+    // A multiple select holds a list: the values of the options the user sees picked,
+    // but those a static part beside the local names -- they are the part's.
+    if (isMultipleChooser(el, name)) {
+        const fixed = target.length === 4 ? [...target[2], ...target[3]].map(attrInput) : [];
+        return Array.from(
+            /** @type {HTMLSelectElement} */ (el).selectedOptions,
+            (o) => o.value,
+        ).filter((v) => !fixed.includes(v));
     }
-    // A multiple select holds a list: the values of the options the user sees picked.
-    if (isMultipleChooser(el, name))
-        return Array.from(/** @type {HTMLSelectElement} */ (el).selectedOptions, (o) => o.value);
+    if (target.length === 4) {
+        // Interpolated: strip the known prefix/suffix to recover the local value. A
+        // select's is the option the user sees picked; one the affixes cannot compose
+        // holds no value of the local's.
+        const pre = affix(target[2]);
+        const suf = affix(target[3]);
+        if (isChooserValue(el, name)) {
+            const v = /** @type {HTMLSelectElement} */ (el).value;
+            const fits =
+                v.length >= pre.length + suf.length && v.startsWith(pre) && v.endsWith(suf);
+            return fits ? v.slice(pre.length, v.length - suf.length) : null;
+        }
+        const v = el.getAttribute(name) ?? '';
+        return v.slice(pre.length, v.length - suf.length);
+    }
     // The form-control properties hold what the user sees once they interacted
     // (the attributes are only the defaults by then) -- the same three
     // applySetAttrOp/applyRemAttrOp keep in step on a write.
@@ -119,24 +143,31 @@ function readLocalValue(el, target) {
 }
 
 /**
- * The one pick a multiple select's value holds (a JSON array, see `writeLocalValue`).
- * @param {string} raw
+ * The picks a local value owns in a multiple select's JSON array, as the server reads
+ * them: a list is its picks, `false`/`null` none, anything else one; `true` renders a
+ * bare attribute, the empty text.
+ * @param {*} value
+ * @returns {string[]}
+ */
+function ownPicks(value) {
+    if (value === false || value == null) return [];
+    return (Array.isArray(value) ? value : [value]).map((p) => (p === true ? '' : String(p)));
+}
+
+/**
+ * An affix as one text: a select value's static parts arrive as a list (one pick each
+ * under `multiple`), any other attribute's as the text itself.
+ * @param {string | string[]} a
  * @returns {string}
  */
-function onePick(raw) {
-    try {
-        const picks = JSON.parse(raw);
-        if (Array.isArray(picks)) return picks.length ? String(picks[0]) : '';
-    } catch {
-        // Not an array: the text itself, as the select reads it.
-    }
-    return raw;
+function affix(a) {
+    return Array.isArray(a) ? a.join('') : a;
 }
 
 /**
  * A parsed `az-local` descriptor: content slots, attribute bindings, and
- * interpolated-attribute affixes.
- * @typedef {{c?: Object<string, string>, a?: Object<string, string>, ap?: Object<string, [string, string]>}} LocalDesc
+ * interpolated-attribute affixes (a select value's as lists of static parts).
+ * @typedef {{c?: Object<string, string>, a?: Object<string, string>, ap?: Object<string, [string | string[], string | string[]]>}} LocalDesc
  */
 
 // Parsed `az-local` descriptors, cached per element. NOT a persistent index --
@@ -156,7 +187,7 @@ const _localDescs = new WeakMap();
  * @param {Element|Document} root
  * @param {string} key
  * @param {string|null} viewId
- * @param {(el: Element, target: string[]) => boolean|void} fn
+ * @param {(el: Element, target: LocalTarget) => boolean|void} fn
  * @returns {boolean}
  */
 function forEachLocal(root, key, viewId, fn) {
@@ -182,6 +213,7 @@ function forEachLocal(root, key, viewId, fn) {
             for (const [attr, k] of Object.entries(parsed.a)) {
                 if (k === key) {
                     const aff = parsed.ap?.[attr];
+                    /** @type {LocalTarget} */
                     const t = aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr];
                     if (fn(el, t) === true) return true;
                 }

@@ -3808,7 +3808,8 @@ describe('?local -- a select value', () => {
         return /** @type {HTMLSelectElement} */ (document.querySelector('select'));
     }
     const whole = '{"a":{"value":"k"}}';
-    const interp = '{"a":{"value":"k"},"ap":{"value":["a",""]}}';
+    const interp = '{"a":{"value":"k"},"ap":{"value":[["a"],[]]}}';
+    const parts = '{"a":{"value":"k"},"ap":{"value":[["a"],["ac"]]}}';
 
     // Under `multiple` the value is the JSON array of the texts it picks, the form the
     // server renders: a list is its picks, anything else one pick.
@@ -3838,24 +3839,75 @@ describe('?local -- a select value', () => {
         expect(get('v', 'k')).toEqual(['a', 'c', 'ac']);
     });
 
-    // An interpolated local is one text, its affixes included: one pick.
-    it('writes an interpolated multiple select value as one pick', () => {
-        const sel = selectView(`multiple value='["ac"]'`, interp);
+    // In a list under `multiple` every static part is a pick, and the local owns its
+    // own: a `set` replaces those and keeps the static ones.
+    it('writes a local beside static parts as the picks it owns', () => {
+        const sel = selectView(`multiple value='["a","c","ac"]'`, parts);
         applyChoosers(document);
-        expect(picked(sel)).toEqual(['ac']);
-        expect(get('v', 'k')).toBe('c');
+        expect(picked(sel)).toEqual(['a', 'c', 'ac']);
         set('v', 'k', '');
-        expect(sel.getAttribute('value')).toBe('["a"]');
-        expect(picked(sel)).toEqual(['a']);
-        expect(get('v', 'k')).toBe('');
+        expect(sel.getAttribute('value')).toBe('["a","","ac"]');
+        expect(picked(sel)).toEqual(['a', 'ac']);
+        set('v', 'k', ['c', 'c']);
+        expect(sel.getAttribute('value')).toBe('["a","c","c","ac"]');
+        set('v', 'k', false);
+        expect(sel.getAttribute('value')).toBe('["a","ac"]');
+        set('v', 'k', null);
+        expect(sel.getAttribute('value')).toBe('["a","ac"]');
+        set('v', 'k', 1);
+        expect(sel.getAttribute('value')).toBe('["a","1","ac"]');
+        // `true` renders a bare attribute, the empty text, as the server reads it.
+        set('v', 'k', true);
+        expect(sel.getAttribute('value')).toBe('["a","","ac"]');
+        set('v', 'k', [true, 'c']);
+        expect(sel.getAttribute('value')).toBe('["a","","c","ac"]');
     });
 
+    it('writes a whole multiple local true as the empty pick', () => {
+        const sel = selectView(`multiple value='["a"]'`, whole);
+        set('v', 'k', true);
+        expect(sel.getAttribute('value')).toBe('[""]');
+        set('v', 'k', [true]);
+        expect(sel.getAttribute('value')).toBe('[""]');
+    });
+
+    // `get` reads the picks the local owns: the selected values but those a static part
+    // names, the user's own picks included.
+    it('reads a local beside static parts as the selected values it owns', () => {
+        const sel = selectView(`multiple value='["a","c"]'`, interp);
+        applyChoosers(document);
+        expect(get('v', 'k')).toEqual(['c']);
+        sel.options[2].selected = true;
+        expect(get('v', 'k')).toEqual(['c', 'ac']);
+        sel.options[0].selected = false;
+        sel.options[1].selected = false;
+        expect(get('v', 'k')).toEqual(['ac']);
+    });
+
+    // Without `multiple` the list is one text: the parts are the affixes.
     it('writes a single select value as its text', () => {
         const sel = selectView('value="ac"', interp);
         set('v', 'k', '');
         expect(sel.getAttribute('value')).toBe('a');
         expect(sel.value).toBe('a');
         expect(get('v', 'k')).toBe('');
+    });
+
+    // `get` reads what the user selected, its affixes stripped; a selection the
+    // affixes cannot compose is no value of the local's.
+    it('reads a single select value from the selection', () => {
+        setupView(
+            'v',
+            `<select az="0" az-local='${parts}' value="acac">` +
+                '<option>a</option><option>acac</option><option>axac</option></select>',
+        );
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector('select'));
+        applyChoosers(document);
+        expect(get('v', 'k')).toBe('c');
+        sel.options[2].selected = true;
+        expect(get('v', 'k')).toBe('x');
+        sel.options[0].selected = true;
+        expect(get('v', 'k')).toBe(null);
     });
 });
 

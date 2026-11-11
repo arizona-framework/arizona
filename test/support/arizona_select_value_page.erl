@@ -81,7 +81,7 @@ render(Bindings) ->
             {button, [{class, ~"set-many"}, {az_click, arizona_js:set(many, [~"c", ~"ac"])}], [
                 ~"set many"
             ]},
-            {button, [{class, ~"set-tail"}, {az_click, arizona_js:set(tail, ~"")}], [
+            {button, [{class, ~"set-tail"}, {az_click, arizona_js:set(tail, [~"ac"])}], [
                 ~"set tail"
             ]},
             {select, [{class, ~"local-many"}, multiple, {value, ?local(many, [~"a", ~"c"])}], [

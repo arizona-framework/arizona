@@ -1095,12 +1095,17 @@ SSR render and diff-skip reuse the whole-value attribute path unchanged.
 
 A `?local` `value` on a `<select>` is the one place the rendered attribute is not the local's
 text as written: the transform rewrites it to one whole local whose init is
-`arizona_template:chooser_value/3` of the value it stands for (the init, or an interpolated
-local's composed text), so under `multiple` it renders the JSON array of picks like any kept
-select value, and an interpolated local is one pick. The descriptor is built from the
-attributes as written, so the client still has the affixes; its writer gives a multiple
-select's value the same JSON form (a list is the picks, anything else one), and `get` reads
-the selected values as a list.
+`arizona_template:chooser_value/3` of the value it stands for, so under `multiple` it renders
+the JSON array of picks like any kept select value. A local in a list with static parts stands
+for what any select value's list does: without `multiple` the one composed text, under it a
+pick per static part with the local's own picks in its place
+(`arizona_template:local_choice/5`, deciding at render when `multiple` is a runtime value).
+The descriptor is built from the attributes as written; for a select value its `ap` entry
+holds the static parts as lists (`[[Before...], [After...]]`), so the client can rebuild the
+array around the picks a `set` gives the local (a list is the picks, `false`/`null` none,
+anything else one), or join them as affixes without `multiple`. `get` reads the live
+selection: under `multiple` the selected values but those a static part names, else the
+selected value with the affixes stripped.
 
 The options under such a select are marked from the initial where they render, but their
 `selected` compiles as a browser-owned slot (the same `az_local` map a `?local` attribute is,

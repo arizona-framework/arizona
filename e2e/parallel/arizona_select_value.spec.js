@@ -89,9 +89,10 @@ test.describe('select value', () => {
         ).toEqual(['d']);
     });
 
-    // A `?local` value under `multiple`: a whole one holds the list of picks, an
-    // interpolated one is one pick, its static part included. The page loads on them,
-    // the client reads the value the same way at start, and a `set` moves them.
+    // A `?local` value under `multiple`: a whole one holds the list of picks, and in a
+    // list each static part is a pick and the local owns its own. The page loads on
+    // them, the client reads the value the same way at start, and a `set` moves the
+    // picks the local owns, the static ones staying.
     test('a local multiple value loads and moves on the options it names', async ({ page }) => {
         const picked = (cls) =>
             page.evaluate(
@@ -104,11 +105,11 @@ test.describe('select value', () => {
         await page.goto('/select-value');
         await wsReady(page);
         expect(await picked('local-many')).toEqual(['a', 'c']);
-        expect(await picked('local-tail')).toEqual(['ac']);
+        expect(await picked('local-tail')).toEqual(['a', 'c']);
         await page.locator('#select-value .set-many').click();
         expect(await picked('local-many')).toEqual(['c', 'ac']);
         await page.locator('#select-value .set-tail').click();
-        expect(await picked('local-tail')).toEqual(['a']);
+        expect(await picked('local-tail')).toEqual(['a', 'ac']);
     });
 
     // A `?local` value is the client's even when its initial came from a binding: the

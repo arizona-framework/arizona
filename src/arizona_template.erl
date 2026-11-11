@@ -55,6 +55,7 @@ render(Bindings) ->
 -export([track/1]).
 -export([chosen/4]).
 -export([chooser_value/3]).
+-export([local_choice/5]).
 -export([choice_text/2]).
 -export([choices/3]).
 -export([picks/3]).
@@ -120,6 +121,9 @@ render(Bindings) ->
 %% Emitted by the parse transform as the `value` a select keeps when it holds an option
 %% the transform cannot mark.
 -ignore_xref([chooser_value/3]).
+%% Emitted by the parse transform as the value a `?local` in a list stands for on a
+%% select whose `multiple` it cannot decide at compile time.
+-ignore_xref([local_choice/5]).
 %% Emitted by the parse transform as the value of an option without one whose text
 %% holds a runtime value, under a valued select.
 -ignore_xref([choice_text/2]).
@@ -542,6 +546,29 @@ chooser_value(Backend, Value, false) ->
     attr_text(Backend, Value);
 chooser_value(Backend, Value, Multiple) ->
     iolist_to_binary(json:encode(picks(Backend, Value, Multiple))).
+
+-doc """
+The value a chooser's `?local` written in a list with static parts stands for, as
+`chosen/4` and `chooser_value/3` compare it. Without `Multiple` (`false`) the list is one
+text: the `Before` parts, the local's `Init` and the `After` parts, assembled as the
+attribute renders them. With it (anything but `false`, as for `chosen/4`) every part is a
+pick: each static part one, and the local its own -- the elements of a list `Init`, none
+for `false`, else `Init` itself.
+""".
+-spec local_choice(Backend, Before, Init, After, Multiple) -> binary() | [term()] when
+    Backend :: module(),
+    Before :: [binary()],
+    Init :: term(),
+    After :: [binary()],
+    Multiple :: term().
+local_choice(Backend, Before, Init, After, false) ->
+    attr_text(Backend, [iolist_to_binary(Before), to_bin(Init), iolist_to_binary(After)]);
+local_choice(_Backend, Before, Init, After, _Multiple) ->
+    Before ++ local_picks(Init) ++ After.
+
+local_picks(false) -> [];
+local_picks(Picks) when is_list(Picks) -> Picks;
+local_picks(Pick) -> [Pick].
 
 -doc """
 The texts of the values a chooser's `Value` picks, compared as `chosen/4` compares

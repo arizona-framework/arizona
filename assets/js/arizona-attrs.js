@@ -85,7 +85,7 @@ export function applyRemAttrOp(el, name) {
  * @param {string} name
  * @returns {boolean}
  */
-function isChooserValue(el, name) {
+export function isChooserValue(el, name) {
     return (
         name === 'value' &&
         el.localName === 'select' &&
@@ -172,7 +172,7 @@ function chooserPicks(sel, raw) {
  * @param {string} text
  * @returns {string}
  */
-function attrInput(text) {
+export function attrInput(text) {
     return text.replace(/\r\n?/g, '\n').replace(/\0/g, '\uFFFD');
 }
 
