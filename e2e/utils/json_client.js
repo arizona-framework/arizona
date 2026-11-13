@@ -235,9 +235,11 @@ export class NativeClient {
 
     // pushEvent, resolved once the server has handled the event: the frame
     // carries a reply ref, which the server answers with exactly one frame even
-    // when the event changes nothing (and so would otherwise get no reply). A
-    // ref that never comes back means the frame was lost or refused: the promise
-    // rejects on the timeout, or on a close.
+    // when the event changes nothing (and so would otherwise get no reply), or
+    // when it could not read the frame (answered alone, the frame dropped). The
+    // pushes queued ahead of the reply arrive just before it, in a frame of their
+    // own with no ref. A ref that never comes back means the frame was lost: the
+    // promise rejects on the timeout, or on a close.
     pushEventAwait(event, payload = {}, viewId = this.viewId, timeoutMs = 2000) {
         return this._sendAwait([viewId, event, payload], event, timeoutMs);
     }

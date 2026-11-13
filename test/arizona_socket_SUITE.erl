@@ -96,6 +96,7 @@
 -export([ref_rides_event_reply_after_deferred_resync/1]).
 -export([unreadable_frame_with_ref_dropped/1]).
 -export([ref_leads_every_reply_shape/1]).
+-export([ref_leads_every_reply_field/1]).
 -export([ref_rides_halt_full_loads/1]).
 -export([ref_rides_flash_replay/1]).
 -export([ref_rides_patch_that_replaces_the_view/1]).
@@ -189,6 +190,7 @@ all() ->
         ref_rides_event_reply_after_deferred_resync,
         unreadable_frame_with_ref_dropped,
         ref_leads_every_reply_shape,
+        ref_leads_every_reply_field,
         ref_rides_halt_full_loads,
         ref_rides_flash_replay,
         ref_rides_patch_that_replaces_the_view,
@@ -2116,21 +2118,63 @@ ref_rides_event_reply_after_deferred_resync(Config) when is_list(Config) ->
     ?assertNotMatch(#{~"r" := _}, decode(Resync)),
     ?assertEqual(#{~"r" => 11}, decode(Reply)).
 
-%% A frame the server cannot read is dropped whole, ref included, so the client's
-%% wait for it ends in a timeout -- the frame was refused, not handled.
+%% A frame the server cannot read is dropped, but a valid ref in the place a ref
+%% goes is answered, alone: the client waits on it (a page-swap window, a
+%% server-owned control) and must never wait forever. A ref no client could have
+%% sent intact, or none, answers nothing.
 unreadable_frame_with_ref_dropped(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
-    Frames = [
+    Answered = [
         iolist_to_binary(json:encode([~"counter", ~"inc", ~"not-a-map", 12])),
+        iolist_to_binary(json:encode([~"navigate", #{~"path" => ~"/x"}, 12])),
+        iolist_to_binary(json:encode([~"patch", 7, 12]))
+    ],
+    [
+        ?assertMatch({reply, _, _}, arizona_socket:handle_in(F, Socket0), F)
+     || F <- Answered
+    ],
+    [
+        ?assertEqual(
+            #{~"r" => 12}, decode(element(2, arizona_socket:handle_in(F, Socket0))), F
+        )
+     || F <- Answered
+    ],
+    Dropped = [
         iolist_to_binary(json:encode([~"counter", ~"inc", #{}, ~"12"])),
         %% Out of range: no client could have sent it intact.
         iolist_to_binary(json:encode([~"counter", ~"inc", #{}, -1])),
         iolist_to_binary(json:encode([~"counter", ~"inc", #{}, 1 bsl 53])),
         iolist_to_binary(json:encode([~"counter", ~"inc", #{}, 1.5])),
-        iolist_to_binary(json:encode([~"navigate", #{~"path" => ~"/x"}, 12]))
+        %% No ref: a three-element event frame ends in its payload.
+        iolist_to_binary(json:encode([~"counter", ~"inc", 12])),
+        iolist_to_binary(json:encode(#{~"r" => 12}))
     ],
-    [?assertMatch({ok, _}, arizona_socket:handle_in(F, Socket0)) || F <- Frames].
+    [?assertMatch({ok, _}, arizona_socket:handle_in(F, Socket0), F) || F <- Dropped].
+
+%% The ref is spliced into the front of whatever reply the frame produced, so it
+%% must stay valid JSON beside every combination of ops, effects and names a reply
+%% can carry.
+ref_leads_every_reply_field(Config) when is_list(Config) ->
+    Cases = [
+        {~"all", [~"a", ~"e", ~"o", ~"r"]},
+        {~"names", [~"a", ~"o", ~"r"]},
+        {~"ops_effects", [~"e", ~"o", ~"r"]},
+        {~"effects", [~"e", ~"r"]},
+        {~"ops", [~"o", ~"r"]}
+    ],
+    lists:foreach(
+        fun({Event, Keys}) ->
+            Req = arizona_req_test_adapter:new(),
+            {reply, _, Socket} = arizona_socket:init(arizona_ref_shapes, #{}, Req, #{}),
+            {reply, Frame, _} =
+                arizona_socket:handle_in(event_frame(~"shapes", Event, 5), Socket),
+            Bin = iolist_to_binary(Frame),
+            ?assertMatch(<<"{\"r\":5,", _/binary>>, Bin, Event),
+            ?assertEqual(Keys, lists:sort(maps:keys(json:decode(Bin))), Event)
+        end,
+        Cases
+    ).
 
 %% Pushes queued ahead of an event ship in their own frame, whatever combination
 %% of ops, effects and names they carry, and never take the ref: it answers the

@@ -33,9 +33,14 @@ answered by exactly one frame carrying `~"r" => Ref`:
 merged into its reply when it has one, alone (`{"r":Ref}`) when it changed
 nothing or named a view that no longer exists. Replies keep frame order, and a
 frame without the `~"r"` key (a server push, the reply to an untagged frame)
-answers no ref. A frame the server cannot read is dropped as ever, ref and all,
-so a ref that never comes back means the frame was lost or refused; a close
-fails every ref still pending.
+answers no ref. The pushes the live process sent before an event or patch reply
+arrive just before it, in a frame of their own with no `~"r"`: a client that
+tells a reply's own changes from a server push by the ref sees them as pushes. A
+frame the server cannot read -- not JSON, or of no shape it handles -- is dropped,
+but a valid ref where a ref goes (the trailing element of an event or
+navigate/patch frame) is still answered, alone, so a client never waits on it
+forever; a ref that never comes back means the frame was lost, and a close fails
+every ref still pending.
 
 ## Exit handling
 
@@ -343,7 +348,8 @@ Recognized payloads:
   frame carrying it back (see "Wire protocol" above)
 
 Unrecognized payloads, and frames whose body is not valid JSON, are
-silently dropped (a single bad frame must not crash the socket). An event
+dropped (a single bad frame must not crash the socket); a valid reply ref where
+a ref goes is answered alone, so the client is not left waiting. An event
 frame whose `Payload` is not a map is dropped the same way, so a crafted
 non-map payload can't reach a `#{...}`-matching handler and crash it.
 """.
@@ -409,8 +415,8 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
             is_binary(Event), is_map(Payload), ?is_ref(Ref)
         ->
             answer(Ref, handle_event(Target, Event, Payload, RootViewId, Socket));
-        _ ->
-            {ok, Socket}
+        Unrecognized ->
+            answer_unrecognized(Unrecognized, Socket)
     catch
         %% Malformed JSON (e.g. a scanner/probe, a corrupted or fragmented
         %% frame, a stale client). `json:decode/1` raises `error:{invalid_byte,
@@ -432,6 +438,16 @@ answer_unread(JSON, Socket) ->
 
 answer_ref(Ref, Socket) when ?is_ref(Ref) -> answer(Ref, {ok, Socket});
 answer_ref(_Ref, Socket) -> {ok, Socket}.
+
+%% A frame of no shape this socket handles, with a ref where a ref goes (third of a
+%% navigate/patch, fourth of an event): dropped, its ref answered, for the same
+%% reason as answer_unread/2.
+answer_unrecognized([Verb, _Nav, Ref], Socket) when Verb =:= ~"navigate"; Verb =:= ~"patch" ->
+    answer_ref(Ref, Socket);
+answer_unrecognized([_Target, _Event, _Payload, Ref], Socket) ->
+    answer_ref(Ref, Socket);
+answer_unrecognized(_Frame, Socket) ->
+    {ok, Socket}.
 
 -doc """
 Returns the live process pid backing this socket, or `undefined` if
