@@ -4501,7 +4501,9 @@ az_ctl_skips_unrendered_controls(Config) when is_list(Config) ->
             {"pt_ctl_nodiff", "{'div', ['az-nodiff'], [{input, [{value, " ++ Get("v") ++ "}]}]}"},
             {"pt_ctl_div", "{'div', [{value, " ++ Get("v") ++ "}], [" ++ Get("v") ++ "]}"},
             {"pt_ctl_li", "{li, [{value, " ++ Get("v") ++ "}], []}"},
-            {"pt_ctl_static_ta", "{textarea, [{class, " ++ Get("v") ++ "}], [<<\"t\">>]}"}
+            {"pt_ctl_static_ta", "{textarea, [{class, " ++ Get("v") ++ "}], [<<\"t\">>]}"},
+            %% A textarea has no value attribute: its content is its default.
+            {"pt_ctl_ta_value", "{textarea, [{value, " ++ Get("v") ++ "}], []}"}
         ]
     ),
     ?assertEqual(false, erlang:function_exported(arizona_json, controlled, 2)),

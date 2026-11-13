@@ -294,9 +294,10 @@ written, as an escaped one does.
 -doc """
 Whether `Tag`'s `{attr, Name}` (`Name` as `name/1` spells it) or its `content` is a
 form control's default whose live state the user edits apart from it: HTML's `value`
-on `input`/`select`/`textarea`, `checked` on `input`, `selected` on `option`, and
-`textarea` content. Once the user edits such a control, a render of the default no
-longer shows, so the client must sync the live state itself.
+on `input`/`select`, `checked` on `input`, `selected` on `option`, and `textarea`
+content (a textarea has no `value` attribute: its content is its default). Once the
+user edits such a control, a render of the default no longer shows, so the client
+must sync the live state itself.
 
 The parse transform marks an element holding a diffable dynamic for one of them with
 the attribute `az-ctl` (`attr/2`), after the author's attributes, its value the parts

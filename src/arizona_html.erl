@@ -413,7 +413,6 @@ controlled_part(Tag, {attr, Name}) ->
         {~"input", ~"value"} -> true;
         {~"input", ~"checked"} -> true;
         {~"select", ~"value"} -> true;
-        {~"textarea", ~"value"} -> true;
         {~"option", ~"selected"} -> true;
         {_Tag, _Name} -> false
     end;
