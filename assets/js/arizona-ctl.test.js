@@ -391,3 +391,94 @@ describe('server-owned controls: unsent typing is not clobbered', () => {
         expect(el.value).toBe('5');
     });
 });
+
+describe('server-owned controls: a push during an in-flight edit', () => {
+    it('a push past which the user typed wins when focus leaves', async () => {
+        await connect(`<input az="0" value="0" ${CHANGE} az-ctl />`);
+        const el = document.querySelector('input');
+        el.focus();
+        edit(el, (e) => {
+            e.value = '1';
+        });
+        const r1 = mock.lastRef();
+        el.value = '12';
+        mock.reply([setAttr(0, 'value', '9')], null);
+        mock.reply(null, r1);
+        expect(el.value).toBe('12');
+        el.blur();
+        expect(el.value).toBe('9');
+    });
+
+    it('the reply echoing the sent value keeps the typing past it for its own event', async () => {
+        await connect(`<input az="0" value="0" ${CHANGE} az-ctl />`);
+        const el = document.querySelector('input');
+        el.focus();
+        edit(el, (e) => {
+            e.value = '1';
+        });
+        const r1 = mock.lastRef();
+        el.value = '12';
+        mock.reply([setAttr(0, 'value', '1')], r1);
+        expect(el.value).toBe('12');
+        el.blur();
+        expect(el.value).toBe('12');
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(mock.sent().at(-1).slice(0, 3)).toEqual(['page', 'set', { value: '12' }]);
+    });
+
+    it('a push that a settled reply already showed is not replayed on a later blur', async () => {
+        await connect(`<input az="0" value="0" ${CHANGE} az-ctl />`);
+        const el = document.querySelector('input');
+        el.focus();
+        edit(el, (e) => {
+            e.value = '1';
+        });
+        const r1 = mock.lastRef();
+        mock.reply([setAttr(0, 'value', '9')], null);
+        mock.reply(null, r1);
+        expect(el.value).toBe('9');
+        el.value = '95';
+        el.blur();
+        expect(el.value).toBe('95');
+    });
+});
+
+describe('server-owned controls: textarea content', () => {
+    it('a content update shows on a textarea the user edited and left', async () => {
+        await connect(`<textarea az="0" az-ctl>a</textarea>`);
+        const el = document.querySelector('textarea');
+        el.value = 'user';
+        mock.reply([[mod.OP.TEXT, 'page:0', 'B']], null);
+        expect(el.value).toBe('B');
+    });
+
+    it('a content update holds off unsent typing until focus leaves', async () => {
+        await connect(`<textarea az="0" az-ctl>a</textarea>`);
+        const el = document.querySelector('textarea');
+        el.focus();
+        el.value = 'user';
+        mock.reply([[mod.OP.TEXT, 'page:0', 'B']], null);
+        expect(el.value).toBe('user');
+        expect(el.defaultValue).toBe('B');
+        el.blur();
+        expect(el.value).toBe('B');
+    });
+
+    it('a content update during an in-flight edit is the reply when it answers it', async () => {
+        await connect(`<textarea az="0" ${CHANGE} az-ctl>a</textarea>`);
+        const el = document.querySelector('textarea');
+        edit(el, (e) => {
+            e.value = 'hello ';
+        });
+        mock.reply([[mod.OP.TEXT, 'page:0', 'hello']], mock.lastRef());
+        expect(el.value).toBe('hello');
+    });
+
+    it('an unmarked textarea keeps the user text, as before', async () => {
+        await connect(`<textarea az="0">a</textarea>`);
+        const el = document.querySelector('textarea');
+        el.value = 'user';
+        mock.reply([[mod.OP.TEXT, 'page:0', 'B']], null);
+        expect(el.value).toBe('user');
+    });
+});

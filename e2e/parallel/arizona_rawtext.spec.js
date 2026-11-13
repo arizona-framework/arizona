@@ -72,9 +72,11 @@ test.describe('raw-text slot patching', () => {
             };
         });
         console.log('AFTER TYPING + PATCH:', JSON.stringify(after, null, 2));
-        // Deliberately no assertion on `value` -- this test EXISTS to report what
-        // actually happens to a dirty textarea.
+        // The textarea is server-owned (`az-ctl`) and the user left it before the
+        // patch, so the patched content shows although the user had edited it.
         expect(after.textContent).toBe('B');
+        expect(after.value).toBe('B');
+        expect(after.focused).toBe(false);
     });
 
     test('a partial change keeps the static text and the sibling dynamic', async ({ page }) => {

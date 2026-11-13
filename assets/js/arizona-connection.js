@@ -548,6 +548,9 @@ const _ownedRefs = new Map();
 let _guardWrote = new WeakSet();
 /** @type {Element|null} */
 let _composing = null;
+// The reply ref of the frame being applied (`null` for a server push).
+/** @type {number|null} */
+let _applying = null;
 
 /**
  * Is `el` a control whose default the server renders (`az-ctl`, emitted by the parse
@@ -640,7 +643,13 @@ function edited(ctl) {
 function holds(el) {
     const ctl = el.localName === 'option' ? el.closest('select') : el;
     if (!ctl || !isCtl(ctl)) return false;
-    if (_owned.has(ctl)) return true;
+    const st = _owned.get(ctl);
+    if (st) {
+        // A frame answering an event that carried the control echoes or settles it;
+        // any other is a server push, which wins when focus leaves an edit made past it.
+        if (_applying === null || !_ownedRefs.get(_applying)?.includes(ctl)) _guardWrote.add(ctl);
+        return true;
+    }
     const group = ctlGroup(ctl);
     const focus = ctl.ownerDocument.activeElement;
     if (
@@ -700,7 +709,10 @@ function settleCtls(ref) {
         const st = _owned.get(c);
         if (st?.ref !== ref) continue;
         _owned.delete(c);
-        if (_connected && ctlState(c) === st.snap) showDefault(c);
+        if (_connected && ctlState(c) === st.snap) {
+            _guardWrote.delete(c);
+            showDefault(c);
+        }
     }
 }
 
@@ -1464,13 +1476,18 @@ export function connect(endpoint, params = {}) {
                         // ...and so is the element being typed into: put focus
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
-                        if (msg[1]) applyOps(msg[1], !!msg[3]);
-                        // Identity-checked: an OP_REPLACE in this frame consumed it.
-                        if (patchReply && _pendingScroll === armedScroll) {
-                            if (msg[1]?.length) applyScroll(armedScroll);
-                            setPendingScroll(null);
+                        _applying = msg[5];
+                        try {
+                            if (msg[1]) applyOps(msg[1], !!msg[3]);
+                            // Identity-checked: an OP_REPLACE in this frame consumed it.
+                            if (patchReply && _pendingScroll === armedScroll) {
+                                if (msg[1]?.length) applyScroll(armedScroll);
+                                setPendingScroll(null);
+                            }
+                            if (msg[2]) applyEffects(msg[2]);
+                        } finally {
+                            _applying = null;
                         }
-                        if (msg[2]) applyEffects(msg[2]);
                         settleCtls(msg[5]);
                         if (msg[3]) restoreFormState();
                         if (focus) restoreFocus(focus);
