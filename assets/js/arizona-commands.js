@@ -443,13 +443,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const frame = [resolveTarget(el), evt, payload];
             const transition = _transitionScope;
+            const ctls = host.carry(el, event);
             if (event) {
                 const epoch = host.epoch();
                 scheduleSend(el, event, prefix, index, () => {
-                    host.sendEvent(evt, frame, epoch, transition);
+                    host.sendEvent(evt, frame, epoch, transition, ctls);
                 });
             } else {
-                host.sendEvent(evt, frame, undefined, transition);
+                host.sendEvent(evt, frame, undefined, transition, ctls);
             }
             break;
         }

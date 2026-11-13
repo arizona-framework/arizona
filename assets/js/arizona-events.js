@@ -240,6 +240,7 @@ const AZ_DIRECTIVES = new Set([
     'nodiff',
     'navigate',
     'patch',
+    'ctl',
 ]);
 
 /**
@@ -441,6 +442,23 @@ export function bindDocumentEvents(target, signal, abort) {
         },
         { signal },
     );
+
+    // A server-owned control the user is editing: where focus leaves it, and an IME
+    // composition in it, decide when a server write reaches what it shows.
+    target.addEventListener(
+        'focusout',
+        (e) => {
+            if (/** @type {Node} */ (e.target).nodeType === 1)
+                host.leaveCtl(/** @type {Element} */ (e.target));
+        },
+        { signal },
+    );
+    target.addEventListener(
+        'compositionstart',
+        (e) => host.compose(/** @type {Element} */ (e.target)),
+        { signal },
+    );
+    target.addEventListener('compositionend', () => host.compose(null), { signal });
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop
