@@ -80,6 +80,10 @@ routes() ->
             bindings => #{title => <<"RawText">>},
             layouts => Layouts
         }},
+        {live, <<"/controls">>, arizona_controls, #{
+            bindings => #{title => <<"Controls">>},
+            layouts => Layouts
+        }},
         {live, <<"/select-value">>, arizona_select_value_page, #{
             bindings => #{title => <<"Select value">>},
             layouts => Layouts
