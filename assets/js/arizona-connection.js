@@ -571,9 +571,15 @@ function wellFormed(_key, v) {
 const _owned = new Map();
 /** @type {Map<number, Element[]>} */
 const _ownedRefs = new Map();
-// How many raised, unsent events carry each control (`carry`, `release`).
-/** @type {WeakMap<Element, number>} */
+// The raised, unsent events (their carried arrays) that carry each control, and the
+// trigger each was raised on: one whose trigger left the page counts no more
+// (`isPending`), since its send may never fire (a blur debounce on a removed field).
+// An array is live from its raise to its release, once, so a send a reconnect left
+// in its slot releases nothing of the new connection's.
+/** @type {WeakMap<Element, Set<Array<[Element, string|boolean]>>>} */
 let _pending = new WeakMap();
+/** @type {WeakMap<Array<[Element, string|boolean]>, Element>} */
+let _live = new WeakMap();
 /** @type {WeakSet<Element>} */
 let _guardWrote = new WeakSet();
 // A `value` write deferred while the user is mid bad input (`holds`).
@@ -608,8 +614,8 @@ function isCtl(el) {
 }
 
 /**
- * Is `part` the part `ctl` shows (`isCtl`): a write to another one (a textarea's
- * `value` attribute, a checkbox's `value`) is not held.
+ * Is `part` a part `ctl` shows (`isCtl`): a write to another one (a checkbox's
+ * `value`) is not held. A textarea's `value` write is its live value too.
  * @param {Element} ctl
  * @param {string} part
  * @returns {boolean}
@@ -618,7 +624,7 @@ function shows(ctl, part) {
     const tag = ctl.localName;
     const type = /** @type {HTMLInputElement} */ (ctl).type;
     if (tag === 'select') return part === 'value' || part === 'selected';
-    if (tag === 'textarea') return part === 'content';
+    if (tag === 'textarea') return part === 'content' || part === 'value';
     return part === (type === 'checkbox' || type === 'radio' ? 'checked' : 'value');
 }
 
@@ -686,7 +692,11 @@ function carry(el, event) {
     if (!ctls.length) return null;
     /** @type {Array<[Element, string|boolean]>} */
     const carried = ctls.map((c) => [c, ctlState(c)]);
-    for (const [c] of carried) _pending.set(c, (_pending.get(c) ?? 0) + 1);
+    _live.set(carried, el);
+    for (const [c] of carried) {
+        const raises = _pending.get(c) ?? new Set();
+        _pending.set(c, raises.add(carried));
+    }
     return carried;
 }
 
@@ -696,11 +706,26 @@ function carry(el, event) {
  * @param {Array<[Element, string|boolean]>} ctls
  */
 function release(ctls) {
+    if (!_live.delete(ctls)) return;
     for (const [c] of ctls) {
-        const n = (_pending.get(c) ?? 0) - 1;
-        if (n > 0) _pending.set(c, n);
-        else _pending.delete(c);
+        const raises = _pending.get(c);
+        raises?.delete(ctls);
+        if (raises?.size === 0) _pending.delete(c);
     }
+}
+
+/**
+ * Does a raised, unsent event whose trigger is still on the page carry `ctl`? One
+ * whose trigger left is released here.
+ * @param {Element} ctl
+ * @returns {boolean}
+ */
+function isPending(ctl) {
+    for (const raise of [...(_pending.get(ctl) ?? [])]) {
+        if (_live.get(raise)?.isConnected) return true;
+        release(raise);
+    }
+    return false;
 }
 
 /**
@@ -745,7 +770,7 @@ function holds(el, name, val) {
     }
     if (
         _owned.has(ctl) ||
-        _pending.has(ctl) ||
+        isPending(ctl) ||
         (_composing && group.includes(_composing)) ||
         (focus && group.includes(focus) && group.some(edited))
     ) {
@@ -845,7 +870,7 @@ function ctlEvent(e) {
     const group = ctlGroup(el);
     let wrote = false;
     for (const m of group) if (_guardWrote.delete(m)) wrote = true;
-    if (wrote && _connected && !group.some((m) => _owned.has(m) || _pending.has(m)))
+    if (wrote && _connected && !group.some((m) => _owned.has(m) || isPending(m)))
         group.forEach(showDefault);
 }
 
@@ -1832,6 +1857,7 @@ export function connect(endpoint, params = {}) {
         _owned.clear();
         _ownedRefs.clear();
         _pending = new WeakMap();
+        _live = new WeakMap();
         _guardWrote = new WeakSet();
         _deferred = new WeakMap();
         _composing = null;

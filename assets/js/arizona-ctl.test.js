@@ -773,12 +773,63 @@ describe('server-owned controls: pending by debounce slot', () => {
         }
     });
 
-    it('a write to a part the control does not show is not held', async () => {
+    it('a textarea value write is its live value: held off unsent typing', async () => {
         await connect(`<textarea az="0" name="t" az-ctl="content">a</textarea>`);
         const el = document.querySelector('textarea');
         el.focus();
         el.value = 'typed';
         mock.reply([setAttr(0, 'value', 'x')], null);
-        expect(el.value).toBe('x');
+        expect(el.value).toBe('typed');
+    });
+});
+
+describe('server-owned controls: pending across reconnects and removals', () => {
+    it('a raise a reconnect left in its slot releases nothing of the new connection', async () => {
+        vi.useFakeTimers();
+        let again = () => {};
+        try {
+            await connect(
+                `<input id="q" az="0" name="q" value="" az-ctl="value" az-debounce="300" ${INPUT} />`,
+            );
+            const el = document.querySelector('input');
+            edit(
+                el,
+                (e) => {
+                    e.value = 'a';
+                },
+                'input',
+            );
+            again = mod.connect('/ws');
+            mock.open();
+            edit(
+                el,
+                (e) => {
+                    e.value = 'ab';
+                },
+                'input',
+            );
+            mock.reply([setAttr(0, 'value', 'srv')], null);
+            expect(el.value).toBe('ab');
+        } finally {
+            again();
+            vi.useRealTimers();
+        }
+    });
+
+    it('a pending raise whose trigger left the page holds its radio group no more', async () => {
+        await connect(
+            `<input type="radio" id="r1" az="0" name="g" value="1" az-ctl="checked" az-debounce="blur" ${CHANGE} />` +
+                `<input type="radio" id="r2" az="1" name="g" value="2" az-ctl="checked" ${CHANGE} />`,
+        );
+        const r1 = document.getElementById('r1');
+        const r2 = document.getElementById('r2');
+        edit(r1, (e) => {
+            e.checked = true;
+        });
+        r1.remove();
+        // The user's own state on r2 (dirty), so only a property write shows the push.
+        r2.checked = false;
+        mock.reply([setAttr(1, 'checked', '')], null);
+        expect(r2.checked).toBe(true);
     });
 });

@@ -309,7 +309,10 @@ the field shows the server's state, which is the point.
   else `value`) and is **pending** while any raised, unsent event carries it (`_pending`, a
   count per control): `scheduleSend` releases a raise when it sends it or when a later raise
   replaces it in its slot (event type and command position, every debounce/throttle mode,
-  a prevented raise included), and a dropped send releases too. So a debounce or throttle window
+  a prevented raise included), and a dropped send releases too. A release counts once (a raise
+  a reconnect left in its slot releases nothing of the new connection), and a raise whose
+  trigger left the page (a blur-debounced field removed) holds nothing, so no raise that will
+  never be sent can hold a control. So a debounce or throttle window
   is guarded, focused or not (a Safari click does not focus), and a form-level
   `az-debounce`, whose blur flush never runs for its fields, keeps them guarded past a blur. A
   hook's `pushEvent`, the exported `pushEvent`/`pushEventTo` and a handler effect carry
@@ -333,7 +336,8 @@ the field shows the server's state, which is the point.
   control in flight, that is the user's change since the send, so the reply leaves it. A
   `fetch` the user starts applies its response effects as write-through; one a server effect
   started applies them as server writes (the origin rides `holdReplay`). A write to a part
-  the control does not show (a textarea's `value` attribute) is not held. A `?local` control carries
+  the control does not show (a checkbox's `value`) is not held; a textarea's `value` write
+  is its live value, so it is. A `?local` control carries
   no `az-ctl`, so it is never held. The static host holds nothing.
 - **Settle.** Inside the worker handler's `apply`, after the ops and effects (so a
   transition-deferred frame settles after its DOM): for each control of the frame's ref still
