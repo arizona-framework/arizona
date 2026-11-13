@@ -843,17 +843,21 @@ function standIns(el, doc) {
 /**
  * The value textarea `el`, wrapping hard, submits: a browser may wrap by the lines it
  * lays out, which a hidden or box-less stand-in has none of, so a copy is laid out,
- * unseen, in a form of its own at the end of `doc` -- as wide as the field's text
- * (its `cols` when the field has no box) and in its font -- and read back. That
- * builds a `FormData` of that form (a `formdata` event fires at it) and is gone before
- * this returns.
+ * unseen, in a form of its own in a closed shadow root at the end of `doc` -- as wide
+ * as the field's text (its `cols` when the field has no box) and in its font -- and
+ * read back. The page's CSS cannot reach it, the `formdata` event of its build stays
+ * in that root, and it is gone before this returns.
  * @param {any} el
  * @param {Document} doc
  * @returns {string}
  */
 function hardWrapped(el, doc) {
+    // In a closed shadow root: the page's CSS cannot reach the copy, and the
+    // `formdata` event its build fires (not composed) never leaves it.
+    const host = doc.createElement('az-measure');
+    host.style.cssText = 'display:block;position:absolute;left:0;top:0;visibility:hidden';
+    const root = host.attachShadow({ mode: 'closed' });
     const f = doc.createElement('form');
-    f.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden';
     const t = doc.createElement('textarea');
     t.name = 'v';
     t.setAttribute('wrap', 'hard');
@@ -881,15 +885,24 @@ function hardWrapped(el, doc) {
             'word-break',
             'tab-size',
             'text-transform',
+            'text-indent',
+            'hyphens',
+            'line-break',
+            'font-kerning',
+            'font-feature-settings',
+            'font-variation-settings',
+            'font-variant-ligatures',
+            'font-size-adjust',
         ])
             st.setProperty(p, cs.getPropertyValue(p));
     }
     f.append(t);
-    (doc.body ?? doc.documentElement).append(f);
+    root.append(f);
+    (doc.body ?? doc.documentElement).append(host);
     try {
         return String(new FormData(f).get('v') ?? '');
     } finally {
-        f.remove();
+        host.remove();
     }
 }
 

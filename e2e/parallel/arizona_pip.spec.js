@@ -207,3 +207,36 @@ for (const closed of [false, true])
         expect(ta?.[1]).toContain('\n');
         expect(away).toEqual(inline);
     });
+
+// Reading a popped-out textarea's hard wrap builds a FormData of a copy the page
+// cannot reach: page listeners get one `formdata` per submit, the form's own, and page
+// CSS hiding forms and textareas leaves the copy's lines as they were.
+test("a popped-out textarea's hard wrap is read out of the page's reach", async ({ page }) => {
+    await popOutFields(page);
+    await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w._formdata = 0;
+        document.addEventListener(
+            'formdata',
+            () => {
+                w._formdata++;
+            },
+            true,
+        );
+        const style = document.createElement('style');
+        style.id = 'hide-forms';
+        style.textContent = 'form, textarea { display: none !important; }';
+        document.head.append(style);
+    });
+    const away = await submitted(page);
+    const events = await page.evaluate(() => {
+        document.getElementById('hide-forms')?.remove();
+        return /** @type {any} */ (window)._formdata;
+    });
+    await exitPip(page, 'pip_file');
+    await expect(page.locator('#pd #pip_file')).toHaveCount(1);
+    const inline = await submitted(page);
+    expect(events).toBe(1);
+    expect(inline.find(([k]) => k === 'ta')?.[1]).toContain('\n');
+    expect(away).toEqual(inline);
+});
