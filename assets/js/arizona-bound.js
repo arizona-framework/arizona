@@ -720,11 +720,12 @@ function fencedInline(el) {
  * place, its first legend excepted) and shows them to `formdata` listeners as it would
  * inline. A stand-in carries only what the field submits -- a hidden input per entry
  * (`_charset_` and `dirname` as the browser handles a hidden one, with the direction
- * the field takes in its window), a textarea for a textarea (its hard wrap is the
- * browser's: one wrapping hard is laid out, unseen, at the field's width), a file input
+ * the field takes in its window), a textarea for a textarea (the
+ * value it submits: one wrapping hard is laid out apart to read it), a file input
  * holding the files -- no id or attribute of the app's, so nothing else reads it; it
  * is gone before `build` returns, in the same task (no paint), though a
- * `MutationObserver` sees it come and go.
+ * `MutationObserver` sees it come and go, and a slot its view's placeholder is
+ * assigned to fires `slotchange`.
  * @template T
  * @param {HTMLFormElement} form
  * @param {() => T} build
@@ -736,17 +737,24 @@ export function withStandIns(form, build) {
     const doc = form.ownerDocument;
     /** @type {Element[]} */
     const made = [];
-    for (const el of away.sort(inlineOrder)) {
-        const at = placeIn(el, form);
-        if (!at) continue;
-        for (const s of standIns(/** @type {any} */ (el), doc)) {
-            if (!form.contains(at.ref.parentNode ?? at.ref)) s.setAttribute('form', form.id);
-            at.ref.parentNode?.insertBefore(s, at.after ? at.ref.nextSibling : at.ref);
-            if (at.after) at.ref = s;
-            made.push(s);
-        }
-    }
+    // The last stand-in after each view: the next field after it goes after that one.
+    /** @type {Map<Node, Node>} */
+    const last = new Map();
     try {
+        for (const el of away.sort(inlineOrder)) {
+            const at = placeIn(el, form);
+            if (!at) continue;
+            let ref = at.after ? (last.get(at.ref) ?? at.ref) : at.ref;
+            for (const s of standIns(/** @type {any} */ (el), doc)) {
+                if (!form.contains(ref.parentNode ?? ref)) s.setAttribute('form', form.id);
+                ref.parentNode?.insertBefore(s, at.after ? ref.nextSibling : ref);
+                made.push(s);
+                if (at.after) {
+                    ref = s;
+                    last.set(at.ref, s);
+                }
+            }
+        }
         return build();
     } finally {
         for (const s of made) s.remove();
@@ -810,29 +818,9 @@ function standIns(el, doc) {
     if (el.localName === 'textarea') {
         const t = doc.createElement('textarea');
         t.name = el.name;
-        t.value = el.value;
-        for (const a of ['wrap', 'cols'])
-            if (el.hasAttribute(a)) t.setAttribute(a, el.getAttribute(a));
-        const cs =
-            el.getAttribute('wrap')?.toLowerCase() === 'hard'
-                ? el.ownerDocument.defaultView?.getComputedStyle(el)
-                : null;
-        if (cs) {
-            // A browser may wrap hard by the lines it lays out, so the stand-in is laid
-            // out, unseen, as wide as the field's text and in its font.
-            const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
-            const st = t.style;
-            st.cssText = 'position:absolute;visibility:hidden;padding:0;border:0;overflow:hidden';
-            st.boxSizing = 'content-box';
-            st.width = `${Math.max(0, el.clientWidth - (pad || 0))}px`;
-            st.font = cs.font;
-            st.letterSpacing = cs.letterSpacing;
-            st.wordSpacing = cs.wordSpacing;
-            st.whiteSpace = cs.whiteSpace;
-            st.overflowWrap = cs.overflowWrap;
-            st.wordBreak = cs.wordBreak;
-            st.setProperty('tab-size', cs.getPropertyValue('tab-size'));
-        } else t.hidden = true;
+        t.hidden = true;
+        t.value =
+            el.getAttribute('wrap')?.toLowerCase() === 'hard' ? hardWrapped(el, doc) : el.value;
         return [directed(t)];
     }
     if (el.localName !== 'input') return [];
@@ -850,6 +838,59 @@ function standIns(el, doc) {
     const h = hidden(el.value);
     const dirnamed = ['hidden', 'text', 'search', 'tel', 'url', 'email', 'password'].includes(type);
     return [dirnamed ? directed(h) : h];
+}
+
+/**
+ * The value textarea `el`, wrapping hard, submits: a browser may wrap by the lines it
+ * lays out, which a hidden or box-less stand-in has none of, so a copy is laid out,
+ * unseen, in a form of its own at the end of `doc` -- as wide as the field's text
+ * (its `cols` when the field has no box) and in its font -- and read back. That
+ * builds a `FormData` of that form (a `formdata` event fires at it) and is gone before
+ * this returns.
+ * @param {any} el
+ * @param {Document} doc
+ * @returns {string}
+ */
+function hardWrapped(el, doc) {
+    const f = doc.createElement('form');
+    f.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden';
+    const t = doc.createElement('textarea');
+    t.name = 'v';
+    t.setAttribute('wrap', 'hard');
+    if (el.hasAttribute('cols')) t.setAttribute('cols', el.getAttribute('cols'));
+    t.value = el.value;
+    const cs = el.ownerDocument.defaultView?.getComputedStyle(el);
+    if (cs) {
+        const st = t.style;
+        st.cssText = 'padding:0;border:0;overflow:hidden;box-sizing:content-box';
+        const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+        if (el.clientWidth > 0) st.width = `${Math.max(0, el.clientWidth - (pad || 0))}px`;
+        // Longhands: the `font` shorthand may read back empty.
+        for (const p of [
+            'font-style',
+            'font-variant',
+            'font-weight',
+            'font-stretch',
+            'font-size',
+            'line-height',
+            'font-family',
+            'letter-spacing',
+            'word-spacing',
+            'white-space',
+            'overflow-wrap',
+            'word-break',
+            'tab-size',
+            'text-transform',
+        ])
+            st.setProperty(p, cs.getPropertyValue(p));
+    }
+    f.append(t);
+    (doc.body ?? doc.documentElement).append(f);
+    try {
+        return String(new FormData(f).get('v') ?? '');
+    } finally {
+        f.remove();
+    }
 }
 
 /**

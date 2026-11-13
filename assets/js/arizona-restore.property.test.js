@@ -433,8 +433,9 @@ function gen(/** @type {ReturnType<typeof rng>} */ r) {
                     b.id = a.id;
                 }
             }
+            // Several after a form, so a popped-out form takes a run of them after its view.
             for (const reg of linkable(page).length > 0 ? ['before', 'after'] : [])
-                for (let i = r.int(3); i > 0; i--)
+                for (let i = r.int(reg === 'after' ? 5 : 3); i > 0; i--)
                     page.regions[reg].push(fieldIn(page, reg, r.pick(linkable(page)).id));
             for (let i = r.int(5); i > 0; i--)
                 page.regions.formless.push(fieldIn(page, 'formless', null));
@@ -741,7 +742,9 @@ function render(page) {
                     : `<div id="${c.id}" az-view>${forms(c.id)}${free(c.id)}</div>`,
             )
             .join('');
-    return `<div id="page" az-view>${fs('before')}${forms('page')}${fs('after')}${free('page')}</div>`;
+    // The fields after every form go after the child views too, so a popped-out view's
+    // form has fields naming it after its view.
+    return `<div id="page" az-view>${fs('before')}${forms('page')}${free('page')}${fs('after')}</div>`;
 }
 
 /** Every field of `page` in document order (see `render`). @param {Page} page */
@@ -753,7 +756,7 @@ const ordered = (page) => {
     const forms = (/** @type {string} */ v) =>
         page.forms.filter((f) => f.view === v && !f.root).flatMap(fields);
     /** @type {Field[]} */
-    const out = [...page.regions.before, ...forms('page'), ...page.regions.after];
+    const out = [...page.regions.before, ...forms('page')];
     const walk = (/** @type {string} */ v) => {
         out.push(...page.regions.formless.filter((f) => f.view === v));
         for (const c of page.views)
@@ -769,6 +772,7 @@ const ordered = (page) => {
             }
     };
     walk('page');
+    out.push(...page.regions.after);
     // A radio a diff removed until the resync renders it again.
     return out.filter((f) => !f.gone);
 };
@@ -2040,13 +2044,44 @@ async function popOut(c, id) {
 async function pipStep(r, c, page) {
     const was = pipWin !== null;
     if (pipWin && r.chance(0.25)) {
+        // What each form posts with the window open is what it posts inline: read
+        // before and after bringing the view back, which moves no value.
+        const { withStandIns } = await import('./arizona-bound.js');
+        const forms = () =>
+            [document, pipDoc].flatMap((d) => [
+                .../** @type {Document} */ (d).querySelectorAll('form'),
+            ]);
+        /** @param {FormData} fd */
+        const entries = (fd) => [...fd.entries()].map(([k, v]) => [k, String(v)]);
+        const away = new Map(
+            forms().map((f) => [f, entries(withStandIns(f, () => new FormData(f)))]),
+        );
         pipWin.close();
         bump('pop-backs');
+        for (const [f, posted] of away) {
+            // A radio checked on each side of the window was one per group there; back
+            // in one document the browser keeps one.
+            const radios = new Set(
+                [...f.elements, ...document.querySelectorAll(`[form="${f.id}"]`)]
+                    .filter((e) => /** @type {any} */ (e).type === 'radio')
+                    .map((e) => /** @type {any} */ (e).name),
+            );
+            const keep = (/** @type {string[]} */ [k]) => !radios.has(k);
+            expect(posted.filter(keep), `form ${f.id} posts with a window open as inline`).toEqual(
+                entries(new FormData(f)).filter(keep),
+            );
+        }
+        if (away.size > 0) bump('pop-backs posting as inline');
     } else if (!pipWin && r.chance(0.5)) {
         // A child view most often: the resync brings it back inline, into the
-        // page's document. Not one holding a form a field outside it names: `form=`
-        // names a form of its own document, so the field would be no form's.
-        const named = new Set([...page.regions.before, ...page.regions.after].map((f) => f.fview));
+        // page's document. One holding a form fields outside it name (`form=`) keeps
+        // them that form's from the page -- but not a radio: the browser groups it
+        // with the page's radios of its name that no form of the page owns.
+        const named = new Set(
+            [...page.regions.before, ...page.regions.after]
+                .filter((f) => f.kind === 'radio')
+                .map((f) => f.fview),
+        );
         /** Is view `v` or a view in it one such form is in? @param {string} v @returns {boolean} */
         const holds = (v) => named.has(v) || page.views.some((w) => w.parent === v && holds(w.id));
         const ids = page.views.map((v) => v.id).filter((v) => !holds(v));

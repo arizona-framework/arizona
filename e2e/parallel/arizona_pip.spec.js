@@ -135,21 +135,13 @@ test('a reconnect keeps a popped-out child in its window', async ({ page }) => {
     await expect.poll(() => ticked(page, before)).toBe(true);
 });
 
-// A file chosen in a popped-out view's file input is the form's: its submit posts the
-// file itself, built by the browser's own FormData as if the view were inline.
-test('a form posts the file chosen in a popped-out view', async ({ page }) => {
-    await page.goto('/pip-form');
-    await wsReady(page);
-    await page.locator('#pip_file').getByRole('button', { name: 'Pop out', exact: true }).click();
-    await inPip(page, 'pip_file');
-
-    const entries = await page.evaluate(() => {
-        const pip = /** @type {any} */ (window).documentPictureInPicture.window;
-        const input = pip.document.querySelector('#pip_file [name=up]');
-        const dt = new DataTransfer();
-        dt.items.add(new File(['hello'], 'note.txt', { type: 'text/plain' }));
-        input.files = dt.files;
-        // Keep each FormData the client builds from the form, to read what it posts.
+/**
+ * The entries of the `FormData` the client builds when form `#pf` submits (a file as
+ * `[name, file name, type, size]`).
+ */
+const submitted = (page) =>
+    page.evaluate(() => {
+        // Keep each FormData built from a form, to read what the submit posts.
         /** @type {FormData[]} */
         const built = [];
         const Native = window.FormData;
@@ -157,7 +149,7 @@ test('a form posts the file chosen in a popped-out view', async ({ page }) => {
             class extends Native {
                 constructor(/** @type {any} */ f, /** @type {any} */ s) {
                     super(f, s);
-                    if (f) built.push(this);
+                    if (f?.id === 'pf') built.push(this);
                 }
             }
         );
@@ -170,8 +162,48 @@ test('a form posts the file chosen in a popped-out view', async ({ page }) => {
             typeof v === 'string' ? [k, v] : [k, v.name, v.type, v.size],
         );
     });
-    expect(entries).toEqual([
-        ['own', '1'],
-        ['up', 'note.txt', 'text/plain', 5],
-    ]);
+
+const popOutFields = async (page) => {
+    await page.goto('/pip-form');
+    await wsReady(page);
+    await page.locator('#pip_file').getByRole('button', { name: 'Pop out', exact: true }).click();
+    await inPip(page, 'pip_file');
+};
+
+// A file chosen in a popped-out view's file input is the form's: its submit posts the
+// file itself, built by the browser's own FormData as if the view were inline.
+test('a form posts the file chosen in a popped-out view', async ({ page }) => {
+    await popOutFields(page);
+    await page.evaluate(() => {
+        const pip = /** @type {any} */ (window).documentPictureInPicture.window;
+        const dt = new DataTransfer();
+        dt.items.add(new File(['hello'], 'note.txt', { type: 'text/plain' }));
+        pip.document.querySelector('#pip_file [name=up]').files = dt.files;
+    });
+    const entries = await submitted(page);
+    expect(entries.find(([k]) => k === 'up')).toEqual(['up', 'note.txt', 'text/plain', 5]);
 });
+
+// A popped-out textarea wrapping hard posts the lines it would inline -- its width
+// and font, laid out -- even where its view's place inline has no box (a closed
+// `details`): the browser wraps by the lines it lays out.
+for (const closed of [false, true])
+    test(`a form posts a popped-out textarea's hard wrap${closed ? ' from a closed details' : ''}`, async ({
+        page,
+    }) => {
+        await popOutFields(page);
+        if (closed)
+            await page.evaluate(() => {
+                /** @type {any} */ (document.getElementById('pd')).open = false;
+            });
+        const away = await submitted(page);
+        await exitPip(page, 'pip_file');
+        await expect(page.locator('#pd #pip_file')).toHaveCount(1);
+        await page.evaluate(() => {
+            /** @type {any} */ (document.getElementById('pd')).open = true;
+        });
+        const inline = await submitted(page);
+        const ta = inline.find(([k]) => k === 'ta');
+        expect(ta?.[1]).toContain('\n');
+        expect(away).toEqual(inline);
+    });

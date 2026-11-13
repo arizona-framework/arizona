@@ -4445,6 +4445,53 @@ describe('a form across views and documents', () => {
         );
         expect(got).toEqual({ k: 'a' });
     });
+    // Several fields after a window's view keep their order: each goes after the one
+    // before it, from the page or from a sibling window.
+    for (const sibling of [false, true])
+        it(`orders several fields after a window holding their form${sibling ? ', one in a sibling window' : ''}`, async () => {
+            const a = '<input name="n" value="A" form="f">';
+            const c = await start(
+                view(
+                    'page',
+                    `${view(
+                        'ch',
+                        `<form id="f" az-change='[0,"f"]'><input name="n" value="1"></form>`,
+                    )}${sibling ? view('sib', a) : a}<input name="n" value="B" form="f"><input name="n" value="C" form="f">`,
+                ),
+            );
+            const doc = await popOut(c, 'ch');
+            if (sibling) await popOut(c, 'sib');
+            const before = c.sent().length;
+            change(doc.querySelector('#f [name=n]'));
+            expect(replayed(c, before)).toEqual([['ch', 'f', { n: ['1', 'A', 'B', 'C'] }]]);
+        });
+    // A throw while placing the stand-ins leaves none of them behind.
+    it('leaves no stand-in behind when placing them throws', async () => {
+        const c = await start(
+            view(
+                'page',
+                `<form id="f" az-change='[0,"f"]'><input name="n" value="1">${view(
+                    'ch',
+                    '<input name="n" value="2"><input type="file" name="up">',
+                )}</form>`,
+            ),
+        );
+        const doc = await popOut(c, 'ch');
+        Object.defineProperty(doc.querySelector('[name=up]'), 'files', {
+            get: () => ['not a FileList'],
+        });
+        const html = $('#f').outerHTML;
+        const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            change($('[name=n]'));
+            expect({ thrown: log.mock.calls.length > 0, html: $('#f').outerHTML }).toEqual({
+                thrown: true,
+                html,
+            });
+        } finally {
+            log.mockRestore();
+        }
+    });
     it('orders the fields of a window inside a window as inline', async () => {
         const c = await start(
             view(
