@@ -1214,8 +1214,14 @@ them until its next `input` or `focusout` with good input (a composition delays 
 reconcile: a dirty control ignores a default write). Other attributes are written at once, and the
 `set_attr`/`remove_attr`/`toggle_attr` effects and `?local` writes still set the property.
 
+A select whose server-rendered `value` picks among options a component renders (the
+compiler cannot mark them) keeps that `value` and carries `az-bound="value"`: the value owns
+all its options' selection, one unit with them, and a held `value` write is applied at the
+release, which marks the options' defaults from it.
+
 A **proposal** is a `push_event` whose trigger is a control carrying `az-bound`, a select
-with bound options, or a form (its named, enabled, bound controls), whose nearest view or
+with bound options or `az-bound="value"`, or a form (its named, enabled, bound controls,
+those a pop-out moved into a window included), whose nearest view or
 az-nodiff ancestor is a view not itself az-nodiff (a child view under an az-nodiff element
 diffs its own template, so it counts). Its frame carries a reply ref and the server answers it with
 exactly one frame. Not a proposal: any other trigger (a `div` holding controls, the view

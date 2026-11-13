@@ -4108,6 +4108,81 @@ describe('a form across views and documents', () => {
             ['page', 'f', { n: ['1', '2', '3'], c: '', s: ['y'] }],
         ]);
     });
+    // With a window open the form's own fields still go through the browser's own
+    // FormData: an image submitter's coordinates, named or not, and what a `formdata`
+    // listener adds are kept, and the window's fields join where their view sits.
+    for (const named of [true, false])
+        it(`keeps an image submitter${named ? '' : ' with no name'} with a window open`, async () => {
+            const img = `<input type="image" ${named ? 'name="go" ' : ''}alt="go">`;
+            const pg = view(
+                'page',
+                `<form id="f" az-submit='[0,"f"]'><input name="n" value="1">${view(
+                    'ch',
+                    '<input name="n" value="2">',
+                )}${img}</form>`,
+            );
+            const c = await start(pg);
+            await popOut(c, 'ch');
+            const before = c.sent().length;
+            const form = /** @type {any} */ ($('#f'));
+            form.requestSubmit($('[type=image]'));
+            const sent = replayed(c, before);
+            expect(sent).toEqual([
+                [
+                    'page',
+                    'f',
+                    named
+                        ? { n: ['1', '2'], 'go.x': '0', 'go.y': '0' }
+                        : { n: ['1', '2'], x: '0', y: '0' },
+                ],
+            ]);
+        });
+    it("keeps a formdata listener's entry with a window open", async () => {
+        const pg = view(
+            'page',
+            `<form id="f" az-change='[0,"f"]'><input name="n" value="1">${view(
+                'ch',
+                '<input name="n" value="2">',
+            )}<input name="n" value="3"></form>`,
+        );
+        const c = await start(pg);
+        // jsdom fires no `formdata` event: stand in for the browser adding the entry a
+        // listener appends to the FormData of a form.
+        const Native = globalThis.FormData;
+        globalThis.FormData = /** @type {any} */ (
+            class extends Native {
+                constructor(/** @type {any} */ f, /** @type {any} */ s) {
+                    super(f, s);
+                    if (f) this.append('extra', 'yes');
+                }
+            }
+        );
+        try {
+            await popOut(c, 'ch');
+            const before = c.sent().length;
+            change($('[name=n]'));
+            expect(replayed(c, before)).toEqual([
+                ['page', 'f', { n: ['1', '2', '3'], extra: 'yes' }],
+            ]);
+        } finally {
+            globalThis.FormData = Native;
+        }
+    });
+    // A disabled fieldset around the view's place disables its fields, as inline.
+    it("leaves out a window's fields a disabled fieldset around its view disables", async () => {
+        const pg = view(
+            'page',
+            `<form id="f" az-change='[0,"f"]'><input name="n" value="1"><fieldset disabled>${view(
+                'ch',
+                '<input name="d" value="2">',
+            )}</fieldset></form>`,
+        );
+        const c = await start(pg);
+        await popOut(c, 'ch');
+        const before = c.sent().length;
+        change($('[name=n]'));
+        expect(replayed(c, before)).toEqual([['page', 'f', { n: '1' }]]);
+    });
     it('replays a form with the fields of a view the resync kept popped out', async () => {
         const pg = view(
             'page',

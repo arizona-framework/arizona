@@ -687,9 +687,27 @@ export function formAway(form) {
     const out = [];
     for (const d of allDocs())
         if (d !== form.ownerDocument)
-            for (const el of d.querySelectorAll('input, select, textarea'))
-                if (formOf(el) === form) out.push(el);
+            for (const el of d.querySelectorAll('input, select, textarea, button'))
+                if (formOf(el) === form && !fencedInline(el)) out.push(el);
     return out;
+}
+
+/**
+ * Is `el`, in a window, disabled where its view sits inline: a disabled fieldset
+ * around its placeholder (the window's own document cannot see it).
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function fencedInline(el) {
+    for (const { win, placeholder } of _pipWindows.values())
+        if (win.document === el.ownerDocument) {
+            const fs = placeholder.parentElement?.closest('fieldset[disabled]');
+            return (
+                !!fs ||
+                (placeholder.parentElement ? fencedInline(placeholder.parentElement) : false)
+            );
+        }
+    return false;
 }
 
 /**

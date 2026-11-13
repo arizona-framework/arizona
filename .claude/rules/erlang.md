@@ -98,7 +98,8 @@ types, where the property reflects the attribute or refuses a write), `checked` 
 `checkbox` or `radio`; a dynamic or absent `type` keeps both. Dynamic means a value the diff can
 rewrite: a `?get`, an expression, an interpolated list with a dynamic part, a `?raw`, a
 conditional, or the `selected` a select's server-rendered `value` gives each option (a
-literal value, single or `multiple`, gives a static one) ("A `value`
+literal value with a literal `multiple`, or none, gives a static one; a dynamic `multiple`
+keeps it dynamic) ("A `value`
 on a `select`" below) -- not a literal, a static `true`/`false`, or a `?local` (the client's,
 which also leaves the options of a select whose value is one to the client), and nothing in a
 nodiff unit. The DOM cannot tell these apart (a dynamic `checked` that is `false`
