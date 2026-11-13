@@ -118,6 +118,10 @@ routes() ->
             bindings => #{title => <<"PiP parent">>},
             layouts => Layouts
         }},
+        {live, <<"/pip-form">>, arizona_pip_form, #{
+            bindings => #{title => <<"PiP form">>},
+            layouts => Layouts
+        }},
         {live, <<"/events">>, arizona_events_demo, #{
             bindings => #{title => <<"Events">>},
             layouts => Layouts

@@ -134,3 +134,44 @@ test('a reconnect keeps a popped-out child in its window', async ({ page }) => {
     expect(before).toMatch(/^Tick: \d+$/);
     await expect.poll(() => ticked(page, before)).toBe(true);
 });
+
+// A file chosen in a popped-out view's file input is the form's: its submit posts the
+// file itself, built by the browser's own FormData as if the view were inline.
+test('a form posts the file chosen in a popped-out view', async ({ page }) => {
+    await page.goto('/pip-form');
+    await wsReady(page);
+    await page.locator('#pip_file').getByRole('button', { name: 'Pop out', exact: true }).click();
+    await inPip(page, 'pip_file');
+
+    const entries = await page.evaluate(() => {
+        const pip = /** @type {any} */ (window).documentPictureInPicture.window;
+        const input = pip.document.querySelector('#pip_file [name=up]');
+        const dt = new DataTransfer();
+        dt.items.add(new File(['hello'], 'note.txt', { type: 'text/plain' }));
+        input.files = dt.files;
+        // Keep each FormData the client builds from the form, to read what it posts.
+        /** @type {FormData[]} */
+        const built = [];
+        const Native = window.FormData;
+        window.FormData = /** @type {any} */ (
+            class extends Native {
+                constructor(/** @type {any} */ f, /** @type {any} */ s) {
+                    super(f, s);
+                    if (f) built.push(this);
+                }
+            }
+        );
+        try {
+            /** @type {any} */ (document.getElementById('pf')).requestSubmit();
+        } finally {
+            window.FormData = Native;
+        }
+        return [...(built.at(-1)?.entries() ?? [])].map(([k, v]) =>
+            typeof v === 'string' ? [k, v] : [k, v.name, v.type, v.size],
+        );
+    });
+    expect(entries).toEqual([
+        ['own', '1'],
+        ['up', 'note.txt', 'text/plain', 5],
+    ]);
+});
