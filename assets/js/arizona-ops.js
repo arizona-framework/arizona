@@ -318,7 +318,10 @@ function applyTextOp(el, az, val, isHtml) {
     } else {
         // A server-owned textarea's content is its default, as a value attribute is an
         // input's: once edited, only the property shows it (see `applySetAttrOp`).
-        const live = el.localName === 'textarea' && el.hasAttribute('az-ctl') && !host.holds(el);
+        const live =
+            el.localName === 'textarea' &&
+            el.hasAttribute('az-ctl') &&
+            !host.holds(el, 'value', val);
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;

@@ -39,7 +39,8 @@ function decodeRawAttr(raw) {
  * JSON array, not attribute text, so it is written back as JSON. A `?raw` value
  * arrives tagged `{raw}`: it is attribute markup, decoded the way SSR's parse did.
  * A server-owned control the client holds (`host.holds`: an event carrying its state
- * awaits its reply, or the user is editing it) takes the attribute only.
+ * is pending or awaits its reply, or the user is editing it) takes the attribute
+ * only, and a `value` the user is mid bad input in waits.
  * @param {Element} el
  * @param {string} name
  * @param {string | unknown[] | {raw: string}} val
@@ -58,7 +59,9 @@ export function applySetAttrOp(el, name, val) {
     const local = name === 'multiple' ? heldLocal(el) : null;
     // Asked before the write: the default it changes is what the user's edit is
     // compared against.
-    const live = (isChooserValue(el, name) || syncsProp(el, name)) && !host.holds(el);
+    const hold = (isChooserValue(el, name) || syncsProp(el, name)) && host.holds(el, name, val);
+    if (hold === 'defer') return;
+    const live = !hold && (isChooserValue(el, name) || syncsProp(el, name));
     el.setAttribute(name, val);
     if (local) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), local);
     else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), live);
@@ -78,7 +81,9 @@ export function applySetAttrOp(el, name, val) {
  */
 export function applyRemAttrOp(el, name) {
     const local = name === 'multiple' ? heldLocal(el) : null;
-    const live = (isChooserValue(el, name) || syncsProp(el, name)) && !host.holds(el);
+    const hold = (isChooserValue(el, name) || syncsProp(el, name)) && host.holds(el, name, null);
+    if (hold === 'defer') return;
+    const live = !hold && (isChooserValue(el, name) || syncsProp(el, name));
     el.removeAttribute(name);
     if (local) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), local);
     else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), live);

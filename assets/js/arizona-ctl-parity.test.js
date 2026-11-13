@@ -104,7 +104,7 @@ function change(/** @type {any} */ el) {
     el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-const INPUT = `<div id="v" az-view><input az="0" name="q" value="" az-ctl az-input='[0,"edit"]'></div>`;
+const INPUT = `<div id="v" az-view><input az="0" name="q" value="" az-ctl="value" az-input='[0,"edit"]'></div>`;
 
 describe('a refused edit', () => {
     it('shows the server value again when the reply changes nothing', async () => {
@@ -123,8 +123,8 @@ describe('a refused edit', () => {
     it('resets a select whose option the server kept', async () => {
         const c = await start(
             `<div id="v" az-view><select name="s" az-change='[0,"pick"]'>` +
-                `<option value="a" selected az-ctl>A</option>` +
-                `<option value="b" az-ctl>B</option></select></div>`,
+                `<option value="a" selected az-ctl="selected">A</option>` +
+                `<option value="b" az-ctl="selected">B</option></select></div>`,
         );
         $('select').value = 'b';
         change($('select'));
@@ -135,7 +135,7 @@ describe('a refused edit', () => {
     // A select whose server-rendered value picks among options the compiler could not
     // mark (a component renders them) owns them through `az-ctl` on the select.
     const valued = (/** @type {string} */ slot = '') =>
-        `<div id="v" az-view><select az="s" name="s" value="a" az-ctl az-change='[0,"pick"]'>` +
+        `<div id="v" az-view><select az="s" name="s" value="a" az-ctl="value" az-change='[0,"pick"]'>` +
         `<option value="a" selected>A</option><option value="b">B</option>${slot}</select></div>`;
     it('resets a select its value owns when the server refuses the pick', async () => {
         const c = await start(valued());
@@ -158,7 +158,7 @@ describe('a refused edit', () => {
     it('resets the bound controls of a form trigger', async () => {
         const c = await start(
             `<div id="v" az-view><form id="f" az-change='[0,"validate"]'>` +
-                `<input name="q" value="" az-ctl></form></div>`,
+                `<input name="q" value="" az-ctl="value"></form></div>`,
         );
         $('input').value = 'x';
         change($('input'));
@@ -170,7 +170,7 @@ describe('a refused edit', () => {
     it('resets the bound controls of a submitted form', async () => {
         const c = await start(
             `<div id="v" az-view><form id="f" az-submit='[0,"save"]'>` +
-                `<input name="q" value="" az-ctl></form></div>`,
+                `<input name="q" value="" az-ctl="value"></form></div>`,
         );
         $('input').value = 'x';
         $('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -182,8 +182,8 @@ describe('a refused edit', () => {
     it('restores the default radio of a group the server kept', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<input type="radio" name="r" value="a" checked az-ctl az-change='[0,"pick"]'>` +
-                `<input type="radio" name="r" value="b" az-ctl az-change='[0,"pick"]'>` +
+                `<input type="radio" name="r" value="a" checked az-ctl="checked" az-change='[0,"pick"]'>` +
+                `<input type="radio" name="r" value="b" az-ctl="checked" az-change='[0,"pick"]'>` +
                 `</div>`,
         );
         $('[value=b]').click();
@@ -196,10 +196,10 @@ describe('a refused edit', () => {
     it('takes a radio associated by form="id" into its group, and no other form', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<form id="f"><input type="radio" name="r" value="b" az-ctl az-change='[0,"pick"]'></form>` +
-                `<input type="radio" form="f" name="r" value="a" checked az-ctl>` +
-                `<form id="g"><input type="radio" name="r" value="c" checked az-ctl>` +
-                `<input type="radio" name="r" value="d" az-ctl></form>` +
+                `<form id="f"><input type="radio" name="r" value="b" az-ctl="checked" az-change='[0,"pick"]'></form>` +
+                `<input type="radio" form="f" name="r" value="a" checked az-ctl="checked">` +
+                `<form id="g"><input type="radio" name="r" value="c" checked az-ctl="checked">` +
+                `<input type="radio" name="r" value="d" az-ctl="checked"></form>` +
                 `</div>`,
         );
         $('[value=d]').checked = true; // another form's group, never proposed
@@ -217,8 +217,8 @@ describe('a reconciled radio group', () => {
     it('is not every nameless radio', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<input id="a" az="0" type="radio" az-ctl az-change='[0,"a"]'>` +
-                `<input id="b" type="radio" az-ctl></div>`,
+                `<input id="a" az="0" type="radio" az-ctl="checked" az-change='[0,"a"]'>` +
+                `<input id="b" type="radio" az-ctl="checked"></div>`,
         );
         $('#b').checked = true;
         $('#a').click();
@@ -246,7 +246,7 @@ describe('an older echo', () => {
     it('does not overwrite newer typing in a stream item', async () => {
         const c = await start(
             `<div id="v" az-view><ul az="0"><li az-key="k1">` +
-                `<input az="1" name="q" value="" az-ctl az-input='[0,"edit"]'></li></ul></div>`,
+                `<input az="1" name="q" value="" az-ctl="value" az-input='[0,"edit"]'></li></ul></div>`,
         );
         type($('input'), 'a');
         const r1 = c.lastRef();
@@ -258,7 +258,7 @@ describe('an older echo', () => {
     it('does not undo a newer checkbox toggle with an older removal in a stream item', async () => {
         const c = await start(
             `<div id="v" az-view><ul az="0"><li az-key="k1"><input az="1" type="checkbox" name="c" ` +
-                `checked az-ctl az-change='[0,"tick"]'></li></ul></div>`,
+                `checked az-ctl="checked" az-change='[0,"tick"]'></li></ul></div>`,
         );
         const cb = $('input');
         cb.click(); // off
@@ -270,7 +270,7 @@ describe('an older echo', () => {
 
     it('does not overwrite newer typing in a textarea', async () => {
         const c = await start(
-            `<div id="v" az-view><textarea az="0" name="t" az-ctl az-input='[0,"edit"]'></textarea></div>`,
+            `<div id="v" az-view><textarea az="0" name="t" az-ctl="content" az-input='[0,"edit"]'></textarea></div>`,
         );
         const ta = $('textarea');
         type(ta, 'a');
@@ -285,7 +285,7 @@ describe('an older echo', () => {
 
     it('does not undo a newer checkbox toggle with an older removal', async () => {
         const c = await start(
-            `<div id="v" az-view><input az="0" type="checkbox" name="c" checked az-ctl az-change='[0,"tick"]'></div>`,
+            `<div id="v" az-view><input az="0" type="checkbox" name="c" checked az-ctl="checked" az-change='[0,"tick"]'></div>`,
         );
         const cb = $('input');
         cb.click(); // off
@@ -301,9 +301,9 @@ describe('an older echo', () => {
     it('does not move a newer radio choice back with an older one', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<input az="0" type="radio" name="r" value="a" checked az-ctl az-change='[0,"pick"]'>` +
-                `<input az="1" type="radio" name="r" value="b" az-ctl az-change='[0,"pick"]'>` +
-                `<input az="2" type="radio" name="r" value="c" az-ctl az-change='[0,"pick"]'>` +
+                `<input az="0" type="radio" name="r" value="a" checked az-ctl="checked" az-change='[0,"pick"]'>` +
+                `<input az="1" type="radio" name="r" value="b" az-ctl="checked" az-change='[0,"pick"]'>` +
+                `<input az="2" type="radio" name="r" value="c" az-ctl="checked" az-change='[0,"pick"]'>` +
                 `</div>`,
         );
         $('[value=b]').click();
@@ -325,7 +325,7 @@ describe('what is a proposal', () => {
     it('is not a div trigger holding bound controls', async () => {
         const c = await start(
             `<div id="v" az-view><div az-click='[0,"go"]'>` +
-                `<input name="q" value="" az-ctl></div></div>`,
+                `<input name="q" value="" az-ctl="value"></div></div>`,
         );
         $('input').value = 'x';
         $('[az-click]').click();
@@ -367,7 +367,7 @@ describe('what is a proposal', () => {
     it('is a control of a live child view inside an az-nodiff element', async () => {
         const c = await start(
             `<div id="v" az-view><div az-nodiff><div id="c" az-view>` +
-                `<input az="0" name="q" value="" az-ctl az-input='[0,"edit"]'>` +
+                `<input az="0" name="q" value="" az-ctl="value" az-input='[0,"edit"]'>` +
                 `</div></div></div>`,
         );
         type($('input'), 'x');
@@ -378,7 +378,7 @@ describe('what is a proposal', () => {
 
     it('shares one reply ref with the view transition it is raised under', async () => {
         const c = await start(
-            `<div id="v" az-view><input az="0" name="q" value="" az-ctl az-input='[20,{},[0,"edit"]]'></div>`,
+            `<div id="v" az-view><input az="0" name="q" value="" az-ctl="value" az-input='[20,{},[0,"edit"]]'></div>`,
         );
         type($('input'), 'a');
         const sent = c.sent().at(-1);
@@ -420,9 +420,9 @@ describe('the capture lifetime', () => {
     it('ends for a send parked on a named event when its control is removed', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<input az="0" type="radio" name="r" value="a" checked az-ctl az-change='[0,"pick"]'>` +
-                `<input az="1" type="radio" name="r" value="b" az-ctl az-debounce="commit" az-change='[0,"pick"]'>` +
-                `<input az="2" type="radio" name="r" value="c" az-ctl az-change='[0,"pick"]'>` +
+                `<input az="0" type="radio" name="r" value="a" checked az-ctl="checked" az-change='[0,"pick"]'>` +
+                `<input az="1" type="radio" name="r" value="b" az-ctl="checked" az-debounce="commit" az-change='[0,"pick"]'>` +
+                `<input az="2" type="radio" name="r" value="c" az-ctl="checked" az-change='[0,"pick"]'>` +
                 `</div>`,
         );
         $('[value=b]').click();
@@ -435,7 +435,7 @@ describe('the capture lifetime', () => {
 
     it('keeps a send parked on a named event when its control only moved', async () => {
         const c = await start(
-            `<div id="v" az-view><input az="0" name="q" value="" az-ctl ` +
+            `<div id="v" az-view><input az="0" name="q" value="" az-ctl="value" ` +
                 `az-debounce="commit" az-input='[0,"edit"]'><p id="p"></p></div>`,
         );
         type($('input'), 'ab');
@@ -498,7 +498,7 @@ describe('a held write', () => {
 
     it('defers a removal', async () => {
         const c = await start(
-            `<div id="v" az-view><input az="0" type="checkbox" name="c" checked az-ctl az-change='[0,"tick"]'></div>`,
+            `<div id="v" az-view><input az="0" type="checkbox" name="c" checked az-ctl="checked" az-change='[0,"tick"]'></div>`,
         );
         const cb = $('input');
         cb.click(); // off
@@ -514,7 +514,7 @@ describe('a held write', () => {
 
     it("defers a textarea's content", async () => {
         const c = await start(
-            `<div id="v" az-view><textarea az="0" name="t" az-ctl az-input='[0,"edit"]'>a</textarea></div>`,
+            `<div id="v" az-view><textarea az="0" name="t" az-ctl="content" az-input='[0,"edit"]'>a</textarea></div>`,
         );
         const ta = $('textarea');
         type(ta, 'ab');
@@ -529,7 +529,7 @@ describe('a held write', () => {
     it('in a stream item', async () => {
         const c = await start(
             `<div id="v" az-view><ul az="0"><li az-key="k1">` +
-                `<input az="1" name="q" value="" az-ctl az-input='[0,"edit"]'></li></ul></div>`,
+                `<input az="1" name="q" value="" az-ctl="value" az-input='[0,"edit"]'></li></ul></div>`,
         );
         type($('input'), 'ab');
         const ref = c.lastRef();
@@ -549,7 +549,7 @@ describe('a held write', () => {
     it('runs the hook update when it is applied', async () => {
         const updated = vi.fn();
         const c = await start(
-            `<div id="v" az-view><input az="0" az-hook="H" name="q" value="" az-ctl az-input='[0,"edit"]'></div>`,
+            `<div id="v" az-view><input az="0" az-hook="H" name="q" value="" az-ctl="value" az-input='[0,"edit"]'></div>`,
             { before: (mod) => (mod.hooks.H = { updated }) },
         );
         type($('input'), 'ab');
@@ -585,7 +585,7 @@ describe('a held write', () => {
     async function opPathIdle(/** @type {any} */ c) {
         document.body.insertAdjacentHTML(
             'beforeend',
-            `<div id="w" az-view><input id="other" az="0" name="o" value="" az-ctl></div>`,
+            `<div id="w" az-view><input id="other" az="0" name="o" value="" az-ctl="value"></div>`,
         );
         c.msg([[SET_ATTR, 'w:0', 'value', 'x']]);
         return $('#other').value === 'x';
@@ -618,7 +618,52 @@ describe('a held write', () => {
     });
 });
 
-describe('only the diff path is held', () => {});
+describe('only the diff path is held', () => {
+    // A command the user's own event runs is the user's act: it writes through.
+    it('a client set_attr clears a focused, edited control (Escape to clear)', async () => {
+        await start(
+            `<div id="v" az-view><input id="q" az="0" name="q" value="" az-ctl="value" ` +
+                `az-keydown='[7,"#q","value",""]' az-change='[0,"set"]'></div>`,
+        );
+        const el = $('input');
+        el.focus();
+        el.value = 'abc';
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(el.getAttribute('value')).toBe('');
+        expect(el.value).toBe('');
+    });
+
+    it('a push then a client clear: typing the next item survives the reply', async () => {
+        const c = await start(
+            `<div id="v" az-view><input id="q" az="0" name="q" value="" az-ctl="value" ` +
+                `az-keydown='[[0,"add"],[7,"#q","value",""]]'></div>`,
+        );
+        const el = $('input');
+        el.focus();
+        el.value = 'milk';
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        expect(c.sent().at(-1)[1]).toBe('add');
+        expect(el.value).toBe('');
+        el.value = 'e';
+        c.msg(null, null, c.lastRef());
+        expect(el.value).toBe('e');
+        el.blur();
+        expect(el.value).toBe('e');
+    });
+
+    it('a set_attr effect a frame carries is a server write, held off unsent typing', async () => {
+        const c = await start(
+            `<div id="v" az-view><input id="q" az="0" name="q" value="a" az-ctl="value"></div>`,
+        );
+        const el = $('input');
+        el.focus();
+        el.value = 'ab';
+        c.msg(null, [[7, '#q', 'value', 'srv']]);
+        expect(el.value).toBe('ab');
+        el.blur();
+        expect(el.value).toBe('srv');
+    });
+});
 
 describe('the reconcile', () => {
     it('keeps what the user typed after the captured value', async () => {
@@ -635,12 +680,15 @@ describe('the reconcile', () => {
     it('resets a select whose reply adds an option', async () => {
         const c = await start(
             `<div id="v" az-view><select name="s" az-change='[0,"pick"]'>` +
-                `<option value="a" selected az-ctl>A</option>` +
-                `<option value="b" az-ctl>B</option></select></div>`,
+                `<option value="a" selected az-ctl="selected">A</option>` +
+                `<option value="b" az-ctl="selected">B</option></select></div>`,
         );
         $('select').value = 'b';
         change($('select'));
-        $('select').insertAdjacentHTML('beforeend', `<option value="c" az-ctl>C</option>`);
+        $('select').insertAdjacentHTML(
+            'beforeend',
+            `<option value="c" az-ctl="selected">C</option>`,
+        );
         c.msg(null, null, c.lastRef());
         expect($('select').value).toBe('a');
     });
@@ -648,9 +696,9 @@ describe('the reconcile', () => {
     it('resets a select whose reply removes an option', async () => {
         const c = await start(
             `<div id="v" az-view><select name="s" az-change='[0,"pick"]'>` +
-                `<option value="a" selected az-ctl>A</option>` +
-                `<option value="b" az-ctl>B</option>` +
-                `<option value="c" az-ctl>C</option></select></div>`,
+                `<option value="a" selected az-ctl="selected">A</option>` +
+                `<option value="b" az-ctl="selected">B</option>` +
+                `<option value="c" az-ctl="selected">C</option></select></div>`,
         );
         $('select').value = 'b';
         change($('select'));
@@ -662,12 +710,15 @@ describe('the reconcile', () => {
     it('restores the default radio of a group whose reply adds a radio', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<input type="radio" name="r" value="a" checked az-ctl az-change='[0,"pick"]'>` +
-                `<input type="radio" name="r" value="b" az-ctl az-change='[0,"pick"]'>` +
+                `<input type="radio" name="r" value="a" checked az-ctl="checked" az-change='[0,"pick"]'>` +
+                `<input type="radio" name="r" value="b" az-ctl="checked" az-change='[0,"pick"]'>` +
                 `</div>`,
         );
         $('[value=b]').click();
-        $('#v').insertAdjacentHTML('beforeend', `<input type="radio" name="r" value="c" az-ctl>`);
+        $('#v').insertAdjacentHTML(
+            'beforeend',
+            `<input type="radio" name="r" value="c" az-ctl="checked">`,
+        );
         c.msg(null, null, c.lastRef());
         expect($('[value=a]').checked).toBe(true);
         expect($('[value=b]').checked).toBe(false);
@@ -676,14 +727,17 @@ describe('the reconcile', () => {
     it('keeps a choice made after the capture in a group whose reply adds a radio', async () => {
         const c = await start(
             `<div id="v" az-view>` +
-                `<input type="radio" name="r" value="a" checked az-ctl az-change='[0,"pick"]'>` +
-                `<input type="radio" name="r" value="b" az-ctl>` +
-                `<input type="radio" name="r" value="d" az-ctl>` +
+                `<input type="radio" name="r" value="a" checked az-ctl="checked" az-change='[0,"pick"]'>` +
+                `<input type="radio" name="r" value="b" az-ctl="checked">` +
+                `<input type="radio" name="r" value="d" az-ctl="checked">` +
                 `</div>`,
         );
         $('[value=a]').dispatchEvent(new Event('change', { bubbles: true }));
         $('[value=d]').checked = true; // the user moved on, unproposed
-        $('#v').insertAdjacentHTML('beforeend', `<input type="radio" name="r" value="c" az-ctl>`);
+        $('#v').insertAdjacentHTML(
+            'beforeend',
+            `<input type="radio" name="r" value="c" az-ctl="checked">`,
+        );
         c.msg(null, null, c.lastRef());
         expect($('[value=d]').checked).toBe(true);
     });
@@ -692,7 +746,7 @@ describe('the reconcile', () => {
     // never matches the live value, but one that inserts nothing (Enter) does.
     it('reconciles on a key that inserts nothing, not on one that edits', async () => {
         const c = await start(
-            `<div id="v" az-view><input name="q" value="" az-ctl ` +
+            `<div id="v" az-view><input name="q" value="" az-ctl="value" ` +
                 `az-keydown='[16,["enter","a"],[[0,"key"]]]'></div>`,
         );
         const el = $('input');
@@ -730,7 +784,7 @@ describe('the reconcile', () => {
 
 describe('a reconnect', () => {
     const view = (/** @type {string} */ change) =>
-        `<div id="page" az-view><form id="f"${change}><input name="q" value="" az-ctl></form></div>`;
+        `<div id="page" az-view><form id="f"${change}><input name="q" value="" az-ctl="value"></form></div>`;
 
     it('restores a bound field its replay proposes, and reconciles on the reply', async () => {
         const v = view(` az-change='[0,"changed"]'`);

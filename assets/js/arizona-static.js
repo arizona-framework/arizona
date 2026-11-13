@@ -45,8 +45,7 @@ setHost({
     // No server writes a control here.
     carry: () => null,
     holds: () => false,
-    leaveCtl: () => {},
-    compose: () => {},
+    ctlEvent: () => {},
     holdReplay: () => (fn) => fn(),
     navigate: (url, opts) => loadPage(url, opts?.replace),
     leavePage: loadPage,

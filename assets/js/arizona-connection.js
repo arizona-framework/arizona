@@ -2,7 +2,7 @@ import { applyChooser, applyChoosers, syncsProp } from './arizona-attrs.js';
 import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
-import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
+import { destroyAllHooks, mountHooks, notifyUpdated } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
@@ -497,6 +497,8 @@ let _navEpoch = 0;
  * @param {Array<[Element, string|boolean]>|null} [ctls]
  */
 function sendEvent(name, frame, epoch = _navEpoch, transition = null, ctls = null) {
+    // Sent or dropped, the raise is no longer pending (`carry`).
+    if (ctls) for (const [c] of ctls) if (_pending.get(c) === ctls) _pending.delete(c);
     const waits =
         transition !== null &&
         transition === _pendingTransition &&
@@ -524,47 +526,77 @@ function sendEvent(name, frame, epoch = _navEpoch, transition = null, ctls = nul
     } else if (waits) {
         armPendingTransition(null);
     }
-    workerPost(W_SEND, JSON.stringify(frame));
+    workerPost(W_SEND, JSON.stringify(frame, wellFormed));
+}
+
+/**
+ * A lone surrogate (a half-typed astral character) as U+FFFD: JSON escapes it,
+ * and a server reading the frame as UTF-8 refuses it, so the frame would go
+ * unanswered.
+ * @param {string} _key
+ * @param {*} v
+ */
+function wellFormed(_key, v) {
+    return typeof v === 'string'
+        ? v.replace(/[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]/g, (m) =>
+              m.length === 2 ? m : '\ufffd',
+          )
+        : v;
 }
 
 // Server-owned controls (`az-ctl`). The attribute a server write changes is only the
 // control's default; once the user edits it, what it shows is the live property, so a
-// write the user is not shown is lost. Two states hold a control, so a write reaches
-// its attribute alone (`holds`):
-// - in flight: an event carrying its state awaits its reply. The reply settles it
-//   (`settleCtls`): unless the user changed it since, it shows what the server
-//   rendered -- the refused or normalised value, which no op carries when the
-//   binding did not change. A later event takes it over, so an earlier reply cannot
-//   put back what the user typed after it (`123`, never `13`).
-// - edited and unsent: focused (or composing) and differing from its default. A
-//   write here is noted (`_guardWrote`); when focus leaves without the edit sent,
-//   the server's value wins, since it changed what the user was editing. Unwritten,
-//   the edit is kept for the event that sends it.
+// write the user is not shown is lost. Only a write a server frame applies (its ops
+// and effects, `_inFrame`) is ever held; a command the user's own event runs writes
+// through. Three states hold a control, so a server write reaches its attribute alone
+// (`holds`):
+// - pending: an event carrying its state is raised and not yet sent (a debounce).
+// - in flight: that event awaits its reply, which settles it (`settleCtls`): unless
+//   the user changed it since, it shows what the server rendered -- the refused or
+//   normalised value, which no op carries when the binding did not change. A later
+//   event takes it over, so an earlier reply cannot put back what the user typed
+//   after it (`123`, never `13`).
+// - edited and unsent: focused (or composing) and differing from its default.
+// A write held other than by the reply to an event carrying the control is a push
+// and is noted (`_guardWrote`); when focus leaves the control with nothing pending
+// or in flight, a noted write wins, since the server changed what the user was
+// editing. Unwritten, the edit is kept for the event that sends it.
 /** @type {Map<Element, {ref: number, snap: string|boolean}>} */
 const _owned = new Map();
 /** @type {Map<number, Element[]>} */
 const _ownedRefs = new Map();
+/** @type {Map<Element, Array<[Element, string|boolean]>>} */
+const _pending = new Map();
 /** @type {WeakSet<Element>} */
 let _guardWrote = new WeakSet();
+// A `value` write deferred while the user is mid bad input (`holds`).
+/** @type {WeakMap<Element, string|null>} */
+let _deferred = new WeakMap();
 /** @type {Element|null} */
 let _composing = null;
-// The reply ref of the frame being applied (`null` for a server push).
+// While a server frame is applied; and the reply ref of its ops (`null` for a push,
+// and for its effects: a command a handler returns is a server statement).
+let _inFrame = false;
 /** @type {number|null} */
 let _applying = null;
 
 /**
- * Is `el` a control whose default the server renders (`az-ctl`, emitted by the parse
- * transform)? A select is when it or one of its options carries the mark: a select's
- * value compiles to its options' `selected`.
+ * Is `el` a control whose shown part the server renders (`az-ctl`, listing the parts
+ * the parse transform saw rendered)? A checkbox or radio shows its checkedness, a
+ * select its options' selectedness (or its kept `value`), the rest their value.
  * @param {Element} el
  * @returns {boolean}
  */
 function isCtl(el) {
     const tag = el.localName;
+    const parts = (el.getAttribute('az-ctl') ?? '').split(' ');
+    if (tag === 'select')
+        return parts.includes('value') || el.querySelector('option[az-ctl~="selected"]') !== null;
+    if (tag === 'textarea') return parts.includes('content') || parts.includes('value');
+    const type = /** @type {HTMLInputElement} */ (el).type;
     return (
-        (tag === 'input' || tag === 'textarea' || tag === 'select') &&
-        (el.hasAttribute('az-ctl') ||
-            (tag === 'select' && el.querySelector('option[az-ctl]') !== null))
+        tag === 'input' &&
+        parts.includes(type === 'checkbox' || type === 'radio' ? 'checked' : 'value')
     );
 }
 
@@ -579,7 +611,9 @@ function ctlGroup(ctl) {
     if (r.type !== 'radio' || !r.name || ctl.localName !== 'input') return [ctl];
     const scope = r.form
         ? r.form.elements
-        : /** @type {Document} */ (ctl.getRootNode()).querySelectorAll('input[type=radio]');
+        : /** @type {Document} */ (ctl.getRootNode()).querySelectorAll(
+              `input[name="${CSS.escape(r.name)}"]`,
+          );
     return Array.from(scope).filter(
         (m) =>
             /** @type {HTMLInputElement} */ (m).type === 'radio' &&
@@ -602,22 +636,35 @@ function ctlState(ctl) {
 }
 
 /**
- * The server-owned controls (`az-ctl`) whose state an event raised on `el` sends, as
- * `[control, state]` pairs, or `null`: the trigger when it is one (a radio with its
- * group), a form's controls when it is a form -- what `autoPayload` collects.
+ * `host.carry`: the server-owned controls whose state an event raised on `el` sends,
+ * as `[control, state]` pairs, or `null`: the trigger when it is one (a radio with
+ * its group), a form's controls it submits (named, not disabled) when it is a form.
+ * An event whose default was prevented edited nothing, and a drop sends no control.
+ * Each is pending until the send, held like one in flight.
  * @param {Element} el
  * @param {Event|null} event
  * @returns {Array<[Element, string|boolean]>|null}
  */
 function carry(el, event) {
-    if (event && /** @type {any} */ (event).dataTransfer) return null;
+    // A submit is always prevented (the client sends it), its fields still edited.
+    const prevented = event?.defaultPrevented && event.type !== 'submit';
+    if (prevented || /** @type {any} */ (event)?.dataTransfer) return null;
     const ctls =
         el.localName === 'form'
-            ? Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(isCtl)
+            ? Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(
+                  (c) =>
+                      isCtl(c) &&
+                      /** @type {HTMLInputElement} */ (c).name &&
+                      !c.matches(':disabled'),
+              )
             : isCtl(el)
               ? ctlGroup(el)
               : [];
-    return ctls.length ? ctls.map((c) => [c, ctlState(c)]) : null;
+    if (!ctls.length) return null;
+    /** @type {Array<[Element, string|boolean]>} */
+    const carried = ctls.map((c) => [c, ctlState(c)]);
+    for (const [c] of carried) _pending.set(c, carried);
+    return carried;
 }
 
 /**
@@ -635,40 +682,52 @@ function edited(ctl) {
     return syncsProp(ctl, 'value') && c.value !== c.defaultValue;
 }
 
+/** @param {Element} ctl */
+const badInput = (ctl) => /** @type {any} */ (ctl).validity?.badInput === true;
+
 /**
- * `host.holds`: must a server write to `el` leave the live state alone?
+ * `host.holds`: must a server write of `name` (`val`, `null` a removal) to `el` leave
+ * the live state alone (`true`), or not happen yet (`'defer'`: the `value` of a
+ * focused control mid bad input, which a browser may clear on the write -- written
+ * when the input is good again or focus leaves)?
  * @param {Element} el
- * @returns {boolean}
+ * @param {string} name
+ * @param {string|null} val
+ * @returns {boolean|'defer'}
  */
-function holds(el) {
+function holds(el, name, val) {
+    if (!_inFrame) return false;
     const ctl = el.localName === 'option' ? el.closest('select') : el;
     if (!ctl || !isCtl(ctl)) return false;
-    const st = _owned.get(ctl);
-    if (st) {
-        // A frame answering an event that carried the control echoes or settles it;
-        // any other is a server push, which wins when focus leaves an edit made past it.
-        if (_applying === null || !_ownedRefs.get(_applying)?.includes(ctl)) _guardWrote.add(ctl);
-        return true;
-    }
     const group = ctlGroup(ctl);
     const focus = ctl.ownerDocument.activeElement;
+    const isPush = _applying === null || !_ownedRefs.get(_applying)?.includes(ctl);
+    if (name === 'value' && focus === ctl && badInput(ctl)) {
+        _deferred.set(ctl, val);
+        return 'defer';
+    }
     if (
+        _owned.has(ctl) ||
+        _pending.has(ctl) ||
         (_composing && group.includes(_composing)) ||
         (focus && group.includes(focus) && group.some(edited))
     ) {
-        _guardWrote.add(ctl);
+        if (isPush) _guardWrote.add(ctl);
         return true;
     }
     return false;
 }
 
 /**
- * Make `ctl` show its default, the value the server rendered. A focused text keeps
- * its selection, clamped to the new value.
+ * Make `ctl` show its default, the value the server rendered, and tell its hooks (a
+ * radio's group: checking one unchecks another). A focused text keeps its
+ * selection, clamped to the new value.
  * @param {Element} ctl
  */
 function showDefault(ctl) {
     const c = /** @type {any} */ (ctl);
+    const group = ctlGroup(ctl);
+    const before = group.map(ctlState);
     if (ctl === _composing) {
         // Never mid-composition: noted, so leaving the field settles it.
         _guardWrote.add(ctl);
@@ -693,12 +752,16 @@ function showDefault(ctl) {
             c.setSelectionRange(Math.min(range[0], n), Math.min(range[1], n));
         }
     }
+    group.forEach((m, i) => {
+        if (ctlState(m) !== before[i]) notifyUpdated(m);
+    });
 }
 
 /**
  * The reply to the frame tagged `ref` has been applied: each control it carried that
  * no later event took over shows what the server rendered, unless the user changed
- * it since it was sent.
+ * it since it was sent. One showing bad input (`1e-` in a number) reads `""`, so it
+ * waits for focus to leave it.
  * @param {number|null} ref
  */
 function settleCtls(ref) {
@@ -709,7 +772,10 @@ function settleCtls(ref) {
         const st = _owned.get(c);
         if (st?.ref !== ref) continue;
         _owned.delete(c);
-        if (_connected && ctlState(c) === st.snap) {
+        if (!_connected || ctlState(c) !== st.snap) continue;
+        if (badInput(c)) {
+            _guardWrote.add(c);
+        } else {
             _guardWrote.delete(c);
             showDefault(c);
         }
@@ -717,16 +783,33 @@ function settleCtls(ref) {
 }
 
 /**
- * `host.leaveCtl`: focus left `el`. A server write held while the user edited it
- * without sending wins now; an edit no write met is kept for the event that sends it.
- * @param {Element} el
+ * `host.ctlEvent`: an event bearing on a control the user edits. Focus leaving it
+ * (within the document: a window losing focus keeps the edit guarded) lets a server
+ * write held meanwhile win, unless an event carrying it is still pending or in
+ * flight; an edit no write met is kept for the event that sends it. A good input
+ * (or leaving) releases a deferred `value` write. A composition holds the control.
+ * @param {Event} e
  */
-function leaveCtl(el) {
-    if (!isCtl(el)) return;
+function ctlEvent(e) {
+    const el = /** @type {Element} */ (e.target);
+    if (e.type === 'compositionstart') _composing = el;
+    else if (e.type === 'compositionend') _composing = null;
+    if (el.nodeType !== 1 || !isCtl(el)) return;
+    const leave = e.type === 'focusout';
+    if (leave && !el.ownerDocument.hasFocus()) return;
+    if ((leave || (e.type === 'input' && !badInput(el))) && _deferred.has(el)) {
+        const v = _deferred.get(el);
+        _deferred.delete(el);
+        if (v == null) el.removeAttribute('value');
+        else el.setAttribute('value', v);
+        _guardWrote.add(el);
+    }
+    if (!leave) return;
     const group = ctlGroup(el);
     let wrote = false;
     for (const m of group) if (_guardWrote.delete(m)) wrote = true;
-    if (wrote && _connected && !group.some((m) => _owned.has(m))) group.forEach(showDefault);
+    if (wrote && _connected && !group.some((m) => _owned.has(m) || _pending.has(m)))
+        group.forEach(showDefault);
 }
 
 // The user-facing query string carried to the worker for the next reconnect
@@ -1476,6 +1559,7 @@ export function connect(endpoint, params = {}) {
                         // ...and so is the element being typed into: put focus
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
+                        _inFrame = true;
                         _applying = msg[5];
                         try {
                             if (msg[1]) applyOps(msg[1], !!msg[3]);
@@ -1484,8 +1568,10 @@ export function connect(endpoint, params = {}) {
                                 if (msg[1]?.length) applyScroll(armedScroll);
                                 setPendingScroll(null);
                             }
+                            _applying = null;
                             if (msg[2]) applyEffects(msg[2]);
                         } finally {
+                            _inFrame = false;
                             _applying = null;
                         }
                         settleCtls(msg[5]);
@@ -1708,7 +1794,9 @@ export function connect(endpoint, params = {}) {
         _navAwaitResync = false;
         _owned.clear();
         _ownedRefs.clear();
+        _pending.clear();
         _guardWrote = new WeakSet();
+        _deferred = new WeakMap();
         _composing = null;
         _connectQs = '';
         _savedForms.clear();
@@ -1749,10 +1837,7 @@ setHost({
     holdReplay,
     carry,
     holds,
-    leaveCtl,
-    compose: (el) => {
-        _composing = el;
-    },
+    ctlEvent,
     navigate: navigateEffect,
     leavePage,
 });
