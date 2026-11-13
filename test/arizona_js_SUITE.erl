@@ -1,6 +1,12 @@
 -module(arizona_js_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("arizona/include/arizona_effect.hrl").
+-dialyzer({nowarn_function, set_attr_refuses_a_value_neither_binary_nor_command/1}).
+-dialyzer({nowarn_function, toggle_attr_refuses_a_value_neither_binary_nor_command/1}).
+-dialyzer({nowarn_function, attr_errors_name_the_public_function/1}).
+-dialyzer({nowarn_function, attr_refuses_an_improper_list_value/1}).
+-dialyzer({nowarn_function, attr_refuses_a_name_that_is_not_a_binary/1}).
+-dialyzer({nowarn_function, attr_refuses_a_selector_that_is_not_a_binary/1}).
 
 -export([all/0]).
 -export([groups/0]).
