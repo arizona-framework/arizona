@@ -162,10 +162,19 @@ keeps its meaning as a value: it is escaped exactly as the runtime would escape 
 bare binary literal child, which is spliced as raw markup. Inside raw-text elements
 (`script`/`style`/`textarea`/`title`) it is not folded and keeps the dynamic-slot rules.
 
-Two names are reserved because the transform emits them itself and a duplicate would
-misroute a patch: `az` (the element's diff address) and `az-local` (the `?local`
-descriptor). Either one in a template is a compile error (`reserved_attr`), in any form
-(`{az, V}`, bare `az`, `<<"az">>`, `az_local`). `az-nodiff` is written bare only: its
+Three names are reserved because the transform emits them itself: `az` (the element's diff
+address) and `az-local` (the `?local` descriptor), where a duplicate would misroute a patch,
+and `az-ctl`, where an authored one would mark a control the server does not render. Any of
+them in a template is a compile error (`reserved_attr`), in any form (`{az, V}`, bare `az`,
+`<<"az">>`, `az_local`, `az_ctl`).
+
+`az-ctl` marks a server-owned control: an element holding a diffable dynamic for a part the
+backend's optional `controlled/2` names (HTML: `value` on `input`/`select`/`textarea`,
+`checked` on `input`, `selected` on `option` -- the one a select's `value` becomes included --
+and `textarea` content) gets it as a bare attribute after the author's and the implied ones.
+A `?local`, an az-nodiff subtree and `?json`/`?terminal` emit none. The client uses it to
+show what the server rendered once an event carrying the control's value is answered, and to
+hold server writes off unsent typing (see [js.md](js.md)). `az-nodiff` is written bare only: its
 value in the HTML is the compiler's (the az-nodiff element token), so `{'az-nodiff', V}` /
 `{az_nodiff, true}` is a compile error (`nodiff_value`). `az-view` has its own rule -- injected on a
 live root, rejected elsewhere. Everything else `az-*` is the template author's: `az_key`

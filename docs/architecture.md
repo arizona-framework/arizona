@@ -1046,6 +1046,40 @@ transition does not. Cross-document (real `<a href>`) navigations animate via th
 (`view-transition-name`, `::view-transition-*`, `:active-view-transition-type`) is user CSS. See
 `.claude/rules/js.md` for the client surface.
 
+## Server-owned controls -- `az-ctl`
+
+A form control's `value`/`checked`/`selected` attribute (and a `<textarea>`'s content) is only
+its **default**: once the user edits the control, the browser's dirty flags detach what it
+shows (the `.value`/`.checked`/`.selected` property) from the attribute. A handler that
+refuses an edit (`qty` stays `5` when the user types `999`) or normalises it (`"abc "` stored
+as `"abc"`) leaves the binding unchanged, so the diff sends no op and the field would keep
+the user's text forever.
+
+**Compile time.** The optional `arizona_renderer:controlled/2` callback names the parts that
+are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`/`textarea`,
+`checked` on `input`, `selected` on `option` (the one the transform derives from a select's
+`value` included) and `textarea` content. An element holding a **diffable** dynamic for one
+of them gets the static bare attribute `az-ctl` (via `attr_bool/2`), after the author's
+attributes and the implied ones. A `?local` (the client's own), an az-nodiff subtree (never
+updated) and a backend without the callback (`?json`, `?terminal`) emit nothing. `az-ctl` is
+reserved (`reserved_attr`), like `az` and `az-local`.
+
+**Client.** The guarantee: *once the server has answered an event that carried a control's
+value, and the user has not changed the control since, the control shows what the server
+rendered.* A `push_event` raised on a marked control (a radio with its marked group) or on a
+form (its marked controls) snapshots what each sends and tags its frame with a reply ref;
+while it is in flight a server write to the control reaches the attribute only, and when the
+reply has been applied each control still showing its snapshot is synced to its default.
+Each control follows its latest event, so an earlier reply never puts back what was typed
+after it. A focused control the user has edited and not yet sent is held the same way, so a
+server push never clobbers unsent typing; when focus leaves it, a write held meanwhile wins
+(the server changed what was being edited), and with none the edit is kept for the event
+that sends it. A property is never written mid-IME-composition. Mechanism and limits in
+[.claude/rules/js.md](../.claude/rules/js.md).
+
+An `az-submit` form's marked fields follow the same rule: a submit the handler refuses
+reverts them to what the server rendered.
+
 ## Client-owned slots -- `?local`
 
 A `?local(Key, Init)` slot is **static to the server, dynamic to the client**: the server
