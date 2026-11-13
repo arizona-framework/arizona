@@ -13523,8 +13523,8 @@ nodiff_fragment_root_markup_renders(Config) when is_list(Config) ->
     end,
     Star = ~"<svg width=\"16\"><path d=\"M0 0\"></path></svg>",
     Canvas = ~"Rating <canvas az-nodiff az-hook=\"Chart\"></canvas>",
-    [
-        begin
+    ok = lists:foreach(
+        fun(Render) ->
             ?assertEqual(<<Canvas/binary, Star/binary>>, Render(remote, B)),
             ?assertEqual(<<Canvas/binary, Star/binary>>, Render(icon, B)),
             ?assertEqual(~"Hi <div az-nodiff>x</div><p>y</p>", Render(conditional, B)),
@@ -13556,9 +13556,9 @@ nodiff_fragment_root_markup_renders(Config) when is_list(Config) ->
                     arizona_template:stateless(fun Icons:field/1, #{v => ~"x"})
                 ]
             ]
-        end
-     || Render <- [RenderSsr, RenderLive]
-    ],
+        end,
+        [RenderSsr, RenderLive]
+    ),
     %% A control inside a child view, or inside an az-nodiff unit of its own whose
     %% element roots carry the marker, is no root's to refuse.
     [
