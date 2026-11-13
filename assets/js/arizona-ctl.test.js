@@ -724,3 +724,61 @@ describe('server-owned controls: final audit', () => {
         }
     });
 });
+
+describe('server-owned controls: pending by debounce slot', () => {
+    it('a raise a prevented raise replaces in its slot is let go', async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<input id="q" az="0" name="q" value="" az-ctl="value" az-debounce="300" az-keydown='[0,"k"]' />`,
+            );
+            const el = document.querySelector('input');
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') e.preventDefault();
+            });
+            el.focus();
+            el.value = 'x';
+            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+            el.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+            );
+            el.blur();
+            expect(mock.sent().at(-1)).toHaveLength(3);
+            mock.reply([setAttr(0, 'value', 'srv')], null);
+            expect(el.value).toBe('srv');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a control stays pending while any slot still carries it', async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form az-input='[0,"i"]' az-change='[0,"c"]' az-debounce="300">` +
+                    `<input id="a" az="0" name="a" value="" az-ctl="value" />` +
+                    `<input id="b" az="1" name="b" value="" az-ctl="value" /></form>`,
+            );
+            const a = document.getElementById('a');
+            const b = document.getElementById('b');
+            b.value = 'bb';
+            b.dispatchEvent(new Event('input', { bubbles: true }));
+            b.disabled = true;
+            a.value = 'aa';
+            a.dispatchEvent(new Event('change', { bubbles: true }));
+            mock.reply([setAttr(1, 'value', 'srv')], null);
+            expect(b.value).toBe('bb');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a write to a part the control does not show is not held', async () => {
+        await connect(`<textarea az="0" name="t" az-ctl="content">a</textarea>`);
+        const el = document.querySelector('textarea');
+        el.focus();
+        el.value = 'typed';
+        mock.reply([setAttr(0, 'value', 'x')], null);
+        expect(el.value).toBe('x');
+    });
+});

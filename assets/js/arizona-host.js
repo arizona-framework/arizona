@@ -19,6 +19,8 @@
  *   carrying the state of the server-owned controls `ctls` as it was raised
  * @property {(el: Element, event: Event|null) => Array<[Element, string|boolean]>|null} carry
  *   the server-owned controls an event raised on `el` sends the state of, with that state
+ * @property {(ctls: Array<[Element, string|boolean]>) => void} release a raised event
+ *   carrying `ctls` will not be sent (a later raise replaced it)
  * @property {(el: Element, name: string, val: string|null) => boolean|'defer'} holds
  *   whether a server write of `name` to `el` (a control, or an option of one) must leave
  *   its live state alone, or (`'defer'`) not happen yet

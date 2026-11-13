@@ -44,6 +44,7 @@ setHost({
     armTransition: () => {},
     // No server writes a control here.
     carry: () => null,
+    release: () => {},
     holds: () => false,
     ctlEvent: () => {},
     holdReplay: () => (fn) => fn(),

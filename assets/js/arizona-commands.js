@@ -446,9 +446,17 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const ctls = host.carry(el, event);
             if (event) {
                 const epoch = host.epoch();
-                scheduleSend(el, event, prefix, index, () => {
-                    host.sendEvent(evt, frame, epoch, transition, ctls);
-                });
+                const send = () => host.sendEvent(evt, frame, epoch, transition, ctls);
+                // A later raise replacing it in its slot means it is never sent.
+                scheduleSend(
+                    el,
+                    event,
+                    prefix,
+                    index,
+                    Object.assign(send, {
+                        drop: () => ctls && host.release(ctls),
+                    }),
+                );
             } else {
                 host.sendEvent(evt, frame, undefined, transition, ctls);
             }
@@ -846,7 +854,7 @@ function scheduleSend(el, event, prefix, index, send) {
     const slot = t;
     // Event-name debounce: just store the latest send, flush on the named event.
     if (debounceEvent) {
-        slot.pending = send;
+        replacePending(slot, send);
         if (!rec.eventBound) {
             rec.eventBound = true;
             el.addEventListener(debounceEvent, () => flushTimer(el));
@@ -856,7 +864,7 @@ function scheduleSend(el, event, prefix, index, send) {
     if (debounceMs > 0) {
         // Classic debounce: reset timer on every event.
         clearTimeout(slot.id);
-        slot.pending = send;
+        replacePending(slot, send);
         slot.id = setTimeout(() => {
             slot.id = undefined;
             slot.pending = null;
@@ -871,7 +879,7 @@ function scheduleSend(el, event, prefix, index, send) {
             slot.id = undefined;
         }
         if (event.type === 'keydown') slot.prevKey = /** @type {KeyboardEvent} */ (event).key;
-        slot.pending = send;
+        replacePending(slot, send);
         if (slot.id) return;
         send();
         slot.pending = null;
@@ -898,6 +906,17 @@ function scheduleSend(el, event, prefix, index, send) {
         rec.blurBound = true;
         el.addEventListener('blur', () => flushTimer(el));
     }
+}
+
+/**
+ * Make `send` the slot's pending send: the one it replaces is never sent, so it lets
+ * go of what it held pending (`drop`).
+ * @param {{pending?: any}} slot
+ * @param {Function} send
+ */
+function replacePending(slot, send) {
+    slot.pending?.drop?.();
+    slot.pending = send;
 }
 
 /**

@@ -504,7 +504,7 @@ let _navEpoch = 0;
  */
 function sendEvent(name, frame, epoch = _navEpoch, transition = null, ctls = null) {
     // Sent or dropped, the raise is no longer pending (`carry`).
-    if (ctls) for (const [c] of ctls) if (_pending.get(c) === ctls) _pending.delete(c);
+    if (ctls) release(ctls);
     const waits =
         transition !== null &&
         transition === _pendingTransition &&
@@ -571,12 +571,9 @@ function wellFormed(_key, v) {
 const _owned = new Map();
 /** @type {Map<number, Element[]>} */
 const _ownedRefs = new Map();
-/** @type {WeakMap<Element, Array<[Element, string|boolean]>>} */
+// How many raised, unsent events carry each control (`carry`, `release`).
+/** @type {WeakMap<Element, number>} */
 let _pending = new WeakMap();
-// The controls each trigger's latest raise carried: a raise a debounce supersedes is
-// never sent, so a control only it carried is let go.
-/** @type {WeakMap<Element, Array<[Element, string|boolean]>>} */
-let _raised = new WeakMap();
 /** @type {WeakSet<Element>} */
 let _guardWrote = new WeakSet();
 // A `value` write deferred while the user is mid bad input (`holds`).
@@ -608,6 +605,21 @@ function isCtl(el) {
         tag === 'input' &&
         parts.includes(type === 'checkbox' || type === 'radio' ? 'checked' : 'value')
     );
+}
+
+/**
+ * Is `part` the part `ctl` shows (`isCtl`): a write to another one (a textarea's
+ * `value` attribute, a checkbox's `value`) is not held.
+ * @param {Element} ctl
+ * @param {string} part
+ * @returns {boolean}
+ */
+function shows(ctl, part) {
+    const tag = ctl.localName;
+    const type = /** @type {HTMLInputElement} */ (ctl).type;
+    if (tag === 'select') return part === 'value' || part === 'selected';
+    if (tag === 'textarea') return part === 'content';
+    return part === (type === 'checkbox' || type === 'radio' ? 'checked' : 'value');
 }
 
 /**
@@ -650,7 +662,8 @@ function ctlState(ctl) {
  * as `[control, state]` pairs, or `null`: the trigger when it is one (a radio with
  * its group), a form's controls it submits (named, not disabled) when it is a form.
  * An event whose default was prevented edited nothing, and a drop sends no control.
- * Each is pending until the send, held like one in flight.
+ * Each is pending until that event is sent or dropped (`release`), held like one in
+ * flight: while any raised event carries it.
  * @param {Element} el
  * @param {Event|null} event
  * @returns {Array<[Element, string|boolean]>|null}
@@ -670,14 +683,24 @@ function carry(el, event) {
             : isCtl(el)
               ? ctlGroup(el)
               : [];
-    for (const [c] of _raised.get(el) ?? [])
-        if (_pending.get(c) === _raised.get(el)) _pending.delete(c);
     if (!ctls.length) return null;
     /** @type {Array<[Element, string|boolean]>} */
     const carried = ctls.map((c) => [c, ctlState(c)]);
-    for (const [c] of carried) _pending.set(c, carried);
-    _raised.set(el, carried);
+    for (const [c] of carried) _pending.set(c, (_pending.get(c) ?? 0) + 1);
     return carried;
+}
+
+/**
+ * `host.release`: a raised event carrying `ctls` was sent, dropped, or replaced by a
+ * later raise in its debounce/throttle slot: it no longer keeps them pending.
+ * @param {Array<[Element, string|boolean]>} ctls
+ */
+function release(ctls) {
+    for (const [c] of ctls) {
+        const n = (_pending.get(c) ?? 0) - 1;
+        if (n > 0) _pending.set(c, n);
+        else _pending.delete(c);
+    }
 }
 
 /**
@@ -710,8 +733,9 @@ const badInput = (ctl) => /** @type {any} */ (ctl).validity?.badInput === true;
  */
 function holds(el, name, val) {
     if (!_inFrame) return false;
-    const ctl = el.localName === 'option' ? el.closest('select') : el;
-    if (!ctl || !isCtl(ctl)) return false;
+    const option = el.localName === 'option';
+    const ctl = option ? el.closest('select') : el;
+    if (!ctl || !isCtl(ctl) || !shows(ctl, option ? 'selected' : name)) return false;
     const group = ctlGroup(ctl);
     const focus = ctl.ownerDocument.activeElement;
     const isPush = _applying === null || !_ownedRefs.get(_applying)?.includes(ctl);
@@ -1808,7 +1832,6 @@ export function connect(endpoint, params = {}) {
         _owned.clear();
         _ownedRefs.clear();
         _pending = new WeakMap();
-        _raised = new WeakMap();
         _guardWrote = new WeakSet();
         _deferred = new WeakMap();
         _composing = null;
@@ -1850,6 +1873,7 @@ setHost({
     },
     holdReplay,
     carry,
+    release,
     holds,
     ctlEvent,
     navigate: navigateEffect,

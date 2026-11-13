@@ -321,7 +321,7 @@ function applyTextOp(el, az, val, isHtml) {
         const live =
             el.localName === 'textarea' &&
             el.hasAttribute('az-ctl') &&
-            !host.holds(el, 'value', val);
+            !host.holds(el, 'content', val);
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;

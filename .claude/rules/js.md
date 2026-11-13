@@ -306,8 +306,11 @@ the field shows the server's state, which is the point.
   whose default was prevented (`az-prevent-default` on a click: the browser undoes the
   toggle, so nothing was edited), carry nothing; a submit is always prevented by the client
   and still carries. Each is snapshotted (`ctlState`: checkedness, a select's selected values,
-  else `value`) and is **pending** until the send (`_pending`): a debounce or throttle window
-  is guarded too, focused or not (a Safari click does not focus), and a form-level
+  else `value`) and is **pending** while any raised, unsent event carries it (`_pending`, a
+  count per control): `scheduleSend` releases a raise when it sends it or when a later raise
+  replaces it in its slot (event type and command position, every debounce/throttle mode,
+  a prevented raise included), and a dropped send releases too. So a debounce or throttle window
+  is guarded, focused or not (a Safari click does not focus), and a form-level
   `az-debounce`, whose blur flush never runs for its fields, keeps them guarded past a blur. A
   hook's `pushEvent`, the exported `pushEvent`/`pushEventTo` and a handler effect carry
   nothing; the static host's `carry` returns `null`.
@@ -327,8 +330,10 @@ the field shows the server's state, which is the point.
   textarea content write syncs `value` to the new default. A command run from the user's own
   event (`az-keydown` `set_attr(#q, value, "")` to clear on Escape, or
   `[push_event(add), set_attr(...)]` to clear on Enter) writes through at once; if it changes a
-  control in flight, that is the user's change since the send, so the reply leaves it. Effects
-  a `fetch` response applies are not a frame and write through too. A `?local` control carries
+  control in flight, that is the user's change since the send, so the reply leaves it. A
+  `fetch` the user starts applies its response effects as write-through; one a server effect
+  started applies them as server writes (the origin rides `holdReplay`). A write to a part
+  the control does not show (a textarea's `value` attribute) is not held. A `?local` control carries
   no `az-ctl`, so it is never held. The static host holds nothing.
 - **Settle.** Inside the worker handler's `apply`, after the ops and effects (so a
   transition-deferred frame settles after its DOM): for each control of the frame's ref still
