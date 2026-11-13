@@ -264,8 +264,9 @@ let _connectQs = '';
  * form owns them. `controls` holds each name's controls in order (see
  * `matchControls`); `replay` is false when a crash withholds the replay of a form
  * owning any of them.
+ * `away` says its controls name the form from another view (`form=`).
  * @type {Map<string, {view: string, id: string, controls: Map<string, SavedControl[]>,
- *   replay: boolean}>}
+ *   replay: boolean, away: boolean}>}
  */
 const _savedForms = new Map();
 
@@ -1350,7 +1351,8 @@ export function saveFormState(suspect = null) {
     for (const doc of allDocs()) {
         // The controls of a form, by the view holding each and the form's id: what a
         // restore finds again. A form is a part of its own view even holding none.
-        /** @type {Map<string, {view: string, id: string, els: any[], replay: boolean}>} */
+        /** @type {Map<string, {view: string, id: string, els: any[], replay: boolean,
+         *   away: boolean}>} */
         const parts = new Map();
         const owners = [...doc.querySelectorAll('form[id]')].map((f) => [f, null]);
         const controls = [...doc.querySelectorAll('input, textarea, select')].map((el) => [
@@ -1366,17 +1368,19 @@ export function saveFormState(suspect = null) {
                 id: form.id,
                 els: /** @type {any[]} */ ([]),
                 replay: true,
+                away: view !== viewOf(form),
             };
             parts.set(key, part);
             if (el) part.els.push(el);
             if (_withheld.has(formKeyOf(form))) part.replay = false;
         }
-        for (const [key, { view, id, els, replay }] of parts)
+        for (const [key, { view, id, els, replay, away }] of parts)
             _savedForms.set(key, {
                 view,
                 id,
                 controls: saveScope(els, formName, () => replay),
                 replay,
+                away,
             });
         // Outside every form, each view's controls apart. A unit's replay is its own
         // event's: withheld when it replayed before the crash.
@@ -1591,10 +1595,10 @@ export function restoreFormState() {
     /**
      * Each saved part found again: its fresh controls and forms.
      * @type {Array<{view: string, controls: Map<string, SavedControl[]>, replay: boolean,
-     *   els: any[], forms: any[]}>}
+     *   els: any[], forms: any[], named: any}>}
      */
     const found = [];
-    for (const [key, { view, controls, replay }] of _savedForms) {
+    for (const [key, { view, id, controls, replay, away }] of _savedForms) {
         // Only into the controls of a form of its id in the live view of its view's
         // id, wherever that is (a popped-out view is in its window's document).
         const root = view ? findViewRoot(view) : document;
@@ -1604,19 +1608,30 @@ export function restoreFormState() {
         // The forms of its id in that view (the view's own element too), replayed
         // whatever controls they hold now.
         const forms = ix.forms.get(key) ?? [];
-        if (els.length === 0 && forms.length === 0) continue;
-        found.push({ view, controls, replay, els, forms });
+        // A part naming its form from another view (`form=`) that holds none of its
+        // controls now is still that form's: its last act may have gone back to the
+        // server's choice, which needs no radio to stand (`lastActed`). It names the
+        // form `form=` would, the first of its id, its own document first.
+        const doc = root.ownerDocument ?? root;
+        const named =
+            away && els.length === 0
+                ? [doc, ...[...allDocs()].filter((d) => d !== doc)]
+                      .map((d) => d.getElementById(id))
+                      .find((f) => f?.localName === 'form')
+                : null;
+        if (els.length === 0 && forms.length === 0 && !named) continue;
+        found.push({ view, controls, replay, els, forms, named: named ?? null });
     }
     // A radio group of a form spanning views is restored as one, like one outside
     // every form: from the part the user acted on last (see `lastActed`), the others
     // giving up their radios of the name.
     /** @type {Map<any, Map<string, number[]>>} parts by fresh form, then radio name */
     const groups = new Map();
-    found.forEach(({ controls, els, forms }, i) => {
+    found.forEach(({ controls, els, forms, named }, i) => {
         // A part whose view holds none of the form's controls now is still that
         // form's: its last act may have gone back to the server's choice, which
         // needs no radio to stand (`lastActed`).
-        const form = els.length > 0 ? formOf(els[0]) : (forms[0] ?? null);
+        const form = els.length > 0 ? formOf(els[0]) : (forms[0] ?? named);
         if (!form) return;
         for (const [name, cs] of controls) {
             if (!cs.some((c) => c.kind === 'radio')) continue;

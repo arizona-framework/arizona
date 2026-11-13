@@ -5586,6 +5586,24 @@ describe('a form across views and documents', () => {
         expect(shown()).toEqual([]);
     });
 
+    // The same for a part outside the form's view naming it (`form=`): the page holds
+    // none of its radios now, and its last act went back to the server's choice.
+    it('lets a part naming a form from another view decide when it holds no radio now', async () => {
+        const r = (/** @type {string} */ v, on = false, form = '') =>
+            `<input type="radio" name="g" value="${v}"${on ? ' checked' : ''}${form} az-bound="checked">`;
+        const pg = (/** @type {boolean} */ p) =>
+            view(
+                'page',
+                `${p ? r('p', true, ' form="fv"') : ''}${view('ch', `<form id="fv" az-change='[0,"f"]'>${r('z')}</form>`)}`,
+            );
+        const c = await start(pg(true));
+        $('[value=z]').click();
+        $('[value=p]').click(); // back to the server's, last
+        expect($('[value=z]').checked).toBe(false);
+        resyncPage(c, pg(false));
+        expect(shown()).toEqual([]);
+    });
+
     // Only a choice the user made is kept when a pop-back unchecks it.
     it('keeps no server choice a pop-back unchecked', async () => {
         const r = (/** @type {string} */ v, on = false) =>
