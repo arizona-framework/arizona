@@ -291,7 +291,23 @@ written, as an escaped one does.
 -callback markup_text(Markup :: iodata(), Context :: text | attribute) ->
     {text | markup, binary()}.
 
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/2]).
+-doc """
+Whether `Tag`'s `{attr, Name}` (`Name` as `name/1` spells it) or its `content` is a
+form control's default whose live state the user edits apart from it: HTML's `value`
+on `input`/`select`/`textarea`, `checked` on `input`, `selected` on `option`, and
+`textarea` content. Once the user edits such a control, a render of the default no
+longer shows, so the client must sync the live state itself.
+
+The parse transform marks an element holding a diffable dynamic for one of them with
+the bare attribute `az-ctl` (`attr_bool/2`), after the author's attributes: the client
+then carries the control's state with an event it raises and, once the server has
+answered that event, shows what the server rendered unless the user changed it since.
+
+Optional. A backend without it marks nothing.
+""".
+-callback controlled(Tag :: tag(), Part :: {attr, binary()} | content) -> boolean().
+
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/2]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
