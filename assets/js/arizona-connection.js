@@ -264,9 +264,10 @@ let _connectQs = '';
  * form owns them. `controls` holds each name's controls in order (see
  * `matchControls`); `replay` is false when a crash withholds the replay of a form
  * owning any of them.
- * `away` says its controls name the form from another view (`form=`).
+ * `away` is the id of the form's own view when its controls name it from another
+ * view (`form=`), else null.
  * @type {Map<string, {view: string, id: string, controls: Map<string, SavedControl[]>,
- *   replay: boolean, away: boolean}>}
+ *   replay: boolean, away: string|null}>}
  */
 const _savedForms = new Map();
 
@@ -1352,7 +1353,7 @@ export function saveFormState(suspect = null) {
         // The controls of a form, by the view holding each and the form's id: what a
         // restore finds again. A form is a part of its own view even holding none.
         /** @type {Map<string, {view: string, id: string, els: any[], replay: boolean,
-         *   away: boolean}>} */
+         *   away: string|null}>} */
         const parts = new Map();
         const owners = [...doc.querySelectorAll('form[id]')].map((f) => [f, null]);
         const controls = [...doc.querySelectorAll('input, textarea, select')].map((el) => [
@@ -1368,7 +1369,7 @@ export function saveFormState(suspect = null) {
                 id: form.id,
                 els: /** @type {any[]} */ ([]),
                 replay: true,
-                away: view !== viewOf(form),
+                away: view !== viewOf(form) ? viewOf(form) : null,
             };
             parts.set(key, part);
             if (el) part.els.push(el);
@@ -1610,17 +1611,16 @@ export function restoreFormState() {
         const forms = ix.forms.get(key) ?? [];
         // A part naming its form from another view (`form=`) that holds none of its
         // controls now is still that form's: its last act may have gone back to the
-        // server's choice, which needs no radio to stand (`lastActed`). It names the
-        // form `form=` would, the first of its id, its own document first.
-        const doc = root.ownerDocument ?? root;
-        const named =
-            away && els.length === 0
-                ? [doc, ...[...allDocs()].filter((d) => d !== doc)]
-                      .map((d) => d.getElementById(id))
-                      .find((f) => f?.localName === 'form')
-                : null;
+        // server's choice, which needs no radio to stand (`lastActed`). Its form is
+        // the one of its id in the view the save found it in, wherever that view is
+        // now: another view's form of the same id is another group.
+        let named = null;
+        if (away !== null && els.length === 0) {
+            const fr = away ? findViewRoot(away) : document;
+            if (fr) named = (indexOf(fr).forms.get(formKey(away, id)) ?? [])[0] ?? null;
+        }
         if (els.length === 0 && forms.length === 0 && !named) continue;
-        found.push({ view, controls, replay, els, forms, named: named ?? null });
+        found.push({ view, controls, replay, els, forms, named });
     }
     // A radio group of a form spanning views is restored as one, like one outside
     // every form: from the part the user acted on last (see `lastActed`), the others

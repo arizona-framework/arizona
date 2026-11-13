@@ -5639,6 +5639,27 @@ describe('a form across views and documents', () => {
         expect(shown()).toEqual([]);
     });
 
+    // Its form is the one of its id in the view it named it in: another view's form
+    // of the same id is another group, whose choice it never takes or clears, whether
+    // its own form's view is gone or moved.
+    for (const variant of ['removed', 'reordered'])
+        it(`joins no other view's form of its form's id when that form's view is ${variant}`, async () => {
+            const r = (/** @type {string} */ v, on = false, form = '') =>
+                `<input type="radio" name="g" value="${v}"${on ? ' checked' : ''}${form} az-bound="checked">`;
+            const va = view('va', `<form id="fv" az-change='[0,"fa"]'>${r('z')}</form>`);
+            const vb = view(
+                'vb',
+                `<form id="fv" az-change='[0,"fb"]'>${r('y0', true)}${r('y')}</form>`,
+            );
+            const c = await start(view('page', `${r('p', true, ' form="fv"')}${va}${vb}`));
+            $('#vb [value=y]').click();
+            $('#va [value=z]').click();
+            $('[value=p]').click(); // back to the server's, last
+            expect([$('#vb [value=y]').checked, $('#va [value=z]').checked]).toEqual([true, false]);
+            resyncPage(c, view('page', variant === 'removed' ? vb : `${vb}${va}`));
+            expect($('#vb [value=y]').checked).toBe(true);
+        });
+
     // Only a choice the user made is kept when a pop-back unchecks it.
     it('keeps no server choice a pop-back unchecked', async () => {
         const r = (/** @type {string} */ v, on = false) =>

@@ -855,7 +855,15 @@ function hardWrapped(el, doc) {
     // In a closed shadow root: the page's CSS cannot reach the copy, and the
     // `formdata` event its build fires (not composed) never leaves it.
     const host = doc.createElement('az-measure');
-    host.style.cssText = 'display:block;position:absolute;left:0;top:0;visibility:hidden';
+    // Important: no page rule on the host may hide it, which would leave no lines.
+    for (const [k, v] of [
+        ['display', 'block'],
+        ['position', 'absolute'],
+        ['left', '0'],
+        ['top', '0'],
+        ['visibility', 'hidden'],
+    ])
+        host.style.setProperty(k, v, 'important');
     const root = host.attachShadow({ mode: 'closed' });
     const f = doc.createElement('form');
     const t = doc.createElement('textarea');
@@ -863,6 +871,9 @@ function hardWrapped(el, doc) {
     t.setAttribute('wrap', 'hard');
     if (el.hasAttribute('cols')) t.setAttribute('cols', el.getAttribute('cols'));
     t.value = el.value;
+    // Its language: `hyphens` and `line-break` break lines by it.
+    const lang = el.closest('[lang]')?.getAttribute('lang');
+    if (lang) t.setAttribute('lang', lang);
     const cs = el.ownerDocument.defaultView?.getComputedStyle(el);
     if (cs) {
         const st = t.style;
