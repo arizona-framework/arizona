@@ -319,8 +319,14 @@ function gen(/** @type {ReturnType<typeof rng>} */ r) {
             const kind = r.pick([...KINDS.filter((k) => k !== 'hidden'), 'radio', 'radio']);
             let name = fresh('x');
             if (kind === 'radio') {
-                if (formlessRadios.length > 0 && r.chance(0.8)) name = r.pick(formlessRadios);
-                else formlessRadios.push(name);
+                // Some share the name of radios naming a form (`form=`), whose group they
+                // join while those lose their form.
+                const naming = [...page.regions.before, ...page.regions.after]
+                    .filter((f) => f.kind === 'radio')
+                    .map((f) => f.name);
+                if (naming.length > 0 && r.chance(0.2)) name = r.pick(naming);
+                else if (formlessRadios.length > 0 && r.chance(0.8)) name = r.pick(formlessRadios);
+                if (!formlessRadios.includes(name)) formlessRadios.push(name);
             }
             const f = field(region, null, name, kind, false);
             f.view = viewIn(page);
@@ -455,7 +461,8 @@ function gen(/** @type {ReturnType<typeof rng>} */ r) {
             return page;
         },
         /** The resync's page: `page` mutated. @param {Page} page @returns {Page} */
-        mutate(page) {
+        /** @param {Page} page @param {boolean} [keep] render it unchanged */
+        mutate(page, keep = false) {
             /** @type {Page} */
             const next = {
                 forms: page.forms.map((f) => ({ ...f })),
@@ -473,6 +480,10 @@ function gen(/** @type {ReturnType<typeof rng>} */ r) {
                 ),
                 views: page.views.map((v) => ({ ...v })),
             };
+            if (keep) {
+                sync(next);
+                return next;
+            }
             // A child view remounted under a new id (a `?stateful` child whose id
             // changed), removed (its fields and children going to its parent), or
             // added.
@@ -931,6 +942,9 @@ function noteCounts(gt, f) {
  */
 function userEdits(r, page, gt) {
     for (const f of ordered(page)) {
+        // A name split picks were made in is left alone until its parts merged and the
+        // next drop saved them: its acts decide then.
+        if (f.kind === 'radio' && !f.form && f.name === calm) continue;
         const el = elOf(f);
         if (el.matches(':disabled') || el.readOnly || !r.chance(0.35)) continue;
         // A textarea's line break, which a text input would drop, and whitespace
@@ -958,6 +972,79 @@ function userEdits(r, page, gt) {
         else for (const o of el.options) o.selected = r.chance(0.5);
         landed(page, gt, f);
     }
+}
+
+/** The formless radio name `splitPicks` chose in, which `userEdits` leaves alone. */
+/** @type {string|null} */
+let calm = null;
+
+/**
+ * The user choosing in a formless radio name's part in a window (a child view holding
+ * one popped out first when none is), then in its part in the page: two groups, each
+ * restored apart when the resync keeps the window, whose acts a later pop-back merges,
+ * the page's the later. Whether it did.
+ * @param {ReturnType<typeof rng>} r
+ * @param {any} c
+ * @param {Page} page
+ * @param {ReturnType<typeof truth>} gt
+ */
+async function splitPicks(r, c, page, gt) {
+    if (!pipWin) {
+        const radios = page.regions.formless.filter((f) => f.kind === 'radio');
+        const atPage = new Set(radios.filter((f) => f.view === 'page').map((f) => f.name));
+        // A child view of the page holding a radio of a name the page has too, and no
+        // form a radio outside it names (see `pipStep`).
+        const named = new Set(
+            [...page.regions.before, ...page.regions.after]
+                .filter((f) => f.kind === 'radio')
+                .map((f) => f.fview),
+        );
+        /** @param {string} v @returns {boolean} */
+        const holds = (v) => named.has(v) || page.views.some((w) => w.parent === v && holds(w.id));
+        const vs = page.views.filter(
+            (v) =>
+                v.parent === 'page' &&
+                !v.kind &&
+                !holds(v.id) &&
+                radios.some((f) => f.view === v.id && atPage.has(f.name)),
+        );
+        if (vs.length === 0) return false;
+        await popOut(c, r.pick(vs).id);
+        locate(page);
+    }
+    /** @param {Field} f */
+    const free = (f) => {
+        const el = /** @type {any} */ (elOf(f));
+        return (
+            f.kind === 'radio' &&
+            !f.form &&
+            !f.awayType &&
+            !!el &&
+            !el.checked &&
+            // Not the server's choice: picking it would be a return to it, no choice.
+            !el.defaultChecked &&
+            !el.matches(':disabled')
+        );
+    };
+    // A server-owned radio with its own replay: the restore writes its act (rule 4
+    // keeps an unbound one's, and one no replay proposes shows the server's).
+    const fs = ordered(page).filter((f) => free(f) && ownsIn(page, f) && f.own);
+    const names = [...new Set(fs.map((f) => f.name))].filter(
+        (n) =>
+            fs.some((f) => f.name === n && f.doc === 'pip') &&
+            fs.some((f) => f.name === n && f.doc === 'main'),
+    );
+    if (names.length === 0) return false;
+    const n = r.pick(names);
+    for (const doc of ['pip', 'main']) {
+        const f = r.pick(fs.filter((x) => x.name === n && x.doc === doc));
+        acted(page, gt, f);
+        /** @type {any} */ (elOf(f)).click();
+        landed(page, gt, f, false);
+    }
+    calm = n;
+    bump('split picks');
+    return true;
 }
 
 /**
@@ -2203,7 +2290,8 @@ function resets(r, page, gt) {
 /**
  * An effect writing a radio's `name`, `type` or `form` away and back, the user acting
  * meanwhile: it leaves its group and returns. Moved in checked, it states the group
- * it joins (see `joined`); a pick made away is for the group it was made in.
+ * it joins (the batch's diff of checked radios, see `stampChanged`); a pick made away
+ * is for the group it was made in.
  * @param {ReturnType<typeof rng>} r
  * @param {any} c
  * @param {Page} page
@@ -2270,7 +2358,7 @@ async function regroup(r, c, page, gt) {
     }
     const sel = `[data-form="${f.id}"]`;
     // The radios naming it leave its group for the formless one, and come back:
-    // moved in checked, each states the group it joins (see `joined`).
+    // moved in checked, each states the group it joins (see `stampChanged`).
     // Its radios move with it: a group is the form's id as the server renders it, so
     // those in it are the renamed form's meanwhile, and those naming it (`form=`) are
     // no form's.
@@ -2280,6 +2368,15 @@ async function regroup(r, c, page, gt) {
         c.fx([[7, sel, 'id', `${f.html}-away`]]);
         for (const x of moved)
             x.awayKey = naming(x) ? `null\0${x.name}` : `${f.id}-away\0${x.name}`;
+        // A radio naming the form is no form's now: it joins the formless group of its
+        // name, which a browser has it uncheck the rest of when it is checked (see the
+        // write back below).
+        for (const x of moved.filter(naming)) {
+            const el = /** @type {any} */ (elOf(x));
+            if (!el?.checked || el.form) continue;
+            for (const o of el.ownerDocument.querySelectorAll('input[type=radio]'))
+                if (o !== el && !o.form && o.name === el.name) o.checked = false;
+        }
     });
     codeChanges();
     if (r.chance(0.5)) userEdits(r, page, gt);
@@ -2312,10 +2409,23 @@ async function run(/** @type {number} */ seed) {
     /** @type {Set<string>} */
     let replayed = new Set();
     const drops = 1 + r.int(4);
+    /** Did the user choose in both parts of a formless name the last resync kept split? */
+    let split = false;
     for (let d = 0; d < drops; d++) {
         // Views popped out and back before the drop, the user editing and code
         // dispatching events between, and between the drop and the resync.
         let pip = false;
+        // Parts of a name the last restore chose in apart merge again: the act each
+        // restore wrote decides which choice stands.
+        if (split && pipWin) {
+            pipWin.close();
+            locate(page);
+            pip = true;
+            bump('split picks merged');
+        }
+        // The merged parts' drop is this one: after it the name is the user's again.
+        if (!split) calm = null;
+        split = false;
         for (let i = 1 + r.int(3); i > 0; i--) {
             pip = (await pipStep(r, c, page)) || pip;
             userEdits(r, page, gt);
@@ -2342,22 +2452,27 @@ async function run(/** @type {number} */ seed) {
         if (r.chance(0.4)) pip = (await pipStep(r, c, page)) || pip;
         if (r.chance(0.4)) userEdits(r, page, gt);
         noise(r, page);
+        const splitNow = r.chance(0.3) && (await splitPicks(r, c, page, gt));
+        if (splitNow) pip = true;
         c.open(true);
         const popped = pipWin ? JSON.stringify([pipDoc?.querySelector('[az-view]')?.id]) : 'none';
         // A resync keeps a popped-out view in its window: sometimes the window closes
         // first, as a pop-back while disconnected does.
-        if (pipWin && r.chance(0.5)) {
+        if (pipWin && !splitNow && r.chance(0.5)) {
             pipWin.close();
             locate(page);
             bump('pop-backs before the resync');
         }
+        split = splitNow && !!pipWin;
+        if (!split) calm = null;
         if (pipWin)
             bump(
                 `resyncs keeping ${pipDoc?.querySelector('[az-view]')?.id === 'page' ? 'the page' : 'a child view'} in its window`,
             );
         const pre = held(page, gt);
         const old = page;
-        page = g.mutate(page);
+        // Split picks the resync keeps apart are restored as they are, to merge later.
+        page = g.mutate(page, splitNow && !!pipWin);
         const suspect = code === 4500 ? replayed : new Set();
         const before = c.sent().length;
         const posted = c.posted.length;
@@ -2410,7 +2525,7 @@ async function run(/** @type {number} */ seed) {
         // A reply is a batch of the server's: a refusal reconciling a group to the
         // server's choice states it.
         for (const x of sent)
-            if (typeof x[3] === 'number' && r.chance(0.5)) {
+            if (typeof x[3] === 'number' && !split && r.chance(0.5)) {
                 serverOp(page, gt, () => c.reply(x[3]));
                 bump('replies');
             }

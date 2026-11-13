@@ -2572,6 +2572,41 @@ describe('a formless field in a popped-out (PiP) document', () => {
     }
     const q = (/** @type {Document} */ d) => /** @type {any} */ (d.getElementById('q'));
 
+    // A restore writes each choice it restores with the time of the act it came from:
+    // two documents' parts of a formless group, restored apart, merge on a pop-back
+    // and the choice made later stands at the next drop, whichever restore ran last.
+    it('keeps the later choice of two parts a restore wrote apart once they merge', async () => {
+        const r = (/** @type {string} */ v) =>
+            `<input type="radio" name="g" value="${v}" az-bound="checked" az-change='[0,"${v}"]'>`;
+        const pg = `<div id="page" az-view>${r('a') + r('b')}</div>`;
+        const ch = `<div id="pv" az-view>${r('c') + r('d')}</div>`;
+        const both = (/** @type {any} */ c) => {
+            c.close();
+            c.open(true);
+            c.msg(
+                [
+                    [8, 'page', pg],
+                    [8, 'pv', ch],
+                ],
+                null,
+                null,
+                true,
+            );
+        };
+        const c = await start(pg + ch);
+        await popOut(c);
+        /** @type {any} */ (doc.querySelector('[value=c]')).click();
+        /** @type {any} */ ($('[value=a]')).click(); // the later choice
+        both(c);
+        expect([$('[value=a]').checked, doc.querySelector('[value=c]').checked]).toEqual([
+            true,
+            true,
+        ]);
+        closeAll(); // one document again: one of the two stays checked
+        both(c);
+        expect([...document.querySelectorAll('input:checked')].map((e) => e.value)).toEqual(['a']);
+    });
+
     // Each document is saved apart: a formless field is saved by its id, which a
     // field in another document may carry too.
     it('restores each document its own edit of a formless field sharing an id', async () => {
