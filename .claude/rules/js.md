@@ -158,7 +158,8 @@ well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-
 directives rather than events. The flush covers the form's own slots too (a form-level
 `az-debounce` paces the field events it delegates), and a submit is never debounced itself --
 `az-debounce="blur"` on a form would otherwise never send it -- while `az-throttle` still paces
-it. A debounce mode the server switches mid-window sends the slot's latest raise in the new
+it (a second submit inside the window becomes its trailing send; the flush leaves the submit's
+own slot alone). A debounce mode the server switches mid-window sends the slot's latest raise in the new
 mode: the old timer neither fires a raise the new one replaced nor drops it.
 
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser

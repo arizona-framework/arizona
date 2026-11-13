@@ -832,15 +832,15 @@ const _timers = new WeakMap();
  * @param {Function} send
  */
 function scheduleSend(el, event, prefix, index, send) {
-    const debounceAttr = el.getAttribute('az-debounce') || '';
+    const debounceAttr = event.type === 'submit' ? '' : el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
     const throttleMs = parseInt(el.getAttribute('az-throttle') || '', 10);
     // A submit is not debounced: a form's `az-debounce` paces the field events it
     // delegates, and a blur debounce would never send the form's submit at all.
-    // (`az-throttle` still paces a submit: it guards a double submit.)
-    const debounced = debounceMs || debounceEvent;
-    if ((debounced && event.type === 'submit') || (!debounced && !throttleMs)) {
+    // `az-throttle` still paces a submit: a second one inside the window becomes its
+    // trailing send.
+    if (!debounceMs && !throttleMs && !debounceEvent) {
         send();
         return;
     }
@@ -932,12 +932,16 @@ function replacePending(slot, send) {
 /**
  * Immediately send every pending debounced/throttled message for this element.
  * Used by blur auto-flush and form submit (to capture in-flight input values).
+ * `skip` names slots to leave alone by key prefix: the submit flush keeps the
+ * submit's own throttle window.
  * @param {Element} el
+ * @param {string} [skip]
  */
-export function flushTimer(el) {
+export function flushTimer(el, skip = '') {
     const rec = _timers.get(el);
     if (!rec) return;
-    for (const t of rec.slots.values()) {
+    for (const [k, t] of rec.slots) {
+        if (skip && k.startsWith(skip)) continue;
         if (t.id) clearTimeout(t.id);
         const pending = t.pending;
         t.id = undefined;

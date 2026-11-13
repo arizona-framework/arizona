@@ -884,4 +884,87 @@ describe('event pacing (az-debounce)', () => {
             .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         expect(mock.sent().map((f) => f[1])).toEqual(['i', 's']);
     });
+    it("a form's az-throttle paces a second submit", async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form id="f" az-throttle="1000" az-submit='[0,"s"]'><input name="q" value="x" /></form>`,
+            );
+            const f = document.getElementById('f');
+            const submit = () =>
+                f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            submit();
+            submit();
+            expect(mock.sent().filter((m) => m[1] === 's')).toHaveLength(1);
+            vi.advanceTimersByTime(1000);
+            expect(mock.sent().filter((m) => m[1] === 's')).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("a form's az-throttle paces its submit beside an az-debounce", async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form id="f" az-debounce="300" az-throttle="1000" az-submit='[0,"s"]' az-input='[0,"i"]'><input name="q" value="x" /></form>`,
+            );
+            const f = document.getElementById('f');
+            const submit = () =>
+                f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            submit();
+            submit();
+            expect(mock.sent().filter((m) => m[1] === 's')).toHaveLength(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a form-level debounced input goes out before the submit, once', async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form id="f" az-debounce="300" az-input='[0,"i"]' az-submit='[0,"s"]'><input id="q" name="q" value="" /></form>`,
+            );
+            const q = document.getElementById('q');
+            q.value = 'a';
+            q.dispatchEvent(new Event('input', { bubbles: true }));
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            expect(mock.sent().map((m) => m[1])).toEqual(['i', 's']);
+            vi.advanceTimersByTime(1000);
+            expect(mock.sent().map((m) => m[1])).toEqual(['i', 's']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a debounce switched to throttle mid-window sends the latest raise once', async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(`<input id="q" az="0" name="q" value="" az-debounce="300" ${INPUT} />`);
+            const el = document.querySelector('input');
+            edit(
+                el,
+                (e) => {
+                    e.value = 'a';
+                },
+                'input',
+            );
+            el.removeAttribute('az-debounce');
+            el.setAttribute('az-throttle', '300');
+            edit(
+                el,
+                (e) => {
+                    e.value = 'b';
+                },
+                'input',
+            );
+            vi.advanceTimersByTime(1000);
+            expect(mock.sent().map((m) => m[2].value)).toEqual(['b']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });
