@@ -1055,7 +1055,7 @@ refuses an edit (`qty` stays `5` when the user types `999`) or normalises it (`"
 as `"abc"`) leaves the binding unchanged, so the diff sends no op and the field would keep
 the user's text forever.
 
-**Compile time.** The optional `arizona_renderer:controlled/2` callback names the parts that
+**Compile time.** The optional `c:arizona_renderer:controlled/2` callback names the parts that
 are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`,
 `checked` on `input`, `selected` on `option` (the one the transform derives from a select's
 `value` included) and `textarea` content. An element holding a **diffable** dynamic for one
@@ -1081,7 +1081,7 @@ sends it -- also when the user typed past an edit still in flight, where only a 
 answering that edit counts as its reply and any other write is a push. A `<textarea>`
 content update follows the same rules as a value write. A property is never written
 mid-IME-composition. Mechanism and limits in
-[.claude/rules/js.md](../.claude/rules/js.md).
+`.claude/rules/js.md`.
 
 Any event carrying a form's marked fields follows the same rule, an `az-change` validator as
 much as an `az-submit`: a field the handler does not store back reverts to what the server
