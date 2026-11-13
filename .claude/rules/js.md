@@ -298,10 +298,12 @@ covers a refused or normalised edit, which changes no binding and so ships no op
   too) only when it is sent on a live socket: `_owned` maps each control to `{ref, snap}`
   (latest event wins), `_ownedRefs` maps the ref to its controls. A dropped or disconnected
   send registers nothing.
-- **Hold.** `applySetAttrOp`/`applyRemAttrOp` ask `host.holds(el)` (an option asks for its
-  select) **before** the write, since the default it changes is what an edit is compared with:
+- **Hold.** `applySetAttrOp`/`applyRemAttrOp`, and `applyTextOp` for a marked `<textarea>`'s
+  content (its default, as an input's `value` attribute is), ask `host.holds(el)` (an option
+  asks for its select) **before** the write, since the default it changes is what an edit is compared with:
   a held control takes the attribute only, and a chooser `value` runs `applyChooser` without its
-  live leg. Every writer through them holds alike -- an `arizona_js` attribute effect and a
+  live leg; an unheld textarea content write syncs `value` to the new default. Every writer
+  through them holds alike -- an `arizona_js` attribute effect and a
   `?local` write too (a `?local` control carries no `az-ctl`, so it is never held). The static
   host holds nothing.
 - **Settle.** Inside the worker handler's `apply`, after the ops and effects (so a
@@ -322,9 +324,12 @@ covers a refused or normalised edit, which changes no binding and so ships no op
   changed what the user was editing -- and with none the edit is kept for the event or submit
   that sends it. The order makes a sent value safe: `change` fires before `blur`/`focusout`,
   and a pending `az-debounce` flushes on `blur`, so by the time focus leaves, an edit that is
-  sent is already in flight and settled by its reply, not by the focus loss. A push that lands
-  while an edit is in flight **and** the user has typed past it is not noted (the reply's own
-  echo would look the same), so that typing is kept.
+  sent is already in flight and settled by its reply, not by the focus loss. A write to a
+  control in flight is noted too unless its frame answers an event that carried the control
+  (`_applying`, the ref of the frame being applied, against `_ownedRefs`): that frame is the
+  reply echoing or settling it, any other is a server push. So when the user typed past an
+  in-flight edit, a push meanwhile wins on focus loss and the reply's echo does not; a settle
+  that shows the default drops the note, which it already honoured.
 - **IME.** Nothing writes a control's property while a composition is in progress
   (`compositionstart`/`compositionend`, `host.compose`): it is held, and a settle that would
   write is noted instead, so focus leaving the field settles it.
@@ -335,8 +340,8 @@ covers a refused or normalised edit, which changes no binding and so ships no op
 the server rendered (unmarked fields, and a form `az-form-reset` already reset, are untouched).
 Out of scope: restoring a control across a reconnect beyond the existing `az-change` replay
 (`saveFormState`/`restoreFormState`), a `fetch` form (its response has no diff to settle
-against; render from state via `push_event`), and a dirty `<textarea>` patched by a server push
-while unfocused and idle (an `OP_TEXT` writes its content, never `value`).
+against; render from state via `push_event`). An unmarked `<textarea>` keeps the user's text
+over a content update, as before.
 
 ### Patch nav (`az-patch`) and the `_azNav` tag
 

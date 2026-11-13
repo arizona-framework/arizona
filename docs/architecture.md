@@ -1074,7 +1074,10 @@ Each control follows its latest event, so an earlier reply never puts back what 
 after it. A focused control the user has edited and not yet sent is held the same way, so a
 server push never clobbers unsent typing; when focus leaves it, a write held meanwhile wins
 (the server changed what was being edited), and with none the edit is kept for the event
-that sends it. A property is never written mid-IME-composition. Mechanism and limits in
+that sends it -- also when the user typed past an edit still in flight, where only a frame
+answering that edit counts as its reply and any other write is a push. A `<textarea>`
+content update follows the same rules as a value write. A property is never written
+mid-IME-composition. Mechanism and limits in
 [.claude/rules/js.md](../.claude/rules/js.md).
 
 An `az-submit` form's marked fields follow the same rule: a submit the handler refuses
