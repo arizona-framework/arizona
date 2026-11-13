@@ -667,3 +667,60 @@ describe('server-owned controls: audit gaps', () => {
         expect(el.value).toBe('');
     });
 });
+
+describe('server-owned controls: final audit', () => {
+    it('a textarea value write is no control part: an accepted edit stays', async () => {
+        await connect(`<textarea az="0" name="t" az-ctl="value" ${CHANGE}></textarea>`);
+        const el = document.querySelector('textarea');
+        edit(el, (e) => {
+            e.value = 'hi';
+        });
+        expect(mock.sent().at(-1)).toHaveLength(3);
+        mock.reply([setAttr(0, 'value', 'hi')], null);
+        expect(el.value).toBe('hi');
+    });
+
+    it('a handler transition(set_attr) effect is held off unsent typing like the frame', async () => {
+        /** @type {Array<() => void>} */
+        const queue = [];
+        document.startViewTransition = (fn) => {
+            queue.push(typeof fn === 'object' ? fn.update : fn);
+            return { ready: Promise.resolve(), finished: Promise.resolve() };
+        };
+        try {
+            await connect(`<input id="q" az="0" name="q" value="a" az-ctl="value" />`);
+            const el = document.querySelector('input');
+            el.focus();
+            el.value = 'ab';
+            mock.effects([[20, {}, [7, '#q', 'value', 'srv']]], null);
+            for (const f of queue.splice(0)) f();
+            expect(el.value).toBe('ab');
+            el.blur();
+            expect(el.value).toBe('srv');
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
+    it('a field a superseded form debounce carried, the next raise not, is let go', async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form az-input='[0,"v"]' az-debounce="300"><input id="a" az="0" name="a" value="" az-ctl="value" />` +
+                    `<input id="b" az="1" name="b" value="" az-ctl="value" /></form>`,
+            );
+            const a = document.getElementById('a');
+            const b = document.getElementById('b');
+            a.value = 'x';
+            b.value = 'bb';
+            a.dispatchEvent(new Event('input', { bubbles: true }));
+            b.disabled = true;
+            a.value = 'xy';
+            a.dispatchEvent(new Event('input', { bubbles: true }));
+            mock.reply([setAttr(1, 'value', 'srv')], null);
+            expect(b.value).toBe('srv');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});

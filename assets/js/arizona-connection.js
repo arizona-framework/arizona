@@ -249,19 +249,25 @@ function replayPartDone(replay) {
 /**
  * Hold the replay executing now (if any) open for work a command runs later.
  * Returns the runner for that work: it runs it as part of the replay, then
- * releases the hold -- once, however many times it is called.
+ * releases the hold -- once, however many times it is called. The work keeps the
+ * origin of the command too: one a server frame ran (a handler's
+ * `transition(set_attr(...))`) still writes as the server (`_inFrame`).
  * @returns {(fn: () => void) => void}
  */
 function holdReplay() {
     const replay = _replayRunning;
+    const inFrame = _inFrame;
     if (replay) replay.pending++;
     let held = replay !== null;
     return (fn) => {
         const outer = _replayRunning;
+        const outerFrame = _inFrame;
         if (held) _replayRunning = replay;
+        _inFrame = inFrame;
         try {
             fn();
         } finally {
+            _inFrame = outerFrame;
             _replayRunning = outer;
             if (held) {
                 held = false;
@@ -565,8 +571,12 @@ function wellFormed(_key, v) {
 const _owned = new Map();
 /** @type {Map<number, Element[]>} */
 const _ownedRefs = new Map();
-/** @type {Map<Element, Array<[Element, string|boolean]>>} */
-const _pending = new Map();
+/** @type {WeakMap<Element, Array<[Element, string|boolean]>>} */
+let _pending = new WeakMap();
+// The controls each trigger's latest raise carried: a raise a debounce supersedes is
+// never sent, so a control only it carried is let go.
+/** @type {WeakMap<Element, Array<[Element, string|boolean]>>} */
+let _raised = new WeakMap();
 /** @type {WeakSet<Element>} */
 let _guardWrote = new WeakSet();
 // A `value` write deferred while the user is mid bad input (`holds`).
@@ -592,7 +602,7 @@ function isCtl(el) {
     const parts = (el.getAttribute('az-ctl') ?? '').split(' ');
     if (tag === 'select')
         return parts.includes('value') || el.querySelector('option[az-ctl~="selected"]') !== null;
-    if (tag === 'textarea') return parts.includes('content') || parts.includes('value');
+    if (tag === 'textarea') return parts.includes('content');
     const type = /** @type {HTMLInputElement} */ (el).type;
     return (
         tag === 'input' &&
@@ -660,10 +670,13 @@ function carry(el, event) {
             : isCtl(el)
               ? ctlGroup(el)
               : [];
+    for (const [c] of _raised.get(el) ?? [])
+        if (_pending.get(c) === _raised.get(el)) _pending.delete(c);
     if (!ctls.length) return null;
     /** @type {Array<[Element, string|boolean]>} */
     const carried = ctls.map((c) => [c, ctlState(c)]);
     for (const [c] of carried) _pending.set(c, carried);
+    _raised.set(el, carried);
     return carried;
 }
 
@@ -1794,7 +1807,8 @@ export function connect(endpoint, params = {}) {
         _navAwaitResync = false;
         _owned.clear();
         _ownedRefs.clear();
-        _pending.clear();
+        _pending = new WeakMap();
+        _raised = new WeakMap();
         _guardWrote = new WeakSet();
         _deferred = new WeakMap();
         _composing = null;
