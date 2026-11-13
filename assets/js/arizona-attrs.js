@@ -1,5 +1,6 @@
 import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
+import { host } from './arizona-host.js';
 import { carryChooserLocal, heldChooserLocal } from './arizona-locals.js';
 
 /** @type {HTMLTemplateElement | null} */
@@ -37,6 +38,9 @@ function decodeRawAttr(raw) {
  * always means true (false diffs to REM_ATTR). A command value arrives as its
  * JSON array, not attribute text, so it is written back as JSON. A `?raw` value
  * arrives tagged `{raw}`: it is attribute markup, decoded the way SSR's parse did.
+ * A server-owned control the client holds (`host.holds`: an event carrying its state
+ * is pending or awaits its reply, or the user is editing it) takes the attribute
+ * only, and a `value` the user is mid bad input in waits.
  * @param {Element} el
  * @param {string} name
  * @param {string | unknown[] | {raw: string}} val
@@ -52,11 +56,16 @@ export function applySetAttrOp(el, name, val) {
     // fires. Before the write: a custom element's attributeChangedCallback may
     // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
-    const held = name === 'multiple' ? heldLocal(el) : null;
+    const local = name === 'multiple' ? heldLocal(el) : null;
+    // Asked before the write: the default it changes is what the user's edit is
+    // compared against.
+    const hold = (isChooserValue(el, name) || syncsProp(el, name)) && host.holds(el, name, val);
+    if (hold === 'defer') return;
+    const live = !hold && (isChooserValue(el, name) || syncsProp(el, name));
     el.setAttribute(name, val);
-    if (held) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), held);
-    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
-    else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
+    if (local) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), local);
+    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), live);
+    else if (live) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
 
@@ -71,11 +80,14 @@ export function applySetAttrOp(el, name, val) {
  * @param {string} name
  */
 export function applyRemAttrOp(el, name) {
-    const held = name === 'multiple' ? heldLocal(el) : null;
+    const local = name === 'multiple' ? heldLocal(el) : null;
+    const hold = (isChooserValue(el, name) || syncsProp(el, name)) && host.holds(el, name, null);
+    if (hold === 'defer') return;
+    const live = !hold && (isChooserValue(el, name) || syncsProp(el, name));
     el.removeAttribute(name);
-    if (held) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), held);
-    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
-    else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
+    if (local) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), local);
+    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), live);
+    else if (live) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
 }
 

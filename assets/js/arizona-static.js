@@ -42,6 +42,11 @@ setHost({
     // A navigate/patch loads a page, so no frame answers it.
     awaitsReply: () => false,
     armTransition: () => {},
+    // No server writes a control here.
+    carry: () => null,
+    release: () => {},
+    holds: () => false,
+    ctlEvent: () => {},
     holdReplay: () => (fn) => fn(),
     navigate: (url, opts) => loadPage(url, opts?.replace),
     leavePage: loadPage,

@@ -155,7 +155,12 @@ The flag must be **stated in both directions**: omitting it entirely makes Chrom
 have dedicated listeners (submit flushes pending debounced inputs, honors `az-form-reset`, and
 defers the reset to a `fetch` response; drop carries the drag bookkeeping), so delegating them as
 well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
-directives rather than events.
+directives rather than events. The flush covers the form's own slots too (a form-level
+`az-debounce` paces the field events it delegates), and a submit is never debounced itself --
+`az-debounce="blur"` on a form would otherwise never send it -- while `az-throttle` still paces
+it (a second submit inside the window becomes its trailing send; the flush leaves the submit's
+own slot alone). A debounce mode the server switches mid-window sends the slot's latest raise in the new
+mode: the old timer neither fires a raise the new one replaced nor drops it.
 
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
 submits it with the form's own method -- a GET by default, putting every field (a password
@@ -278,6 +283,113 @@ The window is the **set of reply refs** of the navigates in flight, so back-to-b
 A dropped event is reported with a `console.warn` naming the event (never the payload), like the worker's socket-down drop. There is deliberately no timeout: every server answer to a navigate frame settles it and a crash closes the socket into the resync, so a server change that could leave a navigate frame unanswered must add one.
 
 A `patch` does not arm: it usually keeps the view, and a cross-handler patch that the server degrades to a replace cannot be predicted client-side. A debounced/throttled `push_event` captures `_navEpoch` when raised, so one that fires after the swap is dropped too; `disconnect()` bumps the same epoch, so a timer that outlives its connection (the `WeakMap` of timers is not iterable) never sends the old view's event over the next one.
+
+### Server-owned controls (`az-ctl`, `_owned`)
+
+A control the parse transform marked `az-ctl` (see [erlang.md](erlang.md)) has a default the
+server renders, and once the user edits it the dirty flags make that attribute invisible. The
+guarantee: **once the server has answered an event that carried a control's value, and the
+user has not changed the control since, the control shows what the server rendered.** That
+covers a refused or normalised edit, which changes no binding and so ships no op.
+
+**It applies to every event that carries the control, not just a submit.** An `az-change`
+validator on a form carries the form's controls, so a handler that does not store a field
+back reverts it: a login form whose error path re-renders without the typed email shows the
+old (empty) email. The fix is to store what should stay -- `{B#{email => Email}, ...}` -- since
+the field shows the server's state, which is the point.
+
+- **Marked parts.** `az-ctl` lists the parts the server renders (`value`, `checked`,
+  `selected`, `content`); `isCtl` takes a control only for the part it shows -- `checked` on a
+  checkbox or radio, `value` on another input, `content` on a textarea (it has no `value`
+  attribute), a select's `value` or an `option[az-ctl~="selected"]`. A checkbox whose only rendered part is its `value`
+  is not held or settled: the server does not render its checkedness.
+- **Carry.** `JS_PUSH_EVENT` asks `host.carry(el, event)` when the command is raised (not when
+  a debounce fires): the trigger if it is a marked control (a radio brings its marked group --
+  same name, same form or same root without one, looked up by name, so a big radio grid
+  costs one attribute query per group), or a form's marked controls it submits (named, not
+  disabled, a disabled fieldset's included) -- what `autoPayload` sends. A drop, and an event
+  whose default was prevented (`az-prevent-default` on a click: the browser undoes the
+  toggle, so nothing was edited), carry nothing; a submit is always prevented by the client
+  and still carries. Each is snapshotted (`ctlState`: checkedness, a select's selected values,
+  else `value`) and is **pending** while any raised, unsent event carries it (`_pending`, a
+  count per control): `scheduleSend` releases a raise when it sends it or when a later raise
+  replaces it in its slot (event type and command position, every debounce/throttle mode,
+  a prevented raise included), and a dropped send releases too. A release counts once (a raise
+  a reconnect left in its slot releases nothing of the new connection), and a raise whose
+  trigger left the page (a blur-debounced field removed) holds nothing, so no raise that will
+  never be sent can hold a control. So a debounce or throttle window
+  is guarded, focused or not (a Safari click does not focus), and a form-level
+  `az-debounce`, whose blur flush never runs for its fields, keeps them guarded past a blur. A
+  hook's `pushEvent`, the exported `pushEvent`/`pushEventTo` and a handler effect carry
+  nothing; the static host's `carry` returns `null`.
+- **Ref.** `sendEvent` tags such a frame with one reply ref (the one a waiting transition takes
+  too) only when it is sent on a live socket: `_owned` maps each control to `{ref, snap}`
+  (latest event wins), `_ownedRefs` maps the ref to its controls. A dropped or disconnected
+  send registers nothing. Strings go out well-formed (`wellFormed`: a lone surrogate, half an
+  astral character, becomes U+FFFD), since the server refuses one; and a frame it still
+  cannot decode is answered by the ref it ends in (`arizona_socket`), so nothing is held for
+  a reply that never comes.
+- **Hold -- server writes only.** `applySetAttrOp`/`applyRemAttrOp`, and `applyTextOp` for a
+  marked `<textarea>`'s content (its default, as an input's `value` attribute is), ask
+  `host.holds(el, name, val)` (an option asks for its select) **before** the write, since the
+  default it changes is what an edit is compared with. Only a write a server frame applies
+  (its ops, and the effects it carries -- `_inFrame`) is ever held: a held control takes the
+  attribute only, a chooser `value` runs `applyChooser` without its live leg, and an unheld
+  textarea content write syncs `value` to the new default. A command run from the user's own
+  event (`az-keydown` `set_attr(#q, value, "")` to clear on Escape, or
+  `[push_event(add), set_attr(...)]` to clear on Enter) writes through at once; if it changes a
+  control in flight, that is the user's change since the send, so the reply leaves it. A
+  `fetch` the user starts applies its response effects as write-through; one a server effect
+  started applies them as server writes (the origin rides `holdReplay`). A write to a part
+  the control does not show (a checkbox's `value`) is not held; a textarea's `value` write
+  is its live value, so it is. A `?local` control carries
+  no `az-ctl`, so it is never held. The static host holds nothing.
+- **Settle.** Inside the worker handler's `apply`, after the ops and effects (so a
+  transition-deferred frame settles after its DOM): for each control of the frame's ref still
+  owned by that ref, drop the hold and, if connected and it still shows its snapshot,
+  `showDefault` it -- text and textarea `value = defaultValue` only when it differs (a focused
+  one keeps its selection, clamped); a checkbox or radio `checked = defaultChecked` (a group
+  settles to its default-checked member, else none); a select with a `value` attribute through
+  `applyChooser(sel, true)`, else each option to `defaultSelected` -- and fire `updated()` on
+  every control whose state that changed (a radio it unchecked included). A control changed
+  since is left alone; its next event settles it. That keeps a quick `az-input` sequence at
+  `123` and never `13`: an earlier reply's op lands on the attribute and its settle skips the
+  control a later event owns.
+- **Unsent typing.** A marked control that is focused (any member of its radio group) and
+  `edited` (shows something other than its default) is held too. A held write that is not the
+  reply to an event carrying the control -- a push, or an effect (even in that reply: a command
+  a handler returns is a server statement) -- is noted (`_guardWrote`). Which frame is the
+  reply is told by the ref of the frame being applied (`_applying`, against `_ownedRefs`);
+  the server ships the pushes it drains ahead of a reply in their own frame first, so a push
+  never passes for the reply's echo. (That frame carries no ref, so a pending `'any'` view
+  transition does not wrap it: only the reply after it animates.) A command a frame runs
+  later -- a handler's `transition(set_attr(...))` runs in the view transition's update
+  callback -- keeps the frame's origin (`holdReplay` carries `_inFrame`), so it is held like
+  the frame's own writes. A focused but untouched control is not held: it shows
+  live updates. The guard ends when an event carries the control (pending, then in flight,
+  the note dropped) or when focus leaves it (`focusout` -> `host.ctlEvent`) with nothing
+  pending or in flight: a noted write wins then -- the server changed what the user was
+  editing -- and with none the edit is kept for the event or submit that sends it. Only focus
+  moving within the document ends it: a focusout while the document has no focus (the window
+  was left, alt-tab) keeps the guard, and the field is still the active element when the
+  window comes back. The order makes a sent value safe: `change` fires before
+  `blur`/`focusout`, an element `az-debounce` flushes on `blur`, and anything else is pending,
+  so an edit that is sent is settled by its reply, never by the focus loss.
+- **Bad input.** A control showing bad input (`validity.badInput`: `1e-` in a number, a
+  partial date) reads `""`. Its settle is noted instead of written, and a server `value` write
+  while the user is on it is deferred (`_deferred`; Firefox clears a partial date on the
+  attribute write alone), then written as the attribute when the input is good again or focus
+  leaves -- where a noted write wins as above.
+- **IME.** Nothing writes a control's property while a composition is in progress
+  (`compositionstart`/`compositionend`, `host.ctlEvent`): it is held, and a settle that would
+  write is noted instead, so focus leaving the field settles it.
+- **Teardown.** `dropOwedReplies` (close, `pagehide`) clears `_owned`/`_ownedRefs`;
+  `disconnect()` clears the pending, guard and deferred state too.
+
+Out of scope: restoring a control across a reconnect beyond the existing `az-change` replay
+(`saveFormState`/`restoreFormState`), a `fetch` form (its response has no diff to settle
+against; render from state via `push_event`). An unmarked `<textarea>` keeps the user's text
+over a content update, as before.
 
 ### Patch nav (`az-patch`) and the `_azNav` tag
 

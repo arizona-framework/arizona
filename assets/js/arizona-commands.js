@@ -443,13 +443,22 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const frame = [resolveTarget(el), evt, payload];
             const transition = _transitionScope;
+            const ctls = host.carry(el, event);
             if (event) {
                 const epoch = host.epoch();
-                scheduleSend(el, event, prefix, index, () => {
-                    host.sendEvent(evt, frame, epoch, transition);
-                });
+                const send = () => host.sendEvent(evt, frame, epoch, transition, ctls);
+                // A later raise replacing it in its slot means it is never sent.
+                scheduleSend(
+                    el,
+                    event,
+                    prefix,
+                    index,
+                    Object.assign(send, {
+                        drop: () => ctls && host.release(ctls),
+                    }),
+                );
             } else {
-                host.sendEvent(evt, frame, undefined, transition);
+                host.sendEvent(evt, frame, undefined, transition, ctls);
             }
             break;
         }
@@ -823,10 +832,14 @@ const _timers = new WeakMap();
  * @param {Function} send
  */
 function scheduleSend(el, event, prefix, index, send) {
-    const debounceAttr = el.getAttribute('az-debounce') || '';
+    const debounceAttr = event.type === 'submit' ? '' : el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
     const throttleMs = parseInt(el.getAttribute('az-throttle') || '', 10);
+    // A submit is not debounced: a form's `az-debounce` paces the field events it
+    // delegates, and a blur debounce would never send the form's submit at all.
+    // `az-throttle` still paces a submit: a second one inside the window becomes its
+    // trailing send.
     if (!debounceMs && !throttleMs && !debounceEvent) {
         send();
         return;
@@ -845,7 +858,11 @@ function scheduleSend(el, event, prefix, index, send) {
     const slot = t;
     // Event-name debounce: just store the latest send, flush on the named event.
     if (debounceEvent) {
-        slot.pending = send;
+        // A timer a former mode armed (the server changed az-debounce) must not
+        // send it.
+        clearTimeout(slot.id);
+        slot.id = undefined;
+        replacePending(slot, send);
         if (!rec.eventBound) {
             rec.eventBound = true;
             el.addEventListener(debounceEvent, () => flushTimer(el));
@@ -855,11 +872,13 @@ function scheduleSend(el, event, prefix, index, send) {
     if (debounceMs > 0) {
         // Classic debounce: reset timer on every event.
         clearTimeout(slot.id);
-        slot.pending = send;
+        replacePending(slot, send);
         slot.id = setTimeout(() => {
+            // The slot's latest: a later raise in another mode may have replaced it.
+            const pending = slot.pending;
             slot.id = undefined;
             slot.pending = null;
-            send();
+            pending?.();
         }, debounceMs);
     } else {
         // Throttle: send immediately, suppress duplicates for the interval.
@@ -870,7 +889,7 @@ function scheduleSend(el, event, prefix, index, send) {
             slot.id = undefined;
         }
         if (event.type === 'keydown') slot.prevKey = /** @type {KeyboardEvent} */ (event).key;
-        slot.pending = send;
+        replacePending(slot, send);
         if (slot.id) return;
         send();
         slot.pending = null;
@@ -900,14 +919,29 @@ function scheduleSend(el, event, prefix, index, send) {
 }
 
 /**
+ * Make `send` the slot's pending send: the one it replaces is never sent, so it lets
+ * go of what it held pending (`drop`).
+ * @param {{pending?: any}} slot
+ * @param {Function} send
+ */
+function replacePending(slot, send) {
+    slot.pending?.drop?.();
+    slot.pending = send;
+}
+
+/**
  * Immediately send every pending debounced/throttled message for this element.
  * Used by blur auto-flush and form submit (to capture in-flight input values).
+ * `skip` names slots to leave alone by key prefix: the submit flush keeps the
+ * submit's own throttle window.
  * @param {Element} el
+ * @param {string} [skip]
  */
-export function flushTimer(el) {
+export function flushTimer(el, skip = '') {
     const rec = _timers.get(el);
     if (!rec) return;
-    for (const t of rec.slots.values()) {
+    for (const [k, t] of rec.slots) {
+        if (skip && k.startsWith(skip)) continue;
         if (t.id) clearTimeout(t.id);
         const pending = t.pending;
         t.id = undefined;

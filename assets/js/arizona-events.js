@@ -240,6 +240,7 @@ const AZ_DIRECTIVES = new Set([
     'nodiff',
     'navigate',
     'patch',
+    'ctl',
 ]);
 
 /**
@@ -423,9 +424,12 @@ export function bindDocumentEvents(target, signal, abort) {
                 if (host.ready()) {
                     const sel = '[az-debounce],[az-throttle]';
                     const pending = new Set(form.querySelectorAll(sel));
+                    // The form's own slots too: a form-level az-debounce paces the
+                    // field events it delegates.
+                    if (form.matches(sel)) pending.add(form);
                     for (const el of /** @type {HTMLFormElement} */ (form).elements)
                         if (el.matches(sel)) pending.add(el);
-                    for (const el of pending) flushTimer(el);
+                    for (const el of pending) flushTimer(el, 'submit ');
                 }
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
@@ -441,6 +445,11 @@ export function bindDocumentEvents(target, signal, abort) {
         },
         { signal },
     );
+
+    // A server-owned control the user is editing: where focus leaves it, its input,
+    // and an IME composition in it decide when a server write reaches what it shows.
+    for (const type of ['focusout', 'input', 'compositionstart', 'compositionend'])
+        target.addEventListener(type, (e) => host.ctlEvent(e), { signal });
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop

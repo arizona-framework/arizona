@@ -1,8 +1,8 @@
-import { applyChoosers } from './arizona-attrs.js';
+import { applyChooser, applyChoosers, syncsProp } from './arizona-attrs.js';
 import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
-import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
+import { destroyAllHooks, mountHooks, notifyUpdated } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
@@ -249,19 +249,25 @@ function replayPartDone(replay) {
 /**
  * Hold the replay executing now (if any) open for work a command runs later.
  * Returns the runner for that work: it runs it as part of the replay, then
- * releases the hold -- once, however many times it is called.
+ * releases the hold -- once, however many times it is called. The work keeps the
+ * origin of the command too: one a server frame ran (a handler's
+ * `transition(set_attr(...))`) still writes as the server (`_inFrame`).
  * @returns {(fn: () => void) => void}
  */
 function holdReplay() {
     const replay = _replayRunning;
+    const inFrame = _inFrame;
     if (replay) replay.pending++;
     let held = replay !== null;
     return (fn) => {
         const outer = _replayRunning;
+        const outerFrame = _inFrame;
         if (held) _replayRunning = replay;
+        _inFrame = inFrame;
         try {
             fn();
         } finally {
+            _inFrame = outerFrame;
             _replayRunning = outer;
             if (held) {
                 held = false;
@@ -489,9 +495,16 @@ let _navEpoch = 0;
  * @param {string} name event name, for the warning
  * @param {Array<*>} frame `[target, event, payload]`
  * @param {number} [epoch] `_navEpoch` when the event was raised
+ *
+ * `ctls` are the server-owned controls whose state the event sends, as it was when
+ * raised: on a live socket the frame then takes a reply ref (the one a waiting
+ * transition takes) and each control is held until that reply (`_owned`).
  * @param {typeof _pendingTransition} [transition]
+ * @param {Array<[Element, string|boolean]>|null} [ctls]
  */
-function sendEvent(name, frame, epoch = _navEpoch, transition = null) {
+function sendEvent(name, frame, epoch = _navEpoch, transition = null, ctls = null) {
+    // Sent or dropped, the raise is no longer pending (`carry`).
+    if (ctls) release(ctls);
     const waits =
         transition !== null &&
         transition === _pendingTransition &&
@@ -502,13 +515,363 @@ function sendEvent(name, frame, epoch = _navEpoch, transition = null) {
         if (waits) armPendingTransition(null);
         return;
     }
-    if (waits && _connected) {
-        _transitionRef = nextRef();
-        frame = [...frame, _transitionRef];
+    if (_connected && (waits || ctls)) {
+        const ref = nextRef();
+        if (waits) _transitionRef = ref;
+        if (ctls) {
+            for (const [c, snap] of ctls) {
+                _owned.set(c, { ref, snap });
+                _guardWrote.delete(c);
+            }
+            _ownedRefs.set(
+                ref,
+                ctls.map(([c]) => c),
+            );
+        }
+        frame = [...frame, ref];
     } else if (waits) {
         armPendingTransition(null);
     }
-    workerPost(W_SEND, JSON.stringify(frame));
+    workerPost(W_SEND, JSON.stringify(frame, wellFormed));
+}
+
+/**
+ * A lone surrogate (a half-typed astral character) as U+FFFD: JSON escapes it,
+ * and a server reading the frame as UTF-8 refuses it, so the frame would go
+ * unanswered.
+ * @param {string} _key
+ * @param {*} v
+ */
+function wellFormed(_key, v) {
+    return typeof v === 'string'
+        ? v.replace(/[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]/g, (m) =>
+              m.length === 2 ? m : '\ufffd',
+          )
+        : v;
+}
+
+// Server-owned controls (`az-ctl`). The attribute a server write changes is only the
+// control's default; once the user edits it, what it shows is the live property, so a
+// write the user is not shown is lost. Only a write a server frame applies (its ops
+// and effects, `_inFrame`) is ever held; a command the user's own event runs writes
+// through. Three states hold a control, so a server write reaches its attribute alone
+// (`holds`):
+// - pending: an event carrying its state is raised and not yet sent (a debounce).
+// - in flight: that event awaits its reply, which settles it (`settleCtls`): unless
+//   the user changed it since, it shows what the server rendered -- the refused or
+//   normalised value, which no op carries when the binding did not change. A later
+//   event takes it over, so an earlier reply cannot put back what the user typed
+//   after it (`123`, never `13`).
+// - edited and unsent: focused (or composing) and differing from its default.
+// A write held other than by the reply to an event carrying the control is a push
+// and is noted (`_guardWrote`); when focus leaves the control with nothing pending
+// or in flight, a noted write wins, since the server changed what the user was
+// editing. Unwritten, the edit is kept for the event that sends it.
+/** @type {Map<Element, {ref: number, snap: string|boolean}>} */
+const _owned = new Map();
+/** @type {Map<number, Element[]>} */
+const _ownedRefs = new Map();
+// The raised, unsent events (their carried arrays) that carry each control, and the
+// trigger each was raised on: one whose trigger left the page counts no more
+// (`isPending`), since its send may never fire (a blur debounce on a removed field).
+// An array is live from its raise to its release, once, so a send a reconnect left
+// in its slot releases nothing of the new connection's.
+/** @type {WeakMap<Element, Set<Array<[Element, string|boolean]>>>} */
+let _pending = new WeakMap();
+/** @type {WeakMap<Array<[Element, string|boolean]>, Element>} */
+let _live = new WeakMap();
+/** @type {WeakSet<Element>} */
+let _guardWrote = new WeakSet();
+// A `value` write deferred while the user is mid bad input (`holds`).
+/** @type {WeakMap<Element, string|null>} */
+let _deferred = new WeakMap();
+/** @type {Element|null} */
+let _composing = null;
+// While a server frame is applied; and the reply ref of its ops (`null` for a push,
+// and for its effects: a command a handler returns is a server statement).
+let _inFrame = false;
+/** @type {number|null} */
+let _applying = null;
+
+/**
+ * Is `el` a control whose shown part the server renders (`az-ctl`, listing the parts
+ * the parse transform saw rendered)? A checkbox or radio shows its checkedness, a
+ * select its options' selectedness (or its kept `value`), the rest their value.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function isCtl(el) {
+    const tag = el.localName;
+    const parts = (el.getAttribute('az-ctl') ?? '').split(' ');
+    if (tag === 'select')
+        return parts.includes('value') || el.querySelector('option[az-ctl~="selected"]') !== null;
+    if (tag === 'textarea') return parts.includes('content');
+    const type = /** @type {HTMLInputElement} */ (el).type;
+    return (
+        tag === 'input' &&
+        parts.includes(type === 'checkbox' || type === 'radio' ? 'checked' : 'value')
+    );
+}
+
+/**
+ * Is `part` a part `ctl` shows (`isCtl`): a write to another one (a checkbox's
+ * `value`) is not held. A textarea's `value` write is its live value too.
+ * @param {Element} ctl
+ * @param {string} part
+ * @returns {boolean}
+ */
+function shows(ctl, part) {
+    const tag = ctl.localName;
+    const type = /** @type {HTMLInputElement} */ (ctl).type;
+    if (tag === 'select') return part === 'value' || part === 'selected';
+    if (tag === 'textarea') return part === 'content' || part === 'value';
+    return part === (type === 'checkbox' || type === 'radio' ? 'checked' : 'value');
+}
+
+/**
+ * The controls whose state goes with `ctl`'s: a radio's marked group (same name, same
+ * form, or same root without one), else `ctl` alone.
+ * @param {Element} ctl
+ * @returns {Element[]}
+ */
+function ctlGroup(ctl) {
+    const r = /** @type {HTMLInputElement} */ (ctl);
+    if (r.type !== 'radio' || !r.name || ctl.localName !== 'input') return [ctl];
+    const scope = r.form
+        ? r.form.elements
+        : /** @type {Document} */ (ctl.getRootNode()).querySelectorAll(
+              `input[name="${CSS.escape(r.name)}"]`,
+          );
+    return Array.from(scope).filter(
+        (m) =>
+            /** @type {HTMLInputElement} */ (m).type === 'radio' &&
+            /** @type {HTMLInputElement} */ (m).name === r.name &&
+            /** @type {HTMLInputElement} */ (m).form === r.form &&
+            isCtl(m),
+    );
+}
+
+/**
+ * What `ctl` shows: its checkedness, a select's selected values, or its value.
+ * @param {Element} ctl
+ * @returns {string|boolean}
+ */
+function ctlState(ctl) {
+    const c = /** @type {any} */ (ctl);
+    if (ctl.localName === 'select')
+        return JSON.stringify(Array.from(c.selectedOptions, (/** @type {any} */ o) => o.value));
+    return c.type === 'checkbox' || c.type === 'radio' ? c.checked : c.value;
+}
+
+/**
+ * `host.carry`: the server-owned controls whose state an event raised on `el` sends,
+ * as `[control, state]` pairs, or `null`: the trigger when it is one (a radio with
+ * its group), a form's controls it submits (named, not disabled) when it is a form.
+ * An event whose default was prevented edited nothing, and a drop sends no control.
+ * Each is pending until that event is sent or dropped (`release`), held like one in
+ * flight: while any raised event carries it.
+ * @param {Element} el
+ * @param {Event|null} event
+ * @returns {Array<[Element, string|boolean]>|null}
+ */
+function carry(el, event) {
+    // A submit is always prevented (the client sends it), its fields still edited.
+    const prevented = event?.defaultPrevented && event.type !== 'submit';
+    if (prevented || /** @type {any} */ (event)?.dataTransfer) return null;
+    const ctls =
+        el.localName === 'form'
+            ? Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(
+                  (c) =>
+                      isCtl(c) &&
+                      /** @type {HTMLInputElement} */ (c).name &&
+                      !c.matches(':disabled'),
+              )
+            : isCtl(el)
+              ? ctlGroup(el)
+              : [];
+    if (!ctls.length) return null;
+    /** @type {Array<[Element, string|boolean]>} */
+    const carried = ctls.map((c) => [c, ctlState(c)]);
+    _live.set(carried, el);
+    for (const [c] of carried) {
+        const raises = _pending.get(c) ?? new Set();
+        _pending.set(c, raises.add(carried));
+    }
+    return carried;
+}
+
+/**
+ * `host.release`: a raised event carrying `ctls` was sent, dropped, or replaced by a
+ * later raise in its debounce/throttle slot: it no longer keeps them pending.
+ * @param {Array<[Element, string|boolean]>} ctls
+ */
+function release(ctls) {
+    if (!_live.delete(ctls)) return;
+    for (const [c] of ctls) {
+        const raises = _pending.get(c);
+        raises?.delete(ctls);
+        if (raises?.size === 0) _pending.delete(c);
+    }
+}
+
+/**
+ * Does a raised, unsent event whose trigger is still on the page carry `ctl`? One
+ * whose trigger left is released here.
+ * @param {Element} ctl
+ * @returns {boolean}
+ */
+function isPending(ctl) {
+    for (const raise of [...(_pending.get(ctl) ?? [])]) {
+        if (_live.get(raise)?.isConnected) return true;
+        release(raise);
+    }
+    return false;
+}
+
+/**
+ * Does `ctl` show something other than its default?
+ * @param {Element} ctl
+ * @returns {boolean}
+ */
+function edited(ctl) {
+    const c = /** @type {any} */ (ctl);
+    if (ctl.localName === 'select')
+        return Array.from(c.options).some(
+            (/** @type {any} */ o) => o.selected !== o.defaultSelected,
+        );
+    if (c.type === 'checkbox' || c.type === 'radio') return c.checked !== c.defaultChecked;
+    return syncsProp(ctl, 'value') && c.value !== c.defaultValue;
+}
+
+/** @param {Element} ctl */
+const badInput = (ctl) => /** @type {any} */ (ctl).validity?.badInput === true;
+
+/**
+ * `host.holds`: must a server write of `name` (`val`, `null` a removal) to `el` leave
+ * the live state alone (`true`), or not happen yet (`'defer'`: the `value` of a
+ * focused control mid bad input, which a browser may clear on the write -- written
+ * when the input is good again or focus leaves)?
+ * @param {Element} el
+ * @param {string} name
+ * @param {string|null} val
+ * @returns {boolean|'defer'}
+ */
+function holds(el, name, val) {
+    if (!_inFrame) return false;
+    const option = el.localName === 'option';
+    const ctl = option ? el.closest('select') : el;
+    if (!ctl || !isCtl(ctl) || !shows(ctl, option ? 'selected' : name)) return false;
+    const group = ctlGroup(ctl);
+    const focus = ctl.ownerDocument.activeElement;
+    const isPush = _applying === null || !_ownedRefs.get(_applying)?.includes(ctl);
+    if (name === 'value' && focus === ctl && badInput(ctl)) {
+        _deferred.set(ctl, val);
+        return 'defer';
+    }
+    if (
+        _owned.has(ctl) ||
+        isPending(ctl) ||
+        (_composing && group.includes(_composing)) ||
+        (focus && group.includes(focus) && group.some(edited))
+    ) {
+        if (isPush) _guardWrote.add(ctl);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Make `ctl` show its default, the value the server rendered, and tell its hooks (a
+ * radio's group: checking one unchecks another). A focused text keeps its
+ * selection, clamped to the new value.
+ * @param {Element} ctl
+ */
+function showDefault(ctl) {
+    const c = /** @type {any} */ (ctl);
+    const group = ctlGroup(ctl);
+    const before = group.map(ctlState);
+    if (ctl === _composing) {
+        // Never mid-composition: noted, so leaving the field settles it.
+        _guardWrote.add(ctl);
+    } else if (ctl.localName === 'select') {
+        if (ctl.hasAttribute('value')) applyChooser(c, true);
+        else
+            for (const o of c.options)
+                if (o.selected !== o.defaultSelected) o.selected = o.defaultSelected;
+    } else if (c.type === 'checkbox' || c.type === 'radio') {
+        if (c.checked !== c.defaultChecked) c.checked = c.defaultChecked;
+    } else if (syncsProp(ctl, 'value') && c.value !== c.defaultValue) {
+        let range = null;
+        try {
+            if (ctl.ownerDocument.activeElement === ctl && c.selectionStart !== null)
+                range = [c.selectionStart, c.selectionEnd];
+        } catch {
+            // A type without a selection.
+        }
+        c.value = c.defaultValue;
+        if (range) {
+            const n = c.value.length;
+            c.setSelectionRange(Math.min(range[0], n), Math.min(range[1], n));
+        }
+    }
+    group.forEach((m, i) => {
+        if (ctlState(m) !== before[i]) notifyUpdated(m);
+    });
+}
+
+/**
+ * The reply to the frame tagged `ref` has been applied: each control it carried that
+ * no later event took over shows what the server rendered, unless the user changed
+ * it since it was sent. One showing bad input (`1e-` in a number) reads `""`, so it
+ * waits for focus to leave it.
+ * @param {number|null} ref
+ */
+function settleCtls(ref) {
+    const ctls = ref === null ? undefined : _ownedRefs.get(ref);
+    if (!ctls || ref === null) return;
+    _ownedRefs.delete(ref);
+    for (const c of ctls) {
+        const st = _owned.get(c);
+        if (st?.ref !== ref) continue;
+        _owned.delete(c);
+        if (!_connected || ctlState(c) !== st.snap) continue;
+        if (badInput(c)) {
+            _guardWrote.add(c);
+        } else {
+            _guardWrote.delete(c);
+            showDefault(c);
+        }
+    }
+}
+
+/**
+ * `host.ctlEvent`: an event bearing on a control the user edits. Focus leaving it
+ * (within the document: a window losing focus keeps the edit guarded) lets a server
+ * write held meanwhile win, unless an event carrying it is still pending or in
+ * flight; an edit no write met is kept for the event that sends it. A good input
+ * (or leaving) releases a deferred `value` write. A composition holds the control.
+ * @param {Event} e
+ */
+function ctlEvent(e) {
+    const el = /** @type {Element} */ (e.target);
+    if (e.type === 'compositionstart') _composing = el;
+    else if (e.type === 'compositionend') _composing = null;
+    if (el.nodeType !== 1 || !isCtl(el)) return;
+    const leave = e.type === 'focusout';
+    if (leave && !el.ownerDocument.hasFocus()) return;
+    if ((leave || (e.type === 'input' && !badInput(el))) && _deferred.has(el)) {
+        const v = _deferred.get(el);
+        _deferred.delete(el);
+        if (v == null) el.removeAttribute('value');
+        else el.setAttribute('value', v);
+        _guardWrote.add(el);
+    }
+    if (!leave) return;
+    const group = ctlGroup(el);
+    let wrote = false;
+    for (const m of group) if (_guardWrote.delete(m)) wrote = true;
+    if (wrote && _connected && !group.some((m) => _owned.has(m) || isPending(m)))
+        group.forEach(showDefault);
 }
 
 // The user-facing query string carried to the worker for the next reconnect
@@ -622,6 +985,8 @@ function dropOwedReplies() {
         _navAwaitResync = true;
     }
     if (_transitionRef !== null) armPendingTransition(null);
+    _owned.clear();
+    _ownedRefs.clear();
 }
 
 /**
@@ -1256,13 +1621,22 @@ export function connect(endpoint, params = {}) {
                         // ...and so is the element being typed into: put focus
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
-                        if (msg[1]) applyOps(msg[1], !!msg[3]);
-                        // Identity-checked: an OP_REPLACE in this frame consumed it.
-                        if (patchReply && _pendingScroll === armedScroll) {
-                            if (msg[1]?.length) applyScroll(armedScroll);
-                            setPendingScroll(null);
+                        _inFrame = true;
+                        _applying = msg[5];
+                        try {
+                            if (msg[1]) applyOps(msg[1], !!msg[3]);
+                            // Identity-checked: an OP_REPLACE in this frame consumed it.
+                            if (patchReply && _pendingScroll === armedScroll) {
+                                if (msg[1]?.length) applyScroll(armedScroll);
+                                setPendingScroll(null);
+                            }
+                            _applying = null;
+                            if (msg[2]) applyEffects(msg[2]);
+                        } finally {
+                            _inFrame = false;
+                            _applying = null;
                         }
-                        if (msg[2]) applyEffects(msg[2]);
+                        settleCtls(msg[5]);
                         if (msg[3]) restoreFormState();
                         if (focus) restoreFocus(focus);
                         // Here, not after the dispatch below: a transition defers
@@ -1480,6 +1854,13 @@ export function connect(endpoint, params = {}) {
         _frameGen++;
         _navRefs.clear();
         _navAwaitResync = false;
+        _owned.clear();
+        _ownedRefs.clear();
+        _pending = new WeakMap();
+        _live = new WeakMap();
+        _guardWrote = new WeakSet();
+        _deferred = new WeakMap();
+        _composing = null;
         _connectQs = '';
         _savedForms.clear();
         closeAllPip();
@@ -1517,6 +1898,10 @@ setHost({
         armPendingTransition(t);
     },
     holdReplay,
+    carry,
+    release,
+    holds,
+    ctlEvent,
     navigate: navigateEffect,
     leavePage,
 });

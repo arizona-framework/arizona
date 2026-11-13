@@ -238,6 +238,10 @@ render(Bindings) ->
     %% chooser's value and multiple, which the child's slot hands its value with
     %% (arizona_template:choices/3). `none` otherwise.
     choices = none :: none | {erl_parse:abstract_expr(), erl_parse:abstract_expr()},
+    %% The names of the diffable dynamic attributes the element being compiled has
+    %% emitted so far, newest first (compile_element_attrs/6 asks the backend whether
+    %% one is a control's default, `arizona_renderer:controlled/2`).
+    dyn_attrs = [] :: [binary()],
     %% The target's renderer. No default: every template is compiled for the target
     %% it sits in, so each construction names it.
     backend :: module()
@@ -1412,7 +1416,8 @@ format_attr_error(reserved_attr, Name) ->
         io_lib:format(
             "the ~ts attribute is reserved -- the parse transform emits it itself "
             "(az addresses an element for the diff, az-local describes its ?local "
-            "slots), so a template-authored one renders as a duplicate whose value "
+            "slots, az-ctl marks a control the server renders), so a template-authored "
+            "one renders as a duplicate whose value "
             "can collide with a real slot address and misroute a patch. Remove it: "
             "az-key, the az-* event attributes and any az-* name of your own are "
             "unaffected",
@@ -4875,7 +4880,7 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
             N ->
                 buf_az_attr(State3, integer_to_binary(N))
         end,
-    State5 = compile_element_attrs(Tag, Attrs, ElemAz, State4, Line),
+    State5 = compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State4, Line),
     case Backend:is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
@@ -4903,6 +4908,13 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
 element_parts(Backend, Tag, Attrs, Children, Line) ->
     ok = reject_framework_attrs(Backend, Attrs, Line),
     choose(Backend, Tag, Attrs, Children).
+
+%% Folded or marker-anchored, the content of an element with an `az` diffs unless the
+%% element is nodiff (compile_element_children/7).
+diffs_content(_Children, _RawKind, none, _State) ->
+    false;
+diffs_content(Children, RawKind, _ElemAz, #state{nodiff = Nodiff}) ->
+    not Nodiff andalso has_dynamic_child(Children, RawKind).
 
 %% A nodiff element is never an op target, so it carries no `az` -- unless it holds
 %% a content `?local`, whose slot the client finds by the element's `az` plus the
@@ -4984,19 +4996,50 @@ compile_static_false(NameAST, State0, ElemLine) ->
     end.
 
 %% The author's attributes, then the static ones the backend implies from them
-%% (`arizona_renderer:implied_attrs/2`).
-compile_element_attrs(Tag, Attrs, ElemAz, State0, Line) ->
+%% (`arizona_renderer:implied_attrs/2`), then `az-ctl` on a control whose default
+%% the diff renders (controlled/4).
+compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
+    DiffsContent = diffs_content(Children, RawKind, ElemAz, State0),
     Backend = State0#state.backend,
-    State1 = compile_attrs(Attrs, ElemAz, State0, Line),
+    State1 = compile_attrs(Attrs, ElemAz, State0#state{dyn_attrs = []}, Line),
     Names = [N || A <- Attrs, N <- [implied_attr_name(Backend, A)], is_binary(N)],
-    case Backend:implied_attrs(Tag, Names) of
+    State2 =
+        case Backend:implied_attrs(Tag, Names) of
+            [] ->
+                State1;
+            Implied ->
+                buf_append(State1, <<
+                    <<(emit_backend(fun() -> Backend:attr(N, V) end, Line))/binary>>
+                 || {N, V} <:- Implied
+                >>)
+        end,
+    case controlled(Backend, Tag, DiffsContent, lists:reverse(State1#state.dyn_attrs)) of
         [] ->
-            State1;
-        Implied ->
-            buf_append(State1, <<
-                <<(emit_backend(fun() -> Backend:attr(N, V) end, Line))/binary>>
-             || {N, V} <:- Implied
-            >>)
+            State2#state{dyn_attrs = []};
+        Parts ->
+            Value = iolist_to_binary(lists:join(~" ", Parts)),
+            buf_append(
+                State2#state{dyn_attrs = []},
+                emit_backend(fun() -> Backend:attr(~"az-ctl", Value) end, Line)
+            )
+    end.
+
+%% The parts of a control whose default the diff renders (`arizona_renderer:
+%% controlled/2`), lowercased: the user edits the live state apart from them, so
+%% after an edit a render no longer shows unless the client syncs it, which
+%% `az-ctl` asks of it, part by part (a checkbox's rendered `value` is no part it
+%% shows). A `?local` is the client's own and a nodiff dynamic never updates, so
+%% neither counts.
+controlled(Backend, Tag, DiffsContent, DynAttrs) ->
+    case erlang:function_exported(Backend, controlled, 2) of
+        true ->
+            Attrs = [
+                ascii_lowercase(Name)
+             || Name <- DynAttrs, Backend:controlled(Tag, {attr, Name})
+            ],
+            lists:uniq(Attrs ++ [~"content" || DiffsContent, Backend:controlled(Tag, content)]);
+        false ->
+            []
     end.
 
 %% A static `false` renders nothing, so it is not an attribute the element carries.
@@ -5158,7 +5201,7 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
             DynAST = make_attr_dynamic_ast(
                 AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
-            flush(State1, DynAST)
+            flush(State1#state{dyn_attrs = [NameBin | State1#state.dyn_attrs]}, DynAST)
     end.
 
 %% A value holding a literal `?raw`, whole (`?raw(H)`) or as a part
@@ -7001,7 +7044,7 @@ bare_attr_name(_AtomName, {bin, _, _} = Bin) ->
 bare_attr_name(_AtomName, _) ->
     error.
 
-%% The two attribute names the transform emits into the rendered output itself:
+%% The attribute names the transform emits into the rendered output itself:
 %% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
 %% carrying dynamics) and `az-local` (the `?local` descriptor injected by
 %% maybe_inject_local_descriptor/5). A template-authored copy is emitted *beside*
@@ -7011,7 +7054,8 @@ bare_attr_name(_AtomName, _) ->
 %% real address (`scope_static/2` rewrites every ` az="`), and can collide with a
 %% genuine slot id. The client resolves a slot with `querySelector('[az=...]')`,
 %% which takes the first match in document order, so the op then patches the wrong
-%% element. Reject both names at compile time.
+%% element. Reject both names at compile time. `az-ctl` (compile_element_attrs/6)
+%% likewise: a hand-written one marks a control the server does not render.
 %%
 %% Deliberately narrow: `az-view` has its own check (it is legal, and injected, on a
 %% live root), and every other `az-*` name is user territory -- `az-key` keys stream
@@ -7026,6 +7070,7 @@ reserved_attr_name(Name) ->
 
 is_reserved_attr_name(~"az") -> true;
 is_reserved_attr_name(~"az-local") -> true;
+is_reserved_attr_name(~"az-ctl") -> true;
 is_reserved_attr_name(_Other) -> false.
 
 reject_reserved_attrs(Attrs, Line) ->

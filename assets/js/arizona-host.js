@@ -12,9 +12,19 @@
  *   page while its socket is open, on a page with no server always
  * @property {() => number} epoch the navigation epoch a deferred event captures
  * @property {(name: string, frame: Array<*>, epoch?: number,
- *   transition?: {types?: string[], kind: 'any'|'replace'}|null) => void} sendEvent send
+ *   transition?: {types?: string[], kind: 'any'|'replace'}|null,
+ *   ctls?: Array<[Element, string|boolean]>|null) => void} sendEvent send
  *   the view event `frame` (`[target, event, payload]`) raised in `epoch` (default:
- *   the current one), under the view transition that waits for its reply, if any
+ *   the current one), under the view transition that waits for its reply, if any,
+ *   carrying the state of the server-owned controls `ctls` as it was raised
+ * @property {(el: Element, event: Event|null) => Array<[Element, string|boolean]>|null} carry
+ *   the server-owned controls an event raised on `el` sends the state of, with that state
+ * @property {(ctls: Array<[Element, string|boolean]>) => void} release a raised event
+ *   carrying `ctls` will not be sent (a later raise replaced it)
+ * @property {(el: Element, name: string, val: string|null) => boolean|'defer'} holds
+ *   whether a server write of `name` to `el` (a control, or an option of one) must leave
+ *   its live state alone, or (`'defer'`) not happen yet
+ * @property {(e: Event) => void} ctlEvent a focusout, input or IME composition event
  * @property {(url: string) => boolean} awaitsReply whether a navigate/patch to `url`
  *   is answered by a frame, so a view transition can wait for it
  * @property {(t: {types?: string[], kind: 'any'|'replace'}) => void} armTransition arm a view

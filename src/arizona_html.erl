@@ -39,6 +39,7 @@ identical to the previous inlined emission.
 -export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([selection_role/1]).
+-export([controlled/2]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
 -export([boolean_attrs/0]).
@@ -49,6 +50,10 @@ identical to the previous inlined emission.
 -export([wire_escape/1]).
 -export([wire_attr/2]).
 -export([static_document/2]).
+
+%% This module implements the whole renderer contract, one export per callback, so it
+%% legitimately exceeds the god-module function count.
+-elvis([{elvis_style, no_god_modules, disable}]).
 
 -define(IS_ALPHA(C), ((C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z))).
 -define(IS_ALNUM(C), (?IS_ALPHA(C) orelse (C >= $0 andalso C =< $9))).
@@ -395,6 +400,24 @@ selection_role(Tag) ->
         _Other ->
             none
     end.
+
+-spec controlled(arizona_renderer:tag(), {attr, binary()} | content) -> boolean().
+%% The user edits a control's live value/checkedness/selectedness apart from the
+%% attribute (or textarea content) that is only its default, so a render of the default
+%% stops showing once the user has edited it.
+controlled(Tag, Part) ->
+    controlled_part(tag_name(Tag), Part).
+
+controlled_part(Tag, {attr, Name}) ->
+    case {Tag, ascii_lowercase(Name)} of
+        {~"input", ~"value"} -> true;
+        {~"input", ~"checked"} -> true;
+        {~"select", ~"value"} -> true;
+        {~"option", ~"selected"} -> true;
+        {_Tag, _Name} -> false
+    end;
+controlled_part(Tag, content) ->
+    Tag =:= ~"textarea".
 
 -spec markup_text(iodata(), text | attribute) -> {text | markup, binary()}.
 %% What markup in an option shows as its text (option_text/3): tags and comments left

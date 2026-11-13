@@ -15,6 +15,7 @@ import {
     mountHooks,
     notifyUpdated,
 } from './arizona-hooks.js';
+import { host } from './arizona-host.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import {
     findMarker,
@@ -315,6 +316,12 @@ function applyTextOp(el, az, val, isHtml) {
         retireStaleCopies();
         forEachElementBetweenMarkers(marker, (e) => mountHooksOutside(e, kept));
     } else {
+        // A server-owned textarea's content is its default, as a value attribute is an
+        // input's: once edited, only the property shows it (see `applySetAttrOp`).
+        const live =
+            el.localName === 'textarea' &&
+            el.hasAttribute('az-ctl') &&
+            !host.holds(el, 'content', val);
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;
@@ -334,6 +341,8 @@ function applyTextOp(el, az, val, isHtml) {
                 el.textContent = val;
             }
         }
+        const ta = /** @type {HTMLTextAreaElement} */ (el);
+        if (live && ta.value !== ta.defaultValue) ta.value = ta.defaultValue;
     }
     notifyUpdated(el);
 }

@@ -33,9 +33,14 @@ answered by exactly one frame carrying `~"r" => Ref`:
 merged into its reply when it has one, alone (`{"r":Ref}`) when it changed
 nothing or named a view that no longer exists. Replies keep frame order, and a
 frame without the `~"r"` key (a server push, the reply to an untagged frame)
-answers no ref. A frame the server cannot read is dropped as ever, ref and all,
-so a ref that never comes back means the frame was lost or refused; a close
-fails every ref still pending.
+answers no ref. The pushes the live process sent before an event or patch reply
+arrive just before it, in a frame of their own with no `~"r"`: a client that
+tells a reply's own changes from a server push by the ref sees them as pushes. A
+frame the server cannot read -- not JSON, or of no shape it handles -- is dropped,
+but a valid ref where a ref goes (the trailing element of an event or
+navigate/patch frame) is still answered, alone, so a client never waits on it
+forever; a ref that never comes back means the frame was lost, and a close fails
+every ref still pending.
 
 ## Exit handling
 
@@ -343,7 +348,8 @@ Recognized payloads:
   frame carrying it back (see "Wire protocol" above)
 
 Unrecognized payloads, and frames whose body is not valid JSON, are
-silently dropped (a single bad frame must not crash the socket). An event
+dropped (a single bad frame must not crash the socket); a valid reply ref where
+a ref goes is answered alone, so the client is not left waiting. An event
 frame whose `Payload` is not a map is dropped the same way, so a crafted
 non-map payload can't reach a `#{...}`-matching handler and crash it.
 """.
@@ -409,8 +415,8 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
             is_binary(Event), is_map(Payload), ?is_ref(Ref)
         ->
             answer(Ref, handle_event(Target, Event, Payload, RootViewId, Socket));
-        _ ->
-            {ok, Socket}
+        Unrecognized ->
+            answer_unrecognized(Unrecognized, Socket)
     catch
         %% Malformed JSON (e.g. a scanner/probe, a corrupted or fragmented
         %% frame, a stale client). `json:decode/1` raises `error:{invalid_byte,
@@ -418,8 +424,30 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         %% the frame like an unrecognized payload rather than crashing the
         %% socket -- one bad frame must not tear down a live session.
         error:_ ->
-            {ok, Socket}
+            answer_unread(JSON, Socket)
     end.
+
+%% A frame that cannot be decoded may still end in a reply ref, which a client
+%% waits on (a page-swap window, a server-owned control held until the reply): read
+%% it off the raw text and answer it, the frame itself dropped.
+answer_unread(JSON, Socket) ->
+    case re:run(JSON, ~",\\s*([0-9]{1,16})\\s*]\\s*$", [{capture, all_but_first, binary}]) of
+        {match, [Digits]} -> answer_ref(binary_to_integer(Digits), Socket);
+        nomatch -> {ok, Socket}
+    end.
+
+answer_ref(Ref, Socket) when ?is_ref(Ref) -> answer(Ref, {ok, Socket});
+answer_ref(_Ref, Socket) -> {ok, Socket}.
+
+%% A frame of no shape this socket handles, with a ref where a ref goes (third of a
+%% navigate/patch, fourth of an event): dropped, its ref answered, for the same
+%% reason as answer_unread/2.
+answer_unrecognized([Verb, _Nav, Ref], Socket) when Verb =:= ~"navigate"; Verb =:= ~"patch" ->
+    answer_ref(Ref, Socket);
+answer_unrecognized([_Target, _Event, _Payload, Ref], Socket) ->
+    answer_ref(Ref, Socket);
+answer_unrecognized(_Frame, Socket) ->
+    {ok, Socket}.
 
 -doc """
 Returns the live process pid backing this socket, or `undefined` if
@@ -660,6 +688,8 @@ resync_then(ResyncFrame, {ok, Socket}) ->
     {reply, ResyncFrame, Socket};
 resync_then(ResyncFrame, {reply, Frame, Socket}) ->
     {reply_many, [ResyncFrame, Frame], Socket};
+resync_then(ResyncFrame, {reply_many, Frames, Socket}) ->
+    {reply_many, [ResyncFrame | Frames], Socket};
 resync_then(_ResyncFrame, {close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
@@ -1036,6 +1066,14 @@ answer(Ref, {ok, Socket}) ->
     {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $}], Socket};
 answer(Ref, {reply, [<<${, Rest/binary>> | Tail], Socket}) ->
     {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $,, Rest | Tail], Socket};
+%% The pushes drained ahead of a reply (reply_after_pending/4) ship first, on their
+%% own: the ref answers the reply after them, or alone when the reply is empty.
+answer(Ref, {reply_many, [Push], Socket}) ->
+    {reply, Answer, _} = answer(Ref, {ok, Socket}),
+    {reply_many, [Push, Answer], Socket};
+answer(Ref, {reply_many, [Push, Reply], Socket0}) ->
+    {reply, Answer, Socket} = answer(Ref, {reply, Reply, Socket0}),
+    {reply_many, [Push, Answer], Socket};
 answer(_Ref, {close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
@@ -1049,8 +1087,9 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {flatten_ops(ViewId, Ops), Effects, Observed}.
 
 %% Selectively receive the `{arizona_push, ...}` messages the live process
-%% emitted BEFORE the reply to a synchronous event/patch/navigate call, and fold them in
-%% front of that reply's own ops. Such a push is causally earlier, so it must be
+%% emitted BEFORE the reply to a synchronous event/patch/navigate call, and ship them
+%% ahead of that reply's own ops (in a frame of their own for an event/patch,
+%% reply_after_pending/4). Such a push is causally earlier, so it must be
 %% applied first: without this the reply ships first and the earlier push lands
 %% in a LATER frame, letting a stale value overwrite the reply's client-side
 %% (and keyed stream ops with relative refs can fail to apply outright).
@@ -1099,10 +1138,21 @@ drained_pushes(OpsAcc, EffectsAcc, Socket) ->
     {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc)), Socket}.
 
 %% An event/patch reply: the pushes queued ahead of it, then its own ops and
-%% effects, in one frame -- all of them belong to the page still on screen.
+%% effects. The pushes ship as their own frame before the reply's: a client tells
+%% the reply to a frame from a server push by the ref, and a push folded into the
+%% reply would pass for its echo (a server-owned control the user typed past would
+%% keep the typing over the pushed value).
 reply_after_pending(Ops, Effects, Observed, Socket0) ->
-    {PendOps, PendEffects, Socket} = drain_pending_pushes(Socket0),
-    encode_reply(PendOps ++ Ops, PendEffects ++ Effects, note_az([], Observed, Socket)).
+    case drain_pending_pushes(Socket0) of
+        {[], [], Socket} ->
+            encode_reply(Ops, Effects, note_az([], Observed, Socket));
+        {PendOps, PendEffects, Socket1} ->
+            {reply, Push, Socket2} = encode_reply(PendOps, PendEffects, Socket1),
+            case encode_reply(Ops, Effects, note_az([], Observed, Socket2)) of
+                {ok, Socket} -> {reply_many, [Push], Socket};
+                {reply, Reply, Socket} -> {reply_many, [Push, Reply], Socket}
+            end
+    end.
 
 %% The old page's effects a navigate drops (see do_navigate/5): logged once, by
 %% op code only -- their payloads (push_event data, flash contents) stay out of

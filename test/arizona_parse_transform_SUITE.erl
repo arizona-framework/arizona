@@ -426,6 +426,8 @@
     az_key_folds_ascii_case_only/1,
     reserved_attr_case_insensitive/1,
     az_submit_form_implies_post/1,
+    az_ctl_marks_rendered_controls/1,
+    az_ctl_skips_unrendered_controls/1,
     duplicate_attr_rejected/1,
     duplicate_attr_quotes_name_as_written/1,
     duplicate_attr_folds_ascii_case_only/1,
@@ -445,6 +447,7 @@
     az_view_binary_form_raises/1,
     reserved_az_attr_raises/1,
     reserved_az_local_attr_raises/1,
+    reserved_az_ctl_attr_raises/1,
     az_prefixed_user_attrs_allowed/1,
     az_view_case_in_render/1,
     az_view_if_in_render/1,
@@ -717,6 +720,8 @@ groups() ->
             void_tag_case_insensitive_rejects_children,
             reserved_attr_case_insensitive,
             az_submit_form_implies_post,
+            az_ctl_marks_rendered_controls,
+            az_ctl_skips_unrendered_controls,
             duplicate_attr_rejected,
             duplicate_attr_quotes_name_as_written,
             duplicate_attr_folds_ascii_case_only,
@@ -1301,6 +1306,7 @@ groups() ->
             az_view_binary_form_raises,
             reserved_az_attr_raises,
             reserved_az_local_attr_raises,
+            reserved_az_ctl_attr_raises,
             az_prefixed_user_attrs_allowed,
             az_view_case_in_render,
             az_view_if_in_render,
@@ -2137,7 +2143,7 @@ void_element(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<div><input az=\"0\" type=\"text\"">>,
-                <<" /></div>">>
+                <<" az-ctl=\"value\" /></div>">>
             ]
         ),
         maps:get(s, T)
@@ -4356,6 +4362,159 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
     {Native, _} = arizona_render:render(NativeMod:render(#{})),
     ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"method">>)).
 
+%% A control the diff renders the default of (an input's value or checked, an
+%% option's selected, including the one a select's value becomes, a textarea's
+%% content) carries `az-ctl`, after the author's attributes: once the user edits it,
+%% only the client can make it show what the server rendered.
+az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
+    Render = fun(Mod, Elem) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "arizona_template:target(arizona_html, ",
+                Elem,
+                "). "
+            ])
+        ),
+        Bindings = #{v => <<"b">>, on => true, t => <<"hi">>},
+        {HTML, _Snap} = arizona_render:render(M:render(Bindings)),
+        iolist_to_binary(HTML)
+    end,
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_ctl_value", "{input, [{name, <<\"q\">>}, {value, " ++ Get("v") ++ "}]}"),
+            <<"-0\" name=\"q\" value=\"b\" az-ctl=\"value\" />">>
+        )
+    ),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render(
+                "pt_ctl_checked",
+                "{input, [{type, <<\"checkbox\">>}, {checked, " ++
+                    Get("on") ++ "}]}"
+            ),
+            <<" checked az-ctl=\"checked\" />">>
+        )
+    ),
+    %% Each part the server renders is named, so a client syncs only those: a
+    %% checkbox's value is no part it shows.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render(
+                "pt_ctl_parts",
+                "{input, [{type, <<\"checkbox\">>}, {value, " ++ Get("v") ++ "}, {checked, " ++
+                    Get("on") ++ "}]}"
+            ),
+            <<" checked az-ctl=\"value checked\" />">>
+        )
+    ),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_ctl_upper", "{'INPUT', [{'VALUE', " ++ Get("v") ++ "}]}"),
+            <<" VALUE=\"b\" az-ctl=\"value\" />">>
+        )
+    ),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render(
+                "pt_ctl_option",
+                "{select, [], [{option, [{selected, " ++ Get("on") ++
+                    "}], [<<\"A\">>]}]}"
+            ),
+            <<" selected az-ctl=\"selected\">A</option>">>
+        )
+    ),
+    %% The selected a select's value becomes is the option's own.
+    Chosen = Render(
+        "pt_ctl_chosen",
+        "{select, [{value, " ++ Get("v") ++
+            "}], [{option, [{value, <<\"a\">>}], [<<\"A\">>]},"
+            " {option, [{value, <<\"b\">>}], [<<\"B\">>]}]}"
+    ),
+    ?assertMatch(
+        {match, [_, _]},
+        re:run(
+            Chosen, <<"<option az=\"[^\"]+\" value=\"[ab]\"( selected)? az-ctl=\"selected\">">>, [
+                global
+            ]
+        ),
+        Chosen
+    ),
+    ?assertMatch(<<"<select>", _/binary>>, Chosen),
+    %% A select keeping its value (an option the transform cannot see) is the control.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_ctl_kept", "{select, [{value, " ++ Get("v") ++ "}], [" ++ Get("t") ++ "]}"),
+            <<" value=\"b\" az-ctl=\"value\">">>
+        )
+    ),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_ctl_textarea", "{textarea, [], [" ++ Get("t") ++ "]}"),
+            <<"-0\" az-ctl=\"content\">hi</textarea>">>
+        )
+    ).
+
+%% No mark where nothing diffs a control's default: a static default, another
+%% attribute, a `?local` (the client's own), an az-nodiff subtree, a non-control,
+%% and a target with no `controlled/2`.
+az_ctl_skips_unrendered_controls(Config) when is_list(Config) ->
+    Render = fun(Mod, Elem) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "arizona_template:target(arizona_html, ",
+                Elem,
+                "). "
+            ])
+        ),
+        {HTML, _Snap} = arizona_render:render(M:render(#{v => <<"b">>, on => true})),
+        iolist_to_binary(HTML)
+    end,
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    lists:foreach(
+        fun({Mod, Elem}) ->
+            HTML = Render(Mod, Elem),
+            ?assertEqual(nomatch, binary:match(HTML, <<"az-ctl">>), HTML)
+        end,
+        [
+            {"pt_ctl_static", "{input, [{value, <<\"s\">>}, {class, " ++ Get("v") ++ "}]}"},
+            {"pt_ctl_disabled", "{input, [{disabled, " ++ Get("on") ++ "}]}"},
+            {"pt_ctl_local",
+                "{input, [{value, arizona_template:local(k, <<\"x\">>)}, {class, " ++
+                    Get("v") ++ "}]}"},
+            {"pt_ctl_local_select",
+                "{select, [{value, arizona_template:local(k, <<\"a\">>)}], ["
+                "{option, [{value, <<\"a\">>}], [<<\"A\">>]}]}"},
+            {"pt_ctl_nodiff", "{'div', ['az-nodiff'], [{input, [{value, " ++ Get("v") ++ "}]}]}"},
+            {"pt_ctl_div", "{'div', [{value, " ++ Get("v") ++ "}], [" ++ Get("v") ++ "]}"},
+            {"pt_ctl_li", "{li, [{value, " ++ Get("v") ++ "}], []}"},
+            {"pt_ctl_static_ta", "{textarea, [{class, " ++ Get("v") ++ "}], [<<\"t\">>]}"},
+            %% A textarea has no value attribute: its content is its default.
+            {"pt_ctl_ta_value", "{textarea, [{value, " ++ Get("v") ++ "}], []}"}
+        ]
+    ),
+    ?assertEqual(false, erlang:function_exported(arizona_json, controlled, 2)),
+    NativeMod = compile_module(
+        "-module(pt_ctl_json). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_json, {'TextField', [{value, "
+        "arizona_template:get(v, Bindings)}], []}). "
+    ),
+    {Native, _} = arizona_render:render(NativeMod:render(#{v => <<"b">>})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"az-ctl">>)).
+
 %% `[{class, ~"a"}, {class, ?get(x)}]` renders `class="a" class="1"`: the browser keeps
 %% the first, the diff patches the dynamic one, and the DOM after an update no longer
 %% matches a fresh render. Names compare as the backend emits them, under its
@@ -4545,7 +4704,7 @@ static_after_dynamic_attr(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\"">>,
-                <<" type=\"text\" />">>
+                <<" type=\"text\" az-ctl=\"value\" />">>
             ]
         ),
         maps:get(s, T)
@@ -4930,7 +5089,7 @@ template2_void_item(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\" type=\"text\"">>,
-                <<" />">>
+                <<" az-ctl=\"value\" />">>
             ]
         ),
         maps:get(s, Tmpl)
@@ -5560,7 +5719,8 @@ bool_dynamic_false(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{c => false}),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
-    ?assertEqual(nomatch, binary:match(HTML, <<"checked">>)).
+    %% No `checked` attribute; `az-ctl="checked"` names the part the server renders.
+    ?assertEqual(nomatch, re:run(HTML, <<"\\schecked[\\s/>]">>), HTML).
 
 %% Dynamic bool: {checked, Expr} where Expr evaluates to a string value.
 bool_dynamic_value(Config) when is_list(Config) ->
@@ -6976,7 +7136,7 @@ void_two_element_dynamic_attr(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\" type=\"text\"">>,
-                <<" />">>
+                <<" az-ctl=\"value\" />">>
             ]
         ),
         maps:get(s, T)
@@ -8992,6 +9152,34 @@ reserved_az_attr_raises(Config) when is_list(Config) ->
         "render(_Bindings) -> "
         "    arizona_template:target(arizona_html, {'div', [{az, <<\"0\">>}], [<<\"static\">>]}). ",
         Reserved
+    ).
+
+%% `az-ctl` marks a control whose default the server renders; an authored one would
+%% mark one it does not.
+reserved_az_ctl_attr_raises(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(_Bindings) -> ",
+                    "arizona_template:target(arizona_html, {input, [",
+                    Attr,
+                    "]}). "
+                ]),
+                fun
+                    ({reserved_attr, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        [
+            {"pt_res_ctl", "'az-ctl'"},
+            {"pt_res_ctl_und", "az_ctl"},
+            {"pt_res_ctl_bin", "<<\"AZ-CTL\">>"},
+            {"pt_res_ctl_val", "{az_ctl, <<\"x\">>}"}
+        ]
     ).
 
 %% `az-local` is the ?local descriptor the transform injects; an authored one is
