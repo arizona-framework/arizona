@@ -84,6 +84,12 @@ routes() ->
             bindings => #{title => <<"Controls">>},
             layouts => Layouts
         }},
+        %% The server-owned controls fixture the az-ctl parity e2e drives.
+        {live, <<"/ctl-parity">>, arizona_ctl_parity, #{
+            bindings => #{title => <<"Ctl parity">>},
+            layouts => Layouts,
+            middlewares => [arizona_middleware:extract([params])]
+        }},
         {live, <<"/select-value">>, arizona_select_value_page, #{
             bindings => #{title => <<"Select value">>},
             layouts => Layouts
