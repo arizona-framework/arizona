@@ -418,8 +418,20 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         %% the frame like an unrecognized payload rather than crashing the
         %% socket -- one bad frame must not tear down a live session.
         error:_ ->
-            {ok, Socket}
+            answer_unread(JSON, Socket)
     end.
+
+%% A frame that cannot be decoded may still end in a reply ref, which a client
+%% waits on (a page-swap window, a server-owned control held until the reply): read
+%% it off the raw text and answer it, the frame itself dropped.
+answer_unread(JSON, Socket) ->
+    case re:run(JSON, ~",\\s*([0-9]{1,16})\\s*]\\s*$", [{capture, all_but_first, binary}]) of
+        {match, [Digits]} -> answer_ref(binary_to_integer(Digits), Socket);
+        nomatch -> {ok, Socket}
+    end.
+
+answer_ref(Ref, Socket) when ?is_ref(Ref) -> answer(Ref, {ok, Socket});
+answer_ref(_Ref, Socket) -> {ok, Socket}.
 
 -doc """
 Returns the live process pid backing this socket, or `undefined` if

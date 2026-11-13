@@ -88,6 +88,7 @@
 -export([ref_answers_event_that_changes_nothing/1]).
 -export([ref_rides_event_reply/1]).
 -export([ref_rides_reply_after_drained_push_frame/1]).
+-export([ref_answers_undecodable_frame/1]).
 -export([ref_not_carried_onto_later_push/1]).
 -export([ref_answers_event_for_unknown_view/1]).
 -export([ref_answers_patch_that_changes_nothing/1]).
@@ -180,6 +181,7 @@ all() ->
         ref_answers_event_that_changes_nothing,
         ref_rides_event_reply,
         ref_rides_reply_after_drained_push_frame,
+        ref_answers_undecodable_frame,
         ref_not_carried_onto_later_push,
         ref_answers_event_for_unknown_view,
         ref_answers_patch_that_changes_nothing,
@@ -1997,6 +1999,20 @@ ref_answers_event_that_changes_nothing(Config) when is_list(Config) ->
     {reply, MaxFrame, _Socket3} =
         arizona_socket:handle_in(event_frame(~"counter", ~"noop", Max), Socket2),
     ?assertEqual(#{~"r" => Max}, decode(MaxFrame)).
+
+%% A frame the socket cannot decode (a lone surrogate escape) is dropped, but the
+%% ref it ends in is answered: a client holding state until the reply would wait
+%% forever. One with no ref still answers nothing.
+ref_answers_undecodable_frame(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Bad = <<"[\"counter\",\"inc\",{\"value\":\"a\\ud800\"},12]">>,
+    ?assertError(_, json:decode(Bad)),
+    {reply, Frame, Socket1} = arizona_socket:handle_in(Bad, Socket0),
+    ?assertEqual(#{~"r" => 12}, decode(Frame)),
+    Unref = <<"[\"counter\",\"inc\",{\"value\":\"a\\ud800\"}]">>,
+    ?assertMatch({ok, _}, arizona_socket:handle_in(Unref, Socket1)),
+    ?assertMatch({ok, _}, arizona_socket:handle_in(<<"[1,2,">>, Socket1)).
 
 ref_rides_event_reply(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
