@@ -2143,7 +2143,7 @@ void_element(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<div><input az=\"0\" type=\"text\"">>,
-                <<" az-ctl /></div>">>
+                <<" az-ctl=\"value\" /></div>">>
             ]
         ),
         maps:get(s, T)
@@ -4387,7 +4387,7 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
         {_, _},
         binary:match(
             Render("pt_ctl_value", "{input, [{name, <<\"q\">>}, {value, " ++ Get("v") ++ "}]}"),
-            <<"-0\" name=\"q\" value=\"b\" az-ctl />">>
+            <<"-0\" name=\"q\" value=\"b\" az-ctl=\"value\" />">>
         )
     ),
     ?assertMatch(
@@ -4398,14 +4398,27 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
                 "{input, [{type, <<\"checkbox\">>}, {checked, " ++
                     Get("on") ++ "}]}"
             ),
-            <<" checked az-ctl />">>
+            <<" checked az-ctl=\"checked\" />">>
+        )
+    ),
+    %% Each part the server renders is named, so a client syncs only those: a
+    %% checkbox's value is no part it shows.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render(
+                "pt_ctl_parts",
+                "{input, [{type, <<\"checkbox\">>}, {value, " ++ Get("v") ++ "}, {checked, " ++
+                    Get("on") ++ "}]}"
+            ),
+            <<" checked az-ctl=\"value checked\" />">>
         )
     ),
     ?assertMatch(
         {_, _},
         binary:match(
             Render("pt_ctl_upper", "{'INPUT', [{'VALUE', " ++ Get("v") ++ "}]}"),
-            <<" VALUE=\"b\" az-ctl />">>
+            <<" VALUE=\"b\" az-ctl=\"value\" />">>
         )
     ),
     ?assertMatch(
@@ -4416,7 +4429,7 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
                 "{select, [], [{option, [{selected, " ++ Get("on") ++
                     "}], [<<\"A\">>]}]}"
             ),
-            <<" selected az-ctl>A</option>">>
+            <<" selected az-ctl=\"selected\">A</option>">>
         )
     ),
     %% The selected a select's value becomes is the option's own.
@@ -4428,9 +4441,11 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
     ),
     ?assertMatch(
         {match, [_, _]},
-        re:run(Chosen, <<"<option az=\"[^\"]+\" value=\"[ab]\"( selected)? az-ctl>">>, [
-            global
-        ]),
+        re:run(
+            Chosen, <<"<option az=\"[^\"]+\" value=\"[ab]\"( selected)? az-ctl=\"selected\">">>, [
+                global
+            ]
+        ),
         Chosen
     ),
     ?assertMatch(<<"<select>", _/binary>>, Chosen),
@@ -4439,14 +4454,14 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
         {_, _},
         binary:match(
             Render("pt_ctl_kept", "{select, [{value, " ++ Get("v") ++ "}], [" ++ Get("t") ++ "]}"),
-            <<" value=\"b\" az-ctl>">>
+            <<" value=\"b\" az-ctl=\"value\">">>
         )
     ),
     ?assertMatch(
         {_, _},
         binary:match(
             Render("pt_ctl_textarea", "{textarea, [], [" ++ Get("t") ++ "]}"),
-            <<"-0\" az-ctl>hi</textarea>">>
+            <<"-0\" az-ctl=\"content\">hi</textarea>">>
         )
     ).
 
@@ -4687,7 +4702,7 @@ static_after_dynamic_attr(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\"">>,
-                <<" type=\"text\" az-ctl />">>
+                <<" type=\"text\" az-ctl=\"value\" />">>
             ]
         ),
         maps:get(s, T)
@@ -5072,7 +5087,7 @@ template2_void_item(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\" type=\"text\"">>,
-                <<" az-ctl />">>
+                <<" az-ctl=\"value\" />">>
             ]
         ),
         maps:get(s, Tmpl)
@@ -5702,7 +5717,8 @@ bool_dynamic_false(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{c => false}),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
-    ?assertEqual(nomatch, binary:match(HTML, <<"checked">>)).
+    %% No `checked` attribute; `az-ctl="checked"` names the part the server renders.
+    ?assertEqual(nomatch, re:run(HTML, <<"\\schecked[\\s/>]">>), HTML).
 
 %% Dynamic bool: {checked, Expr} where Expr evaluates to a string value.
 bool_dynamic_value(Config) when is_list(Config) ->
@@ -7118,7 +7134,7 @@ void_two_element_dynamic_attr(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\" type=\"text\"">>,
-                <<" az-ctl />">>
+                <<" az-ctl=\"value\" />">>
             ]
         ),
         maps:get(s, T)

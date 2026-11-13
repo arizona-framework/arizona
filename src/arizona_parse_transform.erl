@@ -5013,27 +5013,33 @@ compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
                  || {N, V} <:- Implied
                 >>)
         end,
-    case controlled(Backend, Tag, DiffsContent, State1#state.dyn_attrs) of
-        true ->
+    case controlled(Backend, Tag, DiffsContent, lists:reverse(State1#state.dyn_attrs)) of
+        [] ->
+            State2#state{dyn_attrs = []};
+        Parts ->
+            Value = iolist_to_binary(lists:join(~" ", Parts)),
             buf_append(
                 State2#state{dyn_attrs = []},
-                emit_backend(fun() -> Backend:attr_bool(~"az-ctl", true) end, Line)
-            );
-        false ->
-            State2#state{dyn_attrs = []}
+                emit_backend(fun() -> Backend:attr(~"az-ctl", Value) end, Line)
+            )
     end.
 
-%% A diffable render of a control's default (`arizona_renderer:controlled/2`): the
-%% user edits the live state apart from it, so after the user's edit the render no
-%% longer shows unless the client syncs it, which `az-ctl` asks of it. A `?local`
-%% is the client's own and a nodiff dynamic never updates, so neither counts.
+%% The parts of a control whose default the diff renders (`arizona_renderer:
+%% controlled/2`), lowercased: the user edits the live state apart from them, so
+%% after an edit a render no longer shows unless the client syncs it, which
+%% `az-ctl` asks of it, part by part (a checkbox's rendered `value` is no part it
+%% shows). A `?local` is the client's own and a nodiff dynamic never updates, so
+%% neither counts.
 controlled(Backend, Tag, DiffsContent, DynAttrs) ->
     case erlang:function_exported(Backend, controlled, 2) of
         true ->
-            (DiffsContent andalso Backend:controlled(Tag, content)) orelse
-                lists:any(fun(Name) -> Backend:controlled(Tag, {attr, Name}) end, DynAttrs);
+            Attrs = [
+                ascii_lowercase(Name)
+             || Name <- DynAttrs, Backend:controlled(Tag, {attr, Name})
+            ],
+            lists:uniq(Attrs ++ [~"content" || DiffsContent, Backend:controlled(Tag, content)]);
         false ->
-            false
+            []
     end.
 
 %% A static `false` renders nothing, so it is not an attribute the element carries.

@@ -299,9 +299,11 @@ on `input`/`select`/`textarea`, `checked` on `input`, `selected` on `option`, an
 longer shows, so the client must sync the live state itself.
 
 The parse transform marks an element holding a diffable dynamic for one of them with
-the bare attribute `az-ctl` (`attr_bool/2`), after the author's attributes: the client
-then carries the control's state with an event it raises and, once the server has
-answered that event, shows what the server rendered unless the user changed it since.
+the attribute `az-ctl` (`attr/2`), after the author's attributes, its value the parts
+it renders (`value`, `checked`, `selected`, `content`, lowercased, space-separated):
+the client then carries the control's state with an event it raises and, once the
+server has answered that event, shows what the server rendered unless the user changed
+it since -- for the parts the server renders only.
 
 Optional. A backend without it marks nothing.
 """.
