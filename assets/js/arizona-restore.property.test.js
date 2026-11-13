@@ -2286,6 +2286,16 @@ async function regroup(r, c, page, gt) {
     serverOp(page, gt, () => {
         c.fx([[7, sel, 'id', f.html]]);
         for (const x of moved) delete x.awayKey;
+        // A radio naming the form joins its group again, and a browser has one moved
+        // in checked uncheck the rest of the group, as on any change of its group;
+        // jsdom keeps both checked, a state no browser shows.
+        const form = /** @type {any} */ (document.getElementById(f.html));
+        for (const x of moved.filter(naming)) {
+            const el = /** @type {any} */ (elOf(x));
+            if (!el?.checked || el.form !== form) continue;
+            for (const o of form.elements)
+                if (o !== el && o.type === 'radio' && o.name === el.name) o.checked = false;
+        }
     });
     bump('form id writes away and back');
 }
