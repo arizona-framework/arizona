@@ -5122,6 +5122,13 @@ attr_kind(
     {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, ?CHOSEN_ONCE_MARK}}, [_]}, false
 ) ->
     static;
+%% A choice's `selected` compared at runtime with nothing but literals (a literal
+%% `multiple` value, which the transform does not fold): the same on every render.
+attr_kind({call, _, {remote, _, {atom, _, arizona_template}, {atom, _, chosen}}, Args}, false) ->
+    case lists:all(fun is_literal_ast/1, Args) of
+        true -> static;
+        false -> dynamic
+    end;
 attr_kind(Value, false) ->
     case literal_text(Value) of
         {ok, Text} ->
@@ -5131,6 +5138,14 @@ attr_kind(Value, false) ->
                 true -> static;
                 false -> dynamic
             end
+    end.
+
+%% An expression that is a literal term (erl_parse:normalise/1 reads it back).
+is_literal_ast(AST) ->
+    try erl_parse:normalise(AST) of
+        _Term -> true
+    catch
+        error:_ -> false
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->

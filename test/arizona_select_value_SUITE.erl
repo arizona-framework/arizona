@@ -58,6 +58,8 @@ and the select keeps its value for the client to apply after.
     shadowing_hoisted_read_is_refused/1,
     static_value_selects_at_compile_time/1,
     static_text_with_references_folds/1,
+    literal_value_options_are_not_bound/1,
+    opaque_options_bind_the_select_value/1,
     values_compare_as_the_parser_reads_them/1,
     helper_raw_option_value_is_its_text/1,
     helper_raw_value_compares_as_its_text/1,
@@ -127,6 +129,8 @@ groups() ->
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
             static_text_with_references_folds,
+            literal_value_options_are_not_bound,
+            opaque_options_bind_the_select_value,
             values_compare_as_the_parser_reads_them,
             helper_raw_option_value_is_its_text,
             helper_raw_value_compares_as_its_text,
@@ -180,6 +184,57 @@ option_without_value_uses_its_text(Config) when is_list(Config) ->
     ?assertEqual(1, count_selected(HTML)),
     %% The server renders the value, so it owns each option's selection.
     ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* az-bound=\"selected\""), HTML).
+
+%% A literal value, single or multiple, picks the same options on every render: no
+%% option is the server's to correct.
+literal_value_options_are_not_bound(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Attrs}) ->
+            M = compile_module(
+                raw_src(
+                    Mod,
+                    Attrs,
+                    "{option, [{value, ~\"a\"}], [~\"A\"]}, {option, [{value, ~\"b\"}], [~\"B\"]}"
+                )
+            ),
+            HTML = ssr_html(M, #{}),
+            ?assertEqual([~"a"], selected_values(HTML), {Mod, HTML}),
+            ?assertEqual(nomatch, binary:match(HTML, ~"az-bound"), {Mod, HTML})
+        end,
+        [
+            {"sel_lit_single", "{value, ~\"a\"}"},
+            {"sel_lit_multi", "multiple, {value, [~\"a\"]}"}
+        ]
+    ).
+
+%% Options a component renders are out of the compiler's reach: the select keeps its
+%% server-rendered value, which owns their selection (`az-bound="value"`). Options it
+%% marks itself drop the value, each option owning its own.
+opaque_options_bind_the_select_value(Config) when is_list(Config) ->
+    Opaque = compile_module(
+        raw_src(
+            "sel_opaque_bound",
+            "{value, arizona_template:get(v, Bindings)}",
+            "arizona_template:stateless(fun(_) -> arizona_template:target(arizona_html, ["
+            "{option, [{value, ~\"a\"}], [~\"A\"]}, "
+            "{option, [{value, ~\"b\"}], [~\"B\"]}"
+            "]) end, #{})"
+        )
+    ),
+    OpaqueHTML = ssr_html(Opaque, #{v => ~"b"}),
+    ?assertMatch({match, _}, re:run(OpaqueHTML, ~"<select[^>]* az-bound=\"value\""), OpaqueHTML),
+    Reached = compile_module(
+        raw_src(
+            "sel_reached_bound",
+            "{value, arizona_template:get(v, Bindings)}",
+            "{option, [{value, ~\"a\"}], [~\"A\"]}, {option, [{value, ~\"b\"}], [~\"B\"]}"
+        )
+    ),
+    ReachedHTML = ssr_html(Reached, #{v => ~"b"}),
+    ?assertEqual(nomatch, re:run(ReachedHTML, ~"<select[^>]* az-bound"), ReachedHTML),
+    ?assertMatch(
+        {match, _}, re:run(ReachedHTML, ~"<option[^>]* az-bound=\"selected\""), ReachedHTML
+    ).
 
 multiple_selects_every_listed_value(Config) when is_list(Config) ->
     HTML = iolist_to_binary(

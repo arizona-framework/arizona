@@ -138,6 +138,42 @@ describe('a refused edit', () => {
         expect($('select').value).toBe('a');
     });
 
+    // A select whose server-rendered value picks among options the compiler could not
+    // mark (a component renders them) owns them through `az-bound="value"`.
+    const valued = (/** @type {string} */ slot = '') =>
+        `<div id="v" az-view><select az="s" name="s" value="a" az-bound="value" az-change='[0,"pick"]'>` +
+        `<option value="a" selected>A</option><option value="b">B</option>${slot}</select></div>`;
+    it('resets a select its value owns when the server refuses the pick', async () => {
+        const c = await start(valued());
+        $('select').value = 'b';
+        change($('select'));
+        c.msg(null, null, c.lastRef());
+        expect($('select').value).toBe('a');
+    });
+    it('holds a value write to a select a proposal waits on, then shows it', async () => {
+        const c = await start(valued());
+        $('select').value = 'b';
+        change($('select'));
+        const ref = c.lastRef();
+        c.msg([[SET_ATTR, 'v:s', 'value', 'b']]);
+        expect([$('select').getAttribute('value'), $('select').value]).toEqual(['a', 'b']);
+        c.msg(null, null, ref);
+        expect([$('select').getAttribute('value'), $('select').value]).toEqual(['b', 'b']);
+    });
+    // An option a batch renders while a proposal waits is marked by the select's value
+    // only once the select is released: nothing writes a held control.
+    it('marks an option a batch adds to a held select only at the release', async () => {
+        const c = await start(valued('<!--az:s:0--><!--/az-->'));
+        $('select').value = 'b';
+        change($('select'));
+        const ref = c.lastRef();
+        c.msg([[TEXT, 'v:s:0', '<option value="a">A2</option>', true]]);
+        const added = /** @type {any} */ ($('select').options[2]);
+        expect(added.defaultSelected).toBe(false);
+        c.msg(null, null, ref);
+        expect(added.defaultSelected).toBe(true);
+    });
+
     it('resets the bound controls of a form trigger', async () => {
         const c = await start(
             `<div id="v" az-view><form id="f" az-change='[0,"validate"]'>` +
@@ -4051,6 +4087,27 @@ describe('a form across views and documents', () => {
     // A form's replay posts the fields a window holds for it too: a server-owned field
     // with no event of its own, in a view the resync kept popped out, is proposed by
     // the form, and keeps the user's edit.
+    // A form's fields in a window post as a native submit of the form inline would:
+    // in tree order as if the view were back, an explicit empty value as "", and a
+    // disabled option left out.
+    it('posts the fields a window holds for a form as a native submit would', async () => {
+        const pg = view(
+            'page',
+            `<form id="f" az-change='[0,"f"]'><input name="n" value="1">${view(
+                'ch',
+                '<input name="n" value="2"><input type="checkbox" name="c" value="" checked>' +
+                    '<select name="s" multiple><option value="x" selected disabled>x</option>' +
+                    '<option value="y" selected>y</option></select>',
+            )}<input name="n" value="3"></form>`,
+        );
+        const c = await start(pg);
+        await popOut(c, 'ch');
+        const before = c.sent().length;
+        change($('[name=n]'));
+        expect(replayed(c, before)).toEqual([
+            ['page', 'f', { n: ['1', '2', '3'], c: '', s: ['y'] }],
+        ]);
+    });
     it('replays a form with the fields of a view the resync kept popped out', async () => {
         const pg = view(
             'page',

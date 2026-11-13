@@ -22,8 +22,11 @@
  *   replaced before it went out
  * @property {<T>(fn: () => T) => T} [serverBatch] run `fn` as a batch of the server's:
  *   what it changes of a radio group's choice is the server's statement; a live page only
- * @property {(form: HTMLFormElement) => Element[]} [formAway] the fields of `form` a
- *   pop-out moved into another document; a live page only
+ * @property {(form: HTMLFormElement) => Element[]|null} [formControls] every field of
+ *   `form` in tree order as if inline, when a pop-out moved some into another
+ *   document; a live page only
+ * @property {(sel: Element) => boolean} [heldSelect] whether a proposal waits on select
+ *   `sel`'s options, which nothing writes meanwhile; a live page only
  * @property {(doc: Document, signal: AbortSignal) => void} [bindDocument] bind what the
  *   live side tracks per hosting document
  * @property {(url: string) => boolean} awaitsReply whether a navigate/patch to `url`

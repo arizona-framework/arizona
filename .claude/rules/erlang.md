@@ -90,12 +90,15 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 A form control whose shown state the server renders gets a static `az-bound` in the `?html`
 target, after its attributes, naming the properties the server owns: `value` / `checked` of an
 `input` with that attribute dynamic (`az-bound="value checked"` for both), `selected` of an
-`option`, `value` of a `textarea` with dynamic content. A static `type` narrows an `input`:
+`option`, `value` of a `textarea` with dynamic content, and `value` of a `select` that keeps a
+server-rendered `value` because a component renders some of its options (the value owns all
+their selection; a select whose options the transform marks drops it, each option owning its own). A static `type` narrows an `input`:
 `value` only in the "value" value mode (not `hidden`, the buttons, `file`, or the checkable
 types, where the property reflects the attribute or refuses a write), `checked` only on a
 `checkbox` or `radio`; a dynamic or absent `type` keeps both. Dynamic means a value the diff can
 rewrite: a `?get`, an expression, an interpolated list with a dynamic part, a `?raw`, a
-conditional, or the `selected` a select's server-rendered `value` gives each option ("A `value`
+conditional, or the `selected` a select's server-rendered `value` gives each option (a
+literal value, single or `multiple`, gives a static one) ("A `value`
 on a `select`" below) -- not a literal, a static `true`/`false`, or a `?local` (the client's,
 which also leaves the options of a select whose value is one to the client), and nothing in a
 nodiff unit. The DOM cannot tell these apart (a dynamic `checked` that is `false`

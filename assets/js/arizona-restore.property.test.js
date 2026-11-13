@@ -782,11 +782,11 @@ let pipWin = null;
 const elOf = (f) =>
     document.querySelector(`[data-pk="${f.key}"]`) ?? pipDoc?.querySelector(`[data-pk="${f.key}"]`);
 
-/** Note the document each field of `page` is in now. @param {Page} page */
 /** The document view `v` is in now, as `locate` names it; null when it is gone. @param {string} v */
 const viewDoc = (v) =>
     document.getElementById(v) ? 'main' : pipWin && pipDoc?.getElementById(v) ? 'pip' : null;
 
+/** Note the document each field of `page` is in now. @param {Page} page */
 function locate(page) {
     for (const f of ordered(page)) f.doc = elOf(f)?.ownerDocument === document ? 'main' : 'pip';
 }

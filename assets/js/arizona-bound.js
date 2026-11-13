@@ -1,4 +1,4 @@
-import { syncsProp } from './arizona-attrs.js';
+import { applyChooser, syncsProp } from './arizona-attrs.js';
 import { _pipWindows, allDocs } from './arizona-docs.js';
 import { notifyUpdated } from './arizona-hooks.js';
 
@@ -100,9 +100,20 @@ function tokens(el) {
     return (el.getAttribute('az-bound') || '').split(' ');
 }
 
-/** @param {Element} el @param {string} name @returns {boolean} */
+/**
+ * Does the server own `el`'s `name`? An option's selection is also owned through its
+ * select's `value` (`az-bound="value"`): a select whose server-rendered value picks
+ * among options the compiler could not mark (a component renders them) owns them all.
+ * @param {Element} el
+ * @param {string} name
+ * @returns {boolean}
+ */
 function bound(el, name) {
-    return syncsProp(el, name) && tokens(el).includes(name);
+    if (!syncsProp(el, name)) return false;
+    if (tokens(el).includes(name)) return true;
+    if (name !== 'selected') return false;
+    const sel = el.closest('select');
+    return !!sel && tokens(sel).includes('value');
 }
 
 /**
@@ -167,6 +178,8 @@ function unitFor(el, name, make) {
     let key = el;
     /** @type {() => Array<[any, string]>} */
     let members;
+    // A select's options are one unit keyed by the select, which its `value` (a write
+    // `defer` holds) finds too.
     if (name === 'selected') {
         key = el.closest('select');
         members = () => [...key.options].map((o) => [o, 'selected']);
@@ -297,6 +310,13 @@ function held(el, name) {
 }
 
 /**
+ * Does a proposal wait on select `sel`'s options? Then nothing writes them, the
+ * marking its `value` makes neither (`applyChoosers`): the release does.
+ * @param {Element} sel
+ */
+export const heldSelect = (sel) => _live > 0 && (_units.get(sel)?.caps.size ?? 0) > 0;
+
+/**
  * Hold a diff write to `el`'s `name` (an attribute, or a textarea's content) while a
  * proposal waits on it: not even the attribute is written, since Firefox clears a
  * partial date when its value attribute changes. The latest one per element and
@@ -356,6 +376,10 @@ function releaseIn(u, captured) {
         _kept.delete(u);
         for (const [e, w] of writes) if (e.isConnected) for (const write of w.values()) write();
     }
+    // A select's value marks its options' defaults, held with the rest while a
+    // proposal waited (`heldSelect`): options a batch rendered meanwhile too.
+    const sel = ms[0]?.[1] === 'selected' ? ms[0][0].closest('select') : null;
+    if (sel?.isConnected && sel.hasAttribute('value')) applyChooser(sel, false);
     if (!captured) return;
     if (ms.some(([e]) => _composing.has(e))) {
         u.deferred = captured;
@@ -666,6 +690,32 @@ export function formAway(form) {
             for (const el of d.querySelectorAll('input, select, textarea'))
                 if (formOf(el) === form) out.push(el);
     return out;
+}
+
+/**
+ * Every field of `form`, its own and those a pop-out moved into another document
+ * (`formAway`), in tree order as if each window's view were back at its placeholder;
+ * null when none is away, `form.elements` being all of them then.
+ * @param {HTMLFormElement} form
+ * @returns {Element[]|null}
+ */
+export function formControls(form) {
+    const away = formAway(form);
+    if (away.length === 0) return null;
+    /** Where `el` sits in the page: itself, or its window's placeholder. @param {Node} el */
+    const anchor = (el) => {
+        for (const { win, placeholder } of _pipWindows.values())
+            if (win.document === el.ownerDocument) return anchor(placeholder);
+        return el;
+    };
+    /** @param {Node} a @param {Node} b */
+    const before = (a, b) => (a.compareDocumentPosition(b) & 4 ? -1 : 1);
+    return [...form.elements, ...away].sort((a, b) => {
+        if (a === b) return 0;
+        const x = anchor(a);
+        const y = anchor(b);
+        return x === y ? before(a, b) : before(x, y);
+    });
 }
 
 /**

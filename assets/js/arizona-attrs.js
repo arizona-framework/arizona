@@ -1,5 +1,6 @@
 import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
+import { host } from './arizona-host.js';
 import { carryChooserLocal, heldChooserLocal } from './arizona-locals.js';
 
 /** @type {HTMLTemplateElement | null} */
@@ -207,7 +208,7 @@ export function attrInput(text) {
  */
 export function applyChoosers(root) {
     for (const sel of root.querySelectorAll('select[value]'))
-        applyChooser(/** @type {HTMLSelectElement} */ (sel), false);
+        if (!host.heldSelect?.(sel)) applyChooser(/** @type {HTMLSelectElement} */ (sel), false);
 }
 
 // The <input> types in the "value" value mode, the only ones whose `value` property

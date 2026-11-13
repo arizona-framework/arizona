@@ -411,6 +411,10 @@ bound_props(~"option", Attrs, _DynamicContent) ->
     [~"selected" || lists:member({~"selected", dynamic}, Attrs)];
 bound_props(~"textarea", _Attrs, true) ->
     [~"value"];
+%% A select keeps a server-rendered `value` only when the transform could not mark all
+%% its options (a component renders some): the value owns their selection then.
+bound_props(~"select", Attrs, _DynamicContent) ->
+    [~"value" || lists:member({~"value", dynamic}, Attrs)];
 bound_props(_TagName, _Attrs, _DynamicContent) ->
     [].
 

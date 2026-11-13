@@ -101,30 +101,41 @@ function submitter(event) {
 }
 
 /**
- * The fields of `form` a pop-out moved into another document (`host.formAway`): the
- * form still owns them as the server renders it, but `form.elements` and `FormData`
- * see only its own document.
+ * Every field of `form` when a pop-out moved some into another document, in tree
+ * order as if they were inline (`host.formControls`); null otherwise. `form.elements`
+ * and `FormData` see only the form's own document.
  * @param {HTMLFormElement} form
- * @returns {Element[]}
+ * @returns {Element[]|null}
  */
-const away = (form) => host.formAway?.(form) ?? [];
+const spread = (form) => host.formControls?.(form) ?? null;
 
 /**
- * What `form` submits, `FormData` as a native submit builds it plus the fields a
- * pop-out moved into another document (`away`), each as a native submit adds one.
+ * What `form` submits: `FormData` as a native submit builds it, or, with fields in
+ * another document (`spread`), the same entries built field by field in their order.
  * @param {HTMLFormElement} form
  * @param {Event|null} event
  * @returns {FormData}
  */
 function formData(form, event) {
-    const fd = new FormData(form, submitter(event));
-    for (const el of away(form)) {
+    const all = spread(form);
+    const sub = submitter(event);
+    if (!all) return new FormData(form, sub);
+    const fd = new FormData();
+    for (const el of all) {
         const f = /** @type {any} */ (el);
-        if (!f.name || !isSubmittableField(el) || el.matches(':disabled')) continue;
-        if (f.type === 'checkbox' || f.type === 'radio') {
-            if (f.checked) fd.append(f.name, f.value || 'on');
+        if (!f.name || el.matches(':disabled')) continue;
+        if (!isSubmittableField(el)) {
+            // A button: only the one that submitted (an image one by where it was hit).
+            if (el !== sub) continue;
+            if (f.type === 'image') {
+                fd.append(`${f.name}.x`, '0');
+                fd.append(`${f.name}.y`, '0');
+            } else fd.append(f.name, f.value);
+        } else if (f.type === 'checkbox' || f.type === 'radio') {
+            if (f.checked) fd.append(f.name, f.value);
         } else if (el.tagName === 'SELECT') {
-            for (const o of f.selectedOptions) fd.append(f.name, o.value);
+            for (const o of f.options)
+                if (o.selected && !o.matches(':disabled')) fd.append(f.name, o.value);
         } else if (f.type !== 'file') fd.append(f.name, f.value);
     }
     return fd;
@@ -146,7 +157,7 @@ function multiValuedNames(form) {
     const names = new Set();
     /** @type {Map<string, {boxes: number, enabled: boolean}>} */
     const groups = new Map();
-    for (const el of [...form.elements, ...away(form)]) {
+    for (const el of spread(form) ?? form.elements) {
         const f = /** @type {any} */ (el);
         const name = f.name;
         if (!name) continue;
