@@ -1059,9 +1059,11 @@ the user's text forever.
 are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`/`textarea`,
 `checked` on `input`, `selected` on `option` (the one the transform derives from a select's
 `value` included) and `textarea` content. An element holding a **diffable** dynamic for one
-of them gets the static bare attribute `az-ctl` (via `attr_bool/2`), after the author's
-attributes and the implied ones. A `?local` (the client's own), an az-nodiff subtree (never
-updated) and a backend without the callback (`?json`, `?terminal`) emit nothing. `az-ctl` is
+of them gets the static attribute `az-ctl` (via `attr/2`), after the author's attributes and
+the implied ones, naming the parts it renders (`az-ctl="value checked"`): the client syncs
+only those, so a checkbox whose rendered part is only its `value` keeps its checkedness. A
+`?local` (the client's own), an az-nodiff subtree (never updated) and a backend without the
+callback (`?json`, `?terminal`) emit nothing. `az-ctl` is
 reserved (`reserved_attr`), like `az` and `az-local`.
 
 **Client.** The guarantee: *once the server has answered an event that carried a control's
@@ -1071,17 +1073,23 @@ form (its marked controls) snapshots what each sends and tags its frame with a r
 while it is in flight a server write to the control reaches the attribute only, and when the
 reply has been applied each control still showing its snapshot is synced to its default.
 Each control follows its latest event, so an earlier reply never puts back what was typed
-after it. A focused control the user has edited and not yet sent is held the same way, so a
-server push never clobbers unsent typing; when focus leaves it, a write held meanwhile wins
-(the server changed what was being edited), and with none the edit is kept for the event
-that sends it -- also when the user typed past an edit still in flight, where only a frame
+after it. A control the user has edited and not yet sent (focused, or its event still
+debounced) is held the same way, so a server push does not replace what they type; when
+focus moves elsewhere in the page with nothing pending, a write held meanwhile wins (the
+server changed what was being edited), and with none the edit is kept for the event that
+sends it -- also when the user typed past an edit still in flight, where only a frame
 answering that edit counts as its reply and any other write is a push. A `<textarea>`
 content update follows the same rules as a value write. A property is never written
 mid-IME-composition. Mechanism and limits in
 [.claude/rules/js.md](../.claude/rules/js.md).
 
-An `az-submit` form's marked fields follow the same rule: a submit the handler refuses
-reverts them to what the server rendered.
+Any event carrying a form's marked fields follows the same rule, an `az-change` validator as
+much as an `az-submit`: a field the handler does not store back reverts to what the server
+rendered (a login form whose error path drops the typed email empties it -- store it). Only
+server-applied writes (a frame's ops and effects) are held; a command the user's own event
+runs writes through. To tell a reply's echo from a push, the socket ships the pushes it
+drains ahead of an event/patch reply as their own frame, and answers the ref of a frame it
+cannot decode.
 
 ## Client-owned slots -- `?local`
 
