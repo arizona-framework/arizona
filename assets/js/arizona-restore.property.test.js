@@ -2387,6 +2387,16 @@ async function run(/** @type {number} */ seed) {
         // What the restore showed is the user's choice or the server's.
         // A fresh control carries no statement of the server's from before.
         for (const f of ordered(page)) if (elOf(f) !== els.get(f.key)) gt.stamp.delete(f.key);
+        // The resync rendered fresh controls, which no act touched (a kept az-nodiff
+        // one aside); a formless group the restore showed the user's choice in holds
+        // when the user acted on the group that choice came from. The restore wrote
+        // those acts before any reply below, which states their group after them.
+        for (const f of ordered(page)) if (elOf(f) !== els.get(f.key)) gt.at.delete(f.key);
+        for (const [key, t] of restoredAt) {
+            gt.at.set(key, t);
+            const f = ordered(page).find((x) => x.key === key);
+            if (f) gt.actIn.set(key, nameKey(f));
+        }
         // A reply is a batch of the server's: a refusal reconciling a group to the
         // server's choice states it.
         for (const x of sent)
@@ -2415,15 +2425,6 @@ async function run(/** @type {number} */ seed) {
                 .filter((f) => apart(page, f))
                 .map((f) => f.key),
         );
-        // The resync rendered fresh controls, which no act touched (a kept az-nodiff
-        // one aside); a formless group the restore showed the user's choice in holds
-        // when the user acted on the group that choice came from.
-        for (const f of ordered(page)) if (elOf(f) !== els.get(f.key)) gt.at.delete(f.key);
-        for (const [key, t] of restoredAt) {
-            gt.at.set(key, t);
-            const f = ordered(page).find((x) => x.key === key);
-            if (f) gt.actIn.set(key, nameKey(f));
-        }
         bump('resyncs');
         if (pip) bump('resyncs with a PiP window');
         if (page.views.length > 0) bump('resyncs with child views');
