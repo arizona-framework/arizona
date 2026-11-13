@@ -424,6 +424,9 @@ export function bindDocumentEvents(target, signal, abort) {
                 if (host.ready()) {
                     const sel = '[az-debounce],[az-throttle]';
                     const pending = new Set(form.querySelectorAll(sel));
+                    // The form's own slots too: a form-level az-debounce paces the
+                    // field events it delegates.
+                    if (form.matches(sel)) pending.add(form);
                     for (const el of /** @type {HTMLFormElement} */ (form).elements)
                         if (el.matches(sel)) pending.add(el);
                     for (const el of pending) flushTimer(el);

@@ -836,7 +836,11 @@ function scheduleSend(el, event, prefix, index, send) {
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
     const throttleMs = parseInt(el.getAttribute('az-throttle') || '', 10);
-    if (!debounceMs && !throttleMs && !debounceEvent) {
+    // A submit is not debounced: a form's `az-debounce` paces the field events it
+    // delegates, and a blur debounce would never send the form's submit at all.
+    // (`az-throttle` still paces a submit: it guards a double submit.)
+    const debounced = debounceMs || debounceEvent;
+    if ((debounced && event.type === 'submit') || (!debounced && !throttleMs)) {
         send();
         return;
     }
@@ -854,6 +858,10 @@ function scheduleSend(el, event, prefix, index, send) {
     const slot = t;
     // Event-name debounce: just store the latest send, flush on the named event.
     if (debounceEvent) {
+        // A timer a former mode armed (the server changed az-debounce) must not
+        // send it.
+        clearTimeout(slot.id);
+        slot.id = undefined;
         replacePending(slot, send);
         if (!rec.eventBound) {
             rec.eventBound = true;
@@ -866,9 +874,11 @@ function scheduleSend(el, event, prefix, index, send) {
         clearTimeout(slot.id);
         replacePending(slot, send);
         slot.id = setTimeout(() => {
+            // The slot's latest: a later raise in another mode may have replaced it.
+            const pending = slot.pending;
             slot.id = undefined;
             slot.pending = null;
-            send();
+            pending?.();
         }, debounceMs);
     } else {
         // Throttle: send immediately, suppress duplicates for the interval.

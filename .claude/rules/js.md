@@ -155,7 +155,11 @@ The flag must be **stated in both directions**: omitting it entirely makes Chrom
 have dedicated listeners (submit flushes pending debounced inputs, honors `az-form-reset`, and
 defers the reset to a `fetch` response; drop carries the drag bookkeeping), so delegating them as
 well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
-directives rather than events.
+directives rather than events. The flush covers the form's own slots too (a form-level
+`az-debounce` paces the field events it delegates), and a submit is never debounced itself --
+`az-debounce="blur"` on a form would otherwise never send it -- while `az-throttle` still paces
+it. A debounce mode the server switches mid-window sends the slot's latest raise in the new
+mode: the old timer neither fires a raise the new one replaced nor drops it.
 
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
 submits it with the form's own method -- a GET by default, putting every field (a password

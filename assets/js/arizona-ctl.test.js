@@ -833,3 +833,55 @@ describe('server-owned controls: pending across reconnects and removals', () => 
         expect(r2.checked).toBe(true);
     });
 });
+
+describe('event pacing (az-debounce)', () => {
+    it('a mode the server switches mid-window sends the latest raise in the new mode', async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(`<input id="q" az="0" name="q" value="" az-debounce="300" ${INPUT} />`);
+            const el = document.querySelector('input');
+            el.focus();
+            edit(
+                el,
+                (e) => {
+                    e.value = 'a';
+                },
+                'input',
+            );
+            el.setAttribute('az-debounce', 'blur');
+            edit(
+                el,
+                (e) => {
+                    e.value = 'ab';
+                },
+                'input',
+            );
+            vi.advanceTimersByTime(400);
+            expect(mock.sent()).toEqual([]);
+            el.blur();
+            expect(mock.sent().map((f) => f[2])).toEqual([{ value: 'ab' }]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("a form's az-debounce paces its field events, not its submit", async () => {
+        await connect(
+            `<form az-input='[0,"i"]' az-submit='[0,"s"]' az-debounce="blur">` +
+                `<input id="a" az="0" name="a" value="" az-ctl="value" /></form>`,
+        );
+        const a = document.getElementById('a');
+        edit(
+            a,
+            (e) => {
+                e.value = 'x';
+            },
+            'input',
+        );
+        expect(mock.sent()).toEqual([]);
+        document
+            .querySelector('form')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        expect(mock.sent().map((f) => f[1])).toEqual(['i', 's']);
+    });
+});
