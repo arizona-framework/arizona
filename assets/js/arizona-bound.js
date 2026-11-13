@@ -693,21 +693,180 @@ export function formAway(form) {
 }
 
 /**
- * Is `el`, in a window, disabled where its view sits inline: a disabled fieldset
- * around its placeholder (the window's own document cannot see it).
+ * Is `el`, in a window, disabled where its view sits inline: inside a disabled fieldset
+ * there but not in that fieldset's first `legend` (the window's own document cannot see
+ * it).
  * @param {Element} el
  * @returns {boolean}
  */
 function fencedInline(el) {
     for (const { win, placeholder } of _pipWindows.values())
         if (win.document === el.ownerDocument) {
-            const fs = placeholder.parentElement?.closest('fieldset[disabled]');
-            return (
-                !!fs ||
-                (placeholder.parentElement ? fencedInline(placeholder.parentElement) : false)
-            );
+            for (let n = placeholder.parentElement; n; n = n.parentElement)
+                if (n.localName === 'fieldset' && n.hasAttribute('disabled')) {
+                    const legend = [...n.children].find((c) => c.localName === 'legend');
+                    if (!legend?.contains(placeholder)) return true;
+                }
+            return placeholder.parentElement ? fencedInline(placeholder.parentElement) : false;
         }
     return false;
+}
+
+/**
+ * Run `build` (a `FormData` of `form`) with a stand-in in the form's own document for
+ * each field a pop-out moved into another document, at that field's place inline: its
+ * view's placeholder, or, for a field of the page naming a form a window holds, beside
+ * that window's view. The browser then orders, disables (a disabled fieldset around the
+ * place, its first legend excepted) and shows them to `formdata` listeners as it would
+ * inline. A stand-in carries only what the field submits -- a hidden input per entry
+ * (`_charset_` and `dirname` as the browser handles a hidden one, with the direction
+ * the field takes in its window), a textarea for a textarea (its hard wrap is the
+ * browser's: one wrapping hard is laid out, unseen, at the field's width), a file input
+ * holding the files -- no id or attribute of the app's, so nothing else reads it; it
+ * is gone before `build` returns, in the same task (no paint), though a
+ * `MutationObserver` sees it come and go.
+ * @template T
+ * @param {HTMLFormElement} form
+ * @param {() => T} build
+ * @returns {T}
+ */
+export function withStandIns(form, build) {
+    const away = formAway(form);
+    if (away.length === 0) return build();
+    const doc = form.ownerDocument;
+    /** @type {Element[]} */
+    const made = [];
+    for (const el of away.sort(inlineOrder)) {
+        const at = placeIn(el, form);
+        if (!at) continue;
+        for (const s of standIns(/** @type {any} */ (el), doc)) {
+            if (!form.contains(at.ref.parentNode ?? at.ref)) s.setAttribute('form', form.id);
+            at.ref.parentNode?.insertBefore(s, at.after ? at.ref.nextSibling : at.ref);
+            if (at.after) at.ref = s;
+            made.push(s);
+        }
+    }
+    try {
+        return build();
+    } finally {
+        for (const s of made) s.remove();
+    }
+}
+
+/**
+ * Where field `el`, in another document than `form`, sits inline in the form's own
+ * document: before the node its chain of placeholders reaches there (a window within a
+ * window followed up), or, for one that never reaches it (a field naming a form a
+ * window holds), before or after the form's view by where the two chains part.
+ * @param {Element} el
+ * @param {HTMLFormElement} form
+ * @returns {{ref: Node, after: boolean}|null}
+ */
+function placeIn(el, form) {
+    const doc = form.ownerDocument;
+    const x = chainOf(el);
+    const at = x.find((n) => n.ownerDocument === doc);
+    if (at) return { ref: at, after: false };
+    const y = chainOf(form);
+    let i = 0;
+    while (i < x.length && i < y.length && x[i] === y[i]) i++;
+    const view = [...doc.body.children].find((v) => v.contains(form));
+    if (!view || i === x.length || i === y.length) return null;
+    return { ref: view, after: !!(y[i].compareDocumentPosition(x[i]) & 4) };
+}
+
+/**
+ * The stand-ins in document `doc` of field `el`: elements carrying what it submits.
+ * None for a field that submits nothing where it is (in a `datalist`, disabled there,
+ * a button -- one in another document cannot submit the form).
+ * @param {any} el
+ * @param {Document} doc
+ * @returns {Element[]}
+ */
+function standIns(el, doc) {
+    if (!el.name || el.matches(':disabled') || el.closest('datalist')) return [];
+    /** @param {string} value @returns {Element} */
+    const hidden = (value) => {
+        const h = doc.createElement('input');
+        // A hidden input named `_charset_` submits the charset: only a hidden field is.
+        if (el.type !== 'hidden' && el.name.toLowerCase() === '_charset_') h.hidden = true;
+        else h.type = 'hidden';
+        h.name = el.name;
+        h.value = value;
+        return h;
+    };
+    /** @param {Element} s @returns {Element} */
+    const directed = (s) => {
+        const dn = el.getAttribute('dirname');
+        if (dn !== null) s.setAttribute('dirname', dn);
+        const dir = dirOf(el);
+        if (dir) s.setAttribute('dir', dir);
+        return s;
+    };
+    if (el.localName === 'select')
+        return [...el.options]
+            .filter((o) => o.selected && !o.matches(':disabled'))
+            .map((o) => hidden(o.value));
+    if (el.localName === 'textarea') {
+        const t = doc.createElement('textarea');
+        t.name = el.name;
+        t.value = el.value;
+        for (const a of ['wrap', 'cols'])
+            if (el.hasAttribute(a)) t.setAttribute(a, el.getAttribute(a));
+        const cs =
+            el.getAttribute('wrap')?.toLowerCase() === 'hard'
+                ? el.ownerDocument.defaultView?.getComputedStyle(el)
+                : null;
+        if (cs) {
+            // A browser may wrap hard by the lines it lays out, so the stand-in is laid
+            // out, unseen, as wide as the field's text and in its font.
+            const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+            const st = t.style;
+            st.cssText = 'position:absolute;visibility:hidden;padding:0;border:0;overflow:hidden';
+            st.boxSizing = 'content-box';
+            st.width = `${Math.max(0, el.clientWidth - (pad || 0))}px`;
+            st.font = cs.font;
+            st.letterSpacing = cs.letterSpacing;
+            st.wordSpacing = cs.wordSpacing;
+            st.whiteSpace = cs.whiteSpace;
+            st.overflowWrap = cs.overflowWrap;
+            st.wordBreak = cs.wordBreak;
+            st.setProperty('tab-size', cs.getPropertyValue('tab-size'));
+        } else t.hidden = true;
+        return [directed(t)];
+    }
+    if (el.localName !== 'input') return [];
+    const type = el.type;
+    if (type === 'submit' || type === 'image' || type === 'reset' || type === 'button') return [];
+    if (type === 'checkbox' || type === 'radio') return el.checked ? [hidden(el.value)] : [];
+    if (type === 'file') {
+        const f = doc.createElement('input');
+        f.type = 'file';
+        f.name = el.name;
+        f.hidden = true;
+        f.files = el.files;
+        return [f];
+    }
+    const h = hidden(el.value);
+    const dirnamed = ['hidden', 'text', 'search', 'tel', 'url', 'email', 'password'].includes(type);
+    return [dirnamed ? directed(h) : h];
+}
+
+/**
+ * The direction `el` takes from itself or its ancestors in its window, up to its view
+ * (a valid `dir`, ASCII case-insensitive, an `auto` ancestor resolved by the window);
+ * null when none there decides it, the place inline then deciding as it would.
+ * @param {Element} el
+ * @returns {string|null}
+ */
+function dirOf(el) {
+    for (let n = /** @type {Element|null} */ (el); n; n = n.parentElement) {
+        const d = n.getAttribute('dir')?.toLowerCase();
+        if (d === 'ltr' || d === 'rtl' || (d === 'auto' && n === el)) return d;
+        if (d === 'auto') return el.matches(':dir(rtl)') ? 'rtl' : 'ltr';
+        if (n.parentElement === n.ownerDocument.body) return null;
+    }
+    return null;
 }
 
 /**
@@ -720,27 +879,41 @@ function fencedInline(el) {
 export function formControls(form) {
     const away = formAway(form);
     if (away.length === 0) return null;
-    /** Where `el` sits in the page: itself, or its window's placeholder. @param {Node} el */
-    const anchor = (el) => {
-        for (const { win, placeholder } of _pipWindows.values())
-            if (win.document === el.ownerDocument) return anchor(placeholder);
-        return el;
-    };
-    /** @param {Node} a @param {Node} b */
-    const before = (a, b) => (a.compareDocumentPosition(b) & 4 ? -1 : 1);
-    return [...form.elements, ...away].sort((a, b) => {
-        if (a === b) return 0;
-        const x = anchor(a);
-        const y = anchor(b);
-        return x === y ? before(a, b) : before(x, y);
-    });
+    return [...form.elements, ...away].sort(inlineOrder);
+}
+
+/**
+ * Node `n`, after each placeholder up from its window to the page, top first.
+ * @param {Node} n
+ * @returns {Node[]}
+ */
+function chainOf(n) {
+    for (const { win, placeholder } of _pipWindows.values())
+        if (win.document === n.ownerDocument) return [...chainOf(placeholder), n];
+    return [n];
+}
+
+/**
+ * Tree order of two nodes as if every popped-out view were back at its placeholder:
+ * compared where their chains of placeholders (a window inside a window included) part.
+ * @param {Node} a
+ * @param {Node} b
+ * @returns {number}
+ */
+function inlineOrder(a, b) {
+    const x = chainOf(a);
+    const y = chainOf(b);
+    let i = 0;
+    while (i < x.length && i < y.length && x[i] === y[i]) i++;
+    if (i === x.length || i === y.length) return x.length - y.length;
+    return x[i].compareDocumentPosition(y[i]) & 4 ? -1 : 1;
 }
 
 /**
  * The form a control belongs to as the server renders it: its form owner, else the
  * form its `form` attribute names in whichever document holds it now (a pop-out may
  * have moved the control or the form into a window), else, popped out (PiP), the form
- * holding its view's placeholder inline.
+ * holding its view's placeholder inline (`formAround`).
  * @param {any} el
  * @returns {any}
  */
@@ -754,10 +927,19 @@ export function formOf(el) {
         }
         return null;
     }
-    const doc = el.ownerDocument;
-    if (doc === document) return null;
+    return formAround(el);
+}
+
+/**
+ * The form around node `n` as if every popped-out view were back at its placeholder:
+ * the one around its window's placeholder, that window's own included.
+ * @param {Node} n
+ * @returns {HTMLFormElement|null}
+ */
+function formAround(n) {
     for (const { win, placeholder } of _pipWindows.values())
-        if (win.document === doc) return placeholder.parentElement?.closest('form') ?? null;
+        if (win.document === n.ownerDocument)
+            return placeholder.parentElement?.closest('form') ?? formAround(placeholder);
     return null;
 }
 

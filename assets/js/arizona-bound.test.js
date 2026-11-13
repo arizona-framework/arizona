@@ -4183,6 +4183,307 @@ describe('a form across views and documents', () => {
         change($('[name=n]'));
         expect(replayed(c, before)).toEqual([['page', 'f', { n: '1' }]]);
     });
+    /** The payload a change of the form's first field sends, `ch` popped out. */
+    const sendsWith = async (/** @type {string} */ body) => {
+        const c = await start(view('page', `<form id="f" az-change='[0,"f"]'>${body}</form>`));
+        await popOut(c, 'ch');
+        const before = c.sent().length;
+        change($('#f [name]'));
+        return replayed(c, before)[0]?.[2];
+    };
+    /**
+     * Run `fn` with a `FormData` that builds a form's entries as a browser does where
+     * jsdom does not: no `dirname` entry for a field other than a textarea or a
+     * text-like input, the direction inherited from the nearest valid `dir` (ASCII
+     * case-insensitive), and a hidden `_charset_` field submitting the charset. Every
+     * one built from a form is kept in `built`.
+     * @template T
+     * @param {(built: FormData[]) => Promise<T>} fn
+     */
+    const asBrowser = async (fn) => {
+        const Native = globalThis.FormData;
+        /** @type {FormData[]} */
+        const built = [];
+        const texty = ['hidden', 'text', 'search', 'tel', 'url', 'email', 'password'];
+        /** @param {Element} el */
+        const dirOf = (el) => {
+            for (let n = /** @type {Element|null} */ (el); n; n = n.parentElement) {
+                const d = n.getAttribute('dir')?.toLowerCase();
+                if (d === 'ltr' || d === 'rtl') return d;
+            }
+            return 'ltr';
+        };
+        globalThis.FormData = /** @type {any} */ (
+            class extends Native {
+                constructor(/** @type {any} */ f, /** @type {any} */ sub) {
+                    super(f, sub);
+                    if (!f) return;
+                    const entries = [...this.entries()];
+                    for (const [k] of entries) this.delete(k);
+                    const fields = [...f.elements];
+                    for (const [k, v] of entries) {
+                        const owner = fields.find((e) => e.getAttribute('dirname') === k);
+                        if (owner) {
+                            if (
+                                owner.localName === 'textarea' ||
+                                (owner.localName === 'input' && texty.includes(owner.type))
+                            )
+                                this.append(k, dirOf(owner));
+                            continue;
+                        }
+                        const charset = fields.some(
+                            (e) => e.type === 'hidden' && e.name.toLowerCase() === k.toLowerCase(),
+                        );
+                        this.append(k, charset && k.toLowerCase() === '_charset_' ? 'UTF-8' : v);
+                    }
+                    built.push(this);
+                }
+            }
+        );
+        try {
+            return await fn(built);
+        } finally {
+            globalThis.FormData = Native;
+        }
+    };
+    // The browser places a window's fields: a stand-in for each sits at its view's
+    // place for the build, so entries no field of the window's can be told from --
+    // another field's `dirname`, a field in a `datalist` -- cannot shift them.
+    for (const [what, own] of [
+        [
+            'a select with a dirname',
+            '<select name="n" dirname="d"><option selected>1</option></select>',
+        ],
+        ['a radio with a dirname', '<input type="radio" name="n" value="1" dirname="d" checked>'],
+        [
+            'a field in a datalist',
+            '<input name="n" value="1"><datalist><input name="n" value="x"></datalist>',
+        ],
+    ])
+        it(`places a window's fields after ${what}`, async () => {
+            const got = await asBrowser(() =>
+                sendsWith(
+                    `${own}${view('ch', '<input name="n" value="2">')}<input name="n" value="3">`,
+                ),
+            );
+            expect(got).toEqual({ n: ['1', '2', '3'] });
+        });
+    it("orders a window's fields around an image submitter as inline", async () => {
+        const c = await start(
+            view(
+                'page',
+                `<form id="f" az-submit='[22,"/x",{"method":"post"}]'><input name="a" value="1">${view(
+                    'ch',
+                    '<input name="w" value="2">',
+                )}<input type="image" name="go" alt="go"><input name="b" value="3"></form>`,
+            ),
+        );
+        await popOut(c, 'ch');
+        const orig = globalThis.fetch;
+        const f = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            text: () => Promise.resolve('{"e":[]}'),
+        });
+        /** @type {any} */ (globalThis).fetch = f;
+        try {
+            /** @type {any} */ ($('#f')).requestSubmit($('[type=image]'));
+            await new Promise((r) => setTimeout(r, 0));
+            expect(String(f.mock.calls[0]?.[1]?.body)).toBe('a=1&w=2&go.x=0&go.y=0&b=3');
+        } finally {
+            globalThis.fetch = orig;
+        }
+    });
+    it("orders a formdata listener's entry after a window's fields", async () => {
+        const Native = globalThis.FormData;
+        // jsdom fires no `formdata` event: stand in for the listener's append.
+        globalThis.FormData = /** @type {any} */ (
+            class extends Native {
+                constructor(/** @type {any} */ f, /** @type {any} */ s) {
+                    super(f, s);
+                    if (f) this.append('n', 'L');
+                }
+            }
+        );
+        try {
+            const got = await sendsWith(
+                `<input name="n" value="1">${view('ch', '<input name="n" value="2">')}`,
+            );
+            expect(got).toEqual({ n: ['1', '2', 'L'] });
+        } finally {
+            globalThis.FormData = Native;
+        }
+    });
+    it("lets a formdata listener remove a window's field", async () => {
+        const Native = globalThis.FormData;
+        globalThis.FormData = /** @type {any} */ (
+            class extends Native {
+                constructor(/** @type {any} */ f, /** @type {any} */ s) {
+                    super(f, s);
+                    if (f) this.delete('secret');
+                }
+            }
+        );
+        try {
+            const got = await sendsWith(
+                `<input name="n" value="1">${view('ch', '<input name="secret" value="pw">')}`,
+            );
+            expect(got).toEqual({ n: '1' });
+        } finally {
+            globalThis.FormData = Native;
+        }
+    });
+    // A window field's `dirname` reports the direction it has inline: its own
+    // ancestors in the window first (a valid `dir`, any case), else the page's.
+    for (const [what, page, win, dir] of [
+        ['the page', 'rtl', '', 'rtl'],
+        ['its window, any case', 'ltr', 'RTL', 'rtl'],
+        ['the page past an invalid dir', 'rtl', 'sideways', 'rtl'],
+    ])
+        it(`gives a window field's dirname the direction from ${what}`, async () => {
+            document.documentElement.setAttribute('dir', page);
+            try {
+                const got = await asBrowser(() =>
+                    sendsWith(
+                        `<input name="n" value="1">${view(
+                            'ch',
+                            `<p${win ? ` dir="${win}"` : ''}><input name="t" value="x" dirname="t.dir"></p>`,
+                        )}`,
+                    ),
+                );
+                expect(got).toEqual({ n: '1', t: 'x', 't.dir': dir });
+            } finally {
+                document.documentElement.removeAttribute('dir');
+            }
+        });
+    it("keeps a window's fields its view's place in a disabled fieldset's first legend", async () => {
+        const got = await sendsWith(
+            `<input name="n" value="1"><fieldset disabled><legend>${view(
+                'ch',
+                '<input name="n" value="2">',
+            )}</legend></fieldset>`,
+        );
+        expect(got).toEqual({ n: ['1', '2'] });
+    });
+    // A submit bubbling from a form nested in the one the command reads (built by
+    // script) has a submitter that form does not own: the browser's FormData would
+    // throw for it, so the form's fields go without it.
+    it('reads a form without a submitter it does not own', async () => {
+        const c = await start(
+            view('page', `<form id="f" az-submit='[0,"f"]'><input name="n" value="1"></form>`),
+        );
+        const inner = document.createElement('form');
+        inner.innerHTML = '<button name="b" value="v">go</button>';
+        $('#f').append(inner);
+        const before = c.sent().length;
+        inner.requestSubmit(inner.querySelector('button'));
+        expect(replayed(c, before)).toEqual([['page', 'f', { n: '1' }]]);
+    });
+    // A window's fields build as the browser builds them inline: a hard-wrapped
+    // textarea wrapped, an empty file input an empty `application/octet-stream`
+    // file, a hidden `_charset_` the charset.
+    it("builds a window's fields as the browser builds them", async () => {
+        const built = await asBrowser(async (b) => {
+            await sendsWith(
+                `<input name="n" value="1">${view(
+                    'ch',
+                    '<textarea name="ta" wrap="hard" cols="3">abcdefg</textarea>' +
+                        '<input type="file" name="up"><input type="hidden" name="_charset_">',
+                )}`,
+            );
+            return b;
+        });
+        const entries = [...(built.at(-1)?.entries() ?? [])].map(([k, v]) =>
+            typeof v === 'string' ? [k, v] : [k, v.name, v.type, v.size],
+        );
+        expect(entries).toEqual([
+            ['n', '1'],
+            ['ta', 'abc\ndef\ng'],
+            ['up', '', 'application/octet-stream', 0],
+            ['_charset_', 'UTF-8'],
+        ]);
+    });
+    // What a window's field would not submit inline it does not submit here either --
+    // disabled, in a datalist, an unchecked box, a button (no submitter outside its
+    // form's document) -- and a field's `dirname` counts only on a text-like field.
+    it("leaves out what a window's fields would not submit inline", async () => {
+        const got = await asBrowser(() =>
+            sendsWith(
+                `<input name="n" value="1">${view(
+                    'ch',
+                    '<input name="n" value="2" disabled><datalist><input name="n" value="x"></datalist>' +
+                        '<input type="checkbox" name="c" value="off"><button name="b" value="v">go</button>' +
+                        '<input type="submit" name="s" value="v">' +
+                        '<input type="number" name="num" value="5" dirname="num.dir">' +
+                        '<input name="_charset_" value="typed">',
+                )}`,
+            ),
+        );
+        expect(got).toEqual({ n: '1', num: '5', _charset_: 'typed' });
+    });
+    it("leaves no stand-in behind once a window's fields are read", async () => {
+        const c = await start(
+            view(
+                'page',
+                `<form id="f" az-change='[0,"f"]'><input name="n" value="1">${view(
+                    'ch',
+                    '<input name="n" value="2">',
+                )}</form>`,
+            ),
+        );
+        await popOut(c, 'ch');
+        const html = $('#f').outerHTML;
+        change($('[name=n]'));
+        expect($('#f').outerHTML).toBe(html);
+    });
+    it("counts no window field a disabled fieldset around its view disables toward a name's arity", async () => {
+        const got = await sendsWith(
+            `<input type="checkbox" name="k" value="a" checked><fieldset disabled>${view(
+                'ch',
+                '<input type="checkbox" name="k" value="b" checked>',
+            )}</fieldset>`,
+        );
+        expect(got).toEqual({ k: 'a' });
+    });
+    it('orders the fields of a window inside a window as inline', async () => {
+        const c = await start(
+            view(
+                'page',
+                `<form id="f" az-change='[0,"f"]'><input name="n" value="1">${view(
+                    'ch',
+                    `<input name="n" value="2">${view('gc', '<input name="n" value="3">')}<input name="n" value="4">`,
+                )}<input name="n" value="5"></form>`,
+            ),
+        );
+        // Popped out first, its placeholder then goes with `ch` into that window.
+        await popOut(c, 'gc');
+        const doc = await popOut(c, 'ch');
+        expect(doc.querySelector('#ch')?.innerHTML).toContain('az-pip:gc');
+        const before = c.sent().length;
+        change($('[name=n]'));
+        expect(replayed(c, before)).toEqual([['page', 'f', { n: ['1', '2', '3', '4', '5'] }]]);
+    });
+    // A form a window holds takes a page field naming it where the field sits from the
+    // window's view inline.
+    for (const after of [false, true])
+        it(`orders a page field naming a form a window holds ${after ? 'after' : 'before'} its fields`, async () => {
+            const k = '<input name="n" value="0" form="f">';
+            const c = await start(
+                view(
+                    'page',
+                    `${after ? '' : k}${view(
+                        'ch',
+                        `<form id="f" az-change='[0,"f"]'><input name="n" value="1"></form>`,
+                    )}${after ? k : ''}`,
+                ),
+            );
+            const doc = await popOut(c, 'ch');
+            const before = c.sent().length;
+            change(doc.querySelector('#f [name=n]'));
+            expect(replayed(c, before)).toEqual([
+                ['ch', 'f', { n: after ? ['1', '0'] : ['0', '1'] }],
+            ]);
+        });
     it('replays a form with the fields of a view the resync kept popped out', async () => {
         const pg = view(
             'page',

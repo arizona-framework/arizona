@@ -18,6 +18,7 @@ import {
     standingPick,
     sweepKept,
     userEdited,
+    withStandIns,
 } from './arizona-bound.js';
 import { applyEffects, executeJS, osHost, releaseParked, sendsValues } from './arizona-commands.js';
 import { allDocs, closeAllPip, findViewRoot } from './arizona-docs.js';
@@ -2325,6 +2326,7 @@ setHost({
     },
     holdReplay,
     formControls,
+    withStandIns,
     heldSelect,
     serverBatch: (fn) => serverBatch(fn),
     navigate: navigateEffect,

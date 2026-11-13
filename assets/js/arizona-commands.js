@@ -110,105 +110,20 @@ function submitter(event) {
 const spread = (form) => host.formControls?.(form) ?? null;
 
 /**
- * The entries field `el` adds to a submission with submitter `sub`, as a native
- * submit adds them; none for a field that adds none.
- * @param {Element} el
- * @param {HTMLElement|null} sub
- * @returns {Array<[string, string|File]>}
- */
-function entriesOf(el, sub) {
-    const f = /** @type {any} */ (el);
-    if (el.matches(':disabled')) return [];
-    if (!isSubmittableField(el)) {
-        // A button: only the one that submitted, an image one by where it was hit.
-        if (el !== sub) return [];
-        if (f.type === 'image') {
-            const p = f.name ? `${f.name}.` : '';
-            return [
-                [`${p}x`, '0'],
-                [`${p}y`, '0'],
-            ];
-        }
-        return f.name ? [[f.name, f.value]] : [];
-    }
-    if (!f.name) return [];
-    /** @type {Array<[string, string|File]>} */
-    let out;
-    if (f.type === 'checkbox' || f.type === 'radio') out = f.checked ? [[f.name, f.value]] : [];
-    else if (el.tagName === 'SELECT')
-        out = [...f.options]
-            .filter((o) => o.selected && !o.matches(':disabled'))
-            .map((o) => [f.name, o.value]);
-    else if (f.type === 'file')
-        out = f.files?.length ? [...f.files].map((x) => [f.name, x]) : [[f.name, new File([], '')]];
-    else out = [[f.name, f.value]];
-    // `dirname`: the direction the field's text is in, read off its `dir` (the
-    // browser also guesses an `auto` one from the text, which this does not).
-    const dn = el.getAttribute('dirname');
-    if (dn && (el.tagName === 'TEXTAREA' || f.type !== 'checkbox'))
-        out.push([dn, el.closest('[dir]')?.getAttribute('dir') === 'rtl' ? 'rtl' : 'ltr']);
-    return out;
-}
-
-/**
- * What `form` submits: `FormData` as a native submit builds it -- the form's own
- * document always through the browser's own (its submitter, form-associated custom
- * elements, `formdata` listeners, `_charset_`) -- plus, with fields a pop-out moved
- * into another document (`spread`), those, built field by field, each placed before
- * the first entry of the form's own field that follows it inline. An entry the browser
- * adds for no listed field of the form (a custom element, a `formdata` listener) keeps
- * the place the browser gave it.
+ * What `form` submits, as a native submit builds it: the browser's own `FormData` of
+ * the form, with the submitter only when the form owns it. Fields a pop-out moved into
+ * another document take part through stand-ins the live side puts at their view's
+ * place for the duration (`host.withStandIns`), so the browser orders, disables and
+ * shows them to `formdata` listeners as if they were inline.
  * @param {HTMLFormElement} form
  * @param {Event|null} event
  * @returns {FormData}
  */
 function formData(form, event) {
-    const sub = submitter(event);
-    const fd = new FormData(form, sub);
-    const all = spread(form);
-    if (!all) return fd;
-    const own = new Set([...form.elements]);
-    // The entries of the browser's FormData each own field starts, found by its name
-    // in order: what no field accounts for keeps its place.
-    const entries = [...fd.entries()];
-    /** @type {Map<Element, number>} */
-    const start = new Map();
-    let i = 0;
-    for (const el of form.elements) {
-        const mine = entriesOf(el, sub);
-        if (mine.length === 0) continue;
-        let k = i;
-        while (k < entries.length && entries[k][0] !== mine[0][0]) k++;
-        if (k + mine.length > entries.length) continue;
-        start.set(el, k);
-        i = k + mine.length;
-    }
-    // Each away field goes before the first own field after it that starts an entry.
-    /** @type {Map<number, Array<[string, string|File]>>} */
-    const before = new Map();
-    /** @type {Array<[string, string|File]>} */
-    const tail = [];
-    /** @type {Array<[string, string|File]>} */
-    let pending = [];
-    for (const el of all) {
-        if (!own.has(el)) {
-            pending.push(...entriesOf(el, sub));
-            continue;
-        }
-        const k = start.get(el);
-        if (k === undefined || pending.length === 0) continue;
-        before.set(k, [...(before.get(k) ?? []), ...pending]);
-        pending = [];
-    }
-    tail.push(...pending);
-    if (before.size === 0 && tail.length === 0) return fd;
-    const out = new FormData();
-    entries.forEach(([name, v], k) => {
-        for (const [n, w] of before.get(k) ?? []) out.append(n, w);
-        out.append(name, v);
-    });
-    for (const [n, w] of tail) out.append(n, w);
-    return out;
+    const s = submitter(event);
+    const sub = /** @type {any} */ (s)?.form === form ? s : null;
+    const build = () => new FormData(form, sub);
+    return host.withStandIns ? host.withStandIns(form, build) : build();
 }
 
 /**
