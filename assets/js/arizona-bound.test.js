@@ -5567,6 +5567,25 @@ describe('a form across views and documents', () => {
         expect(shown()).toEqual([]);
     });
 
+    // The same for a form's group spanning views: the form's own view, still there,
+    // holds no radio of the name now, and the user's last act there went back to the
+    // server's choice, so the page's older pick of the form's group does not show.
+    it("lets a form's part acted on last decide when its view holds no radio now", async () => {
+        const r = (/** @type {string} */ v, on = false, form = '') =>
+            `<input type="radio" name="g" value="${v}"${on ? ' checked' : ''}${form} az-bound="checked">`;
+        const pg = (/** @type {boolean} */ y) =>
+            view(
+                'page',
+                `<form id="fv" az-view az-change='[0,"f"]'>${y ? r('y', true) : ''}</form>${r('x', false, ' form="fv"')}`,
+            );
+        const c = await start(pg(true));
+        $('[value=x]').click();
+        $('[value=y]').click(); // back to the server's, last
+        expect($('[value=x]').checked).toBe(false);
+        resyncPage(c, pg(false));
+        expect(shown()).toEqual([]);
+    });
+
     // Only a choice the user made is kept when a pop-back unchecks it.
     it('keeps no server choice a pop-back unchecked', async () => {
         const r = (/** @type {string} */ v, on = false) =>

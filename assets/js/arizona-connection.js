@@ -1612,8 +1612,11 @@ export function restoreFormState() {
     // giving up their radios of the name.
     /** @type {Map<any, Map<string, number[]>>} parts by fresh form, then radio name */
     const groups = new Map();
-    found.forEach(({ controls, els }, i) => {
-        const form = els.length > 0 ? formOf(els[0]) : null;
+    found.forEach(({ controls, els, forms }, i) => {
+        // A part whose view holds none of the form's controls now is still that
+        // form's: its last act may have gone back to the server's choice, which
+        // needs no radio to stand (`lastActed`).
+        const form = els.length > 0 ? formOf(els[0]) : (forms[0] ?? null);
         if (!form) return;
         for (const [name, cs] of controls) {
             if (!cs.some((c) => c.kind === 'radio')) continue;
