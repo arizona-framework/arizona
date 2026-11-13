@@ -1056,7 +1056,7 @@ as `"abc"`) leaves the binding unchanged, so the diff sends no op and the field 
 the user's text forever.
 
 **Compile time.** The optional `arizona_renderer:controlled/2` callback names the parts that
-are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`/`textarea`,
+are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`,
 `checked` on `input`, `selected` on `option` (the one the transform derives from a select's
 `value` included) and `textarea` content. An element holding a **diffable** dynamic for one
 of them gets the static attribute `az-ctl` (via `attr/2`), after the author's attributes and

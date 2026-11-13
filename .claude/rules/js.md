@@ -295,8 +295,8 @@ the field shows the server's state, which is the point.
 
 - **Marked parts.** `az-ctl` lists the parts the server renders (`value`, `checked`,
   `selected`, `content`); `isCtl` takes a control only for the part it shows -- `checked` on a
-  checkbox or radio, `value` on another input, `content`/`value` on a textarea, a select's
-  `value` or an `option[az-ctl~="selected"]`. A checkbox whose only rendered part is its `value`
+  checkbox or radio, `value` on another input, `content` on a textarea (it has no `value`
+  attribute), a select's `value` or an `option[az-ctl~="selected"]`. A checkbox whose only rendered part is its `value`
   is not held or settled: the server does not render its checkedness.
 - **Carry.** `JS_PUSH_EVENT` asks `host.carry(el, event)` when the command is raised (not when
   a debounce fires): the trigger if it is a marked control (a radio brings its marked group --
@@ -347,7 +347,11 @@ the field shows the server's state, which is the point.
   a handler returns is a server statement) -- is noted (`_guardWrote`). Which frame is the
   reply is told by the ref of the frame being applied (`_applying`, against `_ownedRefs`);
   the server ships the pushes it drains ahead of a reply in their own frame first, so a push
-  never passes for the reply's echo. A focused but untouched control is not held: it shows
+  never passes for the reply's echo. (That frame carries no ref, so a pending `'any'` view
+  transition does not wrap it: only the reply after it animates.) A command a frame runs
+  later -- a handler's `transition(set_attr(...))` runs in the view transition's update
+  callback -- keeps the frame's origin (`holdReplay` carries `_inFrame`), so it is held like
+  the frame's own writes. A focused but untouched control is not held: it shows
   live updates. The guard ends when an event carries the control (pending, then in flight,
   the note dropped) or when focus leaves it (`focusout` -> `host.ctlEvent`) with nothing
   pending or in flight: a noted write wins then -- the server changed what the user was

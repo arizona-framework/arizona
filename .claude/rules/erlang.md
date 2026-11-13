@@ -169,7 +169,7 @@ them in a template is a compile error (`reserved_attr`), in any form (`{az, V}`,
 `<<"az">>`, `az_local`, `az_ctl`).
 
 `az-ctl` marks a server-owned control: an element holding a diffable dynamic for a part the
-backend's optional `controlled/2` names (HTML: `value` on `input`/`select`/`textarea`,
+backend's optional `controlled/2` names (HTML: `value` on `input`/`select`,
 `checked` on `input`, `selected` on `option` -- the one a select's `value` becomes included --
 and `textarea` content) gets it after the author's and the implied ones, its value the parts
 rendered (`az-ctl="value checked"`), so the client syncs only those.
