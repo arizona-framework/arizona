@@ -660,6 +660,8 @@ resync_then(ResyncFrame, {ok, Socket}) ->
     {reply, ResyncFrame, Socket};
 resync_then(ResyncFrame, {reply, Frame, Socket}) ->
     {reply_many, [ResyncFrame, Frame], Socket};
+resync_then(ResyncFrame, {reply_many, Frames, Socket}) ->
+    {reply_many, [ResyncFrame | Frames], Socket};
 resync_then(_ResyncFrame, {close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
@@ -1036,6 +1038,14 @@ answer(Ref, {ok, Socket}) ->
     {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $}], Socket};
 answer(Ref, {reply, [<<${, Rest/binary>> | Tail], Socket}) ->
     {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $,, Rest | Tail], Socket};
+%% The pushes drained ahead of a reply (reply_after_pending/4) ship first, on their
+%% own: the ref answers the reply after them, or alone when the reply is empty.
+answer(Ref, {reply_many, [Push], Socket}) ->
+    {reply, Answer, _} = answer(Ref, {ok, Socket}),
+    {reply_many, [Push, Answer], Socket};
+answer(Ref, {reply_many, [Push, Reply], Socket0}) ->
+    {reply, Answer, Socket} = answer(Ref, {reply, Reply, Socket0}),
+    {reply_many, [Push, Answer], Socket};
 answer(_Ref, {close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
@@ -1049,8 +1059,9 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {flatten_ops(ViewId, Ops), Effects, Observed}.
 
 %% Selectively receive the `{arizona_push, ...}` messages the live process
-%% emitted BEFORE the reply to a synchronous event/patch/navigate call, and fold them in
-%% front of that reply's own ops. Such a push is causally earlier, so it must be
+%% emitted BEFORE the reply to a synchronous event/patch/navigate call, and ship them
+%% ahead of that reply's own ops (in a frame of their own for an event/patch,
+%% reply_after_pending/4). Such a push is causally earlier, so it must be
 %% applied first: without this the reply ships first and the earlier push lands
 %% in a LATER frame, letting a stale value overwrite the reply's client-side
 %% (and keyed stream ops with relative refs can fail to apply outright).
@@ -1099,10 +1110,21 @@ drained_pushes(OpsAcc, EffectsAcc, Socket) ->
     {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc)), Socket}.
 
 %% An event/patch reply: the pushes queued ahead of it, then its own ops and
-%% effects, in one frame -- all of them belong to the page still on screen.
+%% effects. The pushes ship as their own frame before the reply's: a client tells
+%% the reply to a frame from a server push by the ref, and a push folded into the
+%% reply would pass for its echo (a server-owned control the user typed past would
+%% keep the typing over the pushed value).
 reply_after_pending(Ops, Effects, Observed, Socket0) ->
-    {PendOps, PendEffects, Socket} = drain_pending_pushes(Socket0),
-    encode_reply(PendOps ++ Ops, PendEffects ++ Effects, note_az([], Observed, Socket)).
+    case drain_pending_pushes(Socket0) of
+        {[], [], Socket} ->
+            encode_reply(Ops, Effects, note_az([], Observed, Socket));
+        {PendOps, PendEffects, Socket1} ->
+            {reply, Push, Socket2} = encode_reply(PendOps, PendEffects, Socket1),
+            case encode_reply(Ops, Effects, note_az([], Observed, Socket2)) of
+                {ok, Socket} -> {reply_many, [Push], Socket};
+                {reply, Reply, Socket} -> {reply_many, [Push, Reply], Socket}
+            end
+    end.
 
 %% The old page's effects a navigate drops (see do_navigate/5): logged once, by
 %% op code only -- their payloads (push_event data, flash contents) stay out of

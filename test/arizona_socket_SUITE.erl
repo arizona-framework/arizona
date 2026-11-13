@@ -87,7 +87,7 @@
 -export([remote_helper_names_ride_the_connect_frame/1]).
 -export([ref_answers_event_that_changes_nothing/1]).
 -export([ref_rides_event_reply/1]).
--export([ref_rides_reply_with_folded_push_and_names/1]).
+-export([ref_rides_reply_after_drained_push_frame/1]).
 -export([ref_not_carried_onto_later_push/1]).
 -export([ref_answers_event_for_unknown_view/1]).
 -export([ref_answers_patch_that_changes_nothing/1]).
@@ -179,7 +179,7 @@ all() ->
         remote_helper_names_ride_the_connect_frame,
         ref_answers_event_that_changes_nothing,
         ref_rides_event_reply,
-        ref_rides_reply_with_folded_push_and_names,
+        ref_rides_reply_after_drained_push_frame,
         ref_not_carried_onto_later_push,
         ref_answers_event_for_unknown_view,
         ref_answers_patch_that_changes_nothing,
@@ -349,9 +349,10 @@ foreign_id_push_folded_into_event_reply(Config) when is_list(Config) ->
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     self() ! {arizona_push, ~"other", [[?OP_TEXT, ~"0", ~"x"]], [], {[], []}},
     EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    {reply, Frame, _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+    {reply_many, [Push, Frame], _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
     ?assertMatch(
-        [[?OP_TEXT, ~"other:0", ~"x"], [?OP_TEXT, <<"counter:", _/binary>>, ~"1"]], ops(Frame)
+        [[?OP_TEXT, ~"other:0", ~"x"], [?OP_TEXT, <<"counter:", _/binary>>, ~"1"]],
+        ops(Push) ++ ops(Frame)
     ),
     nothing_left_queued().
 
@@ -463,18 +464,18 @@ payloads(_Other) ->
 queued_push_prepended_to_event_reply(Config) when is_list(Config) ->
     %% Causal order: an info (count -> 5) precedes the event (inc -> 6). The
     %% live process pushes the "5" op into the socket mailbox, then serves the
-    %% event call with the "6" reply. The reply frame must carry BOTH ops in
-    %% causal order -- before the fix the reply carried only "6" and the queued
-    %% "5" shipped in a LATER frame, so the stale value won client-side.
+    %% event call with the "6" reply. The push ships first, in its own frame just
+    %% ahead of the reply -- before the fix the reply carried only "6" and the
+    %% queued "5" shipped in a LATER frame, so the stale value won client-side.
     Req = arizona_req_test_adapter:new(),
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Pid ! {set_count, 5},
     EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    {reply, Frame, _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
-    #{~"o" := Ops} = json:decode(iolist_to_binary(Frame)),
-    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_TEXT, _, ~"6"]], Ops),
-    %% The push was folded into the reply -- nothing left to double-ship.
+    {reply_many, [Push, Frame], _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+    ?assertMatch([[?OP_TEXT, _, ~"5"]], ops(Push)),
+    ?assertMatch([[?OP_TEXT, _, ~"6"]], ops(Frame)),
+    %% The push was drained with the reply -- nothing left to double-ship.
     receive
         LeftOver -> error({push_left_in_mailbox, LeftOver})
     after 0 -> ok
@@ -482,7 +483,7 @@ queued_push_prepended_to_event_reply(Config) when is_list(Config) ->
 
 queued_push_prepended_to_patch_reply(Config) when is_list(Config) ->
     %% Same causal-order guarantee on the in-place patch path: the queued info
-    %% push ("5") precedes the patch's own diff ("7") in one frame.
+    %% push ("5") ships in the frame just ahead of the patch's own diff ("7").
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/rc" => {arizona_root_counter, #{bindings => #{count => 7}}}}
     }),
@@ -492,9 +493,9 @@ queued_push_prepended_to_patch_reply(Config) when is_list(Config) ->
     PatchFrame = iolist_to_binary(
         json:encode([~"patch", #{~"path" => ~"/rc", ~"qs" => <<>>}])
     ),
-    {reply, Frame, _Socket1} = arizona_socket:handle_in(PatchFrame, Socket0),
-    #{~"o" := Ops} = json:decode(iolist_to_binary(Frame)),
-    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_TEXT, _, ~"7"]], Ops),
+    {reply_many, [Push, Frame], _Socket1} = arizona_socket:handle_in(PatchFrame, Socket0),
+    ?assertMatch([[?OP_TEXT, _, ~"5"]], ops(Push)),
+    ?assertMatch([[?OP_TEXT, _, ~"7"]], ops(Frame)),
     receive
         LeftOver -> error({push_left_in_mailbox, LeftOver})
     after 0 -> ok
@@ -1311,13 +1312,13 @@ foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
         foreign_done -> ok
     after 2000 -> error({foreign_caller_stuck, Foreign})
     end,
-    %% The socket's own cycle still folds correctly: an info push emitted before
-    %% the reply is prepended to it, in causal order, in ONE frame.
+    %% The socket's own cycle still drains correctly: an info push emitted before
+    %% the reply ships just ahead of it, in causal order.
     Pid ! {set_count, 5},
     EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    {reply, Frame, _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
-    #{~"o" := Ops} = json:decode(iolist_to_binary(Frame)),
-    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_TEXT, _, ~"6"]], Ops),
+    {reply_many, [Push, Frame], _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+    ?assertMatch([[?OP_TEXT, _, ~"5"]], ops(Push)),
+    ?assertMatch([[?OP_TEXT, _, ~"6"]], ops(Frame)),
     %% Nothing stray left behind for the next cycle to trip over.
     receive
         LeftOver -> error({unexpected_mailbox_message, LeftOver})
@@ -2005,19 +2006,33 @@ ref_rides_event_reply(Config) when is_list(Config) ->
     ?assertMatch(#{~"r" := 8, ~"o" := [[?OP_TEXT, _, ~"1"]]}, decode(Frame)),
     ?assertEqual(2, map_size(decode(Frame))).
 
-%% A push queued ahead of the reply is folded into it, and the names it proved
-%% ride the same frame: the ref joins all three instead of answering apart.
-ref_rides_reply_with_folded_push_and_names(Config) when is_list(Config) ->
+%% A push queued ahead of the reply ships first, as its own frame, with the names it
+%% proved: folded into the reply it would pass for the reply's echo. The ref answers
+%% the reply after it -- alone when the reply changed nothing.
+ref_rides_reply_after_drained_push_frame(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     self() ! {arizona_push, ~"other", [[?OP_TEXT, ~"0", ~"x"]], [], {[~"az-probe"], []}},
-    {reply, Frame, _Socket1} =
+    {reply_many, [Push, Reply], Socket1} =
         arizona_socket:handle_in(event_frame(~"counter", ~"noop", 9), Socket0),
     ?assertEqual(
-        #{~"r" => 9, ~"o" => [[?OP_TEXT, ~"other:0", ~"x"]], ~"a" => [~"az-probe"]},
-        decode(Frame)
+        #{~"o" => [[?OP_TEXT, ~"other:0", ~"x"]], ~"a" => [~"az-probe"]}, decode(Push)
     ),
-    nothing_left_queued().
+    ?assertEqual(#{~"r" => 9}, decode(Reply)),
+    nothing_left_queued(),
+    self() ! {arizona_push, ~"other", [[?OP_TEXT, ~"0", ~"y"]], [], {[], []}},
+    {reply_many, [Push2, Reply2], Socket2} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"inc", 10), Socket1),
+    ?assertEqual(#{~"o" => [[?OP_TEXT, ~"other:0", ~"y"]]}, decode(Push2)),
+    ?assertMatch(#{~"r" := 10, ~"o" := [[?OP_TEXT, _, ~"1"]]}, decode(Reply2)),
+    nothing_left_queued(),
+    %% An untagged event: the same two frames, neither carrying a ref.
+    self() ! {arizona_push, ~"other", [[?OP_TEXT, ~"0", ~"z"]], [], {[], []}},
+    {reply_many, [Push3, Reply3], _Socket3} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"inc"), Socket2),
+    ?assertEqual(#{~"o" => [[?OP_TEXT, ~"other:0", ~"z"]]}, decode(Push3)),
+    ?assertMatch(#{~"o" := [[?OP_TEXT, _, ~"2"]]}, decode(Reply3)),
+    ?assertEqual(1, map_size(decode(Reply3))).
 
 %% The ref answers its own frame only: a push the socket encodes later is not a
 %% reply, and a ref left on it would settle a frame the client sends next.
@@ -2101,36 +2116,31 @@ unreadable_frame_with_ref_dropped(Config) when is_list(Config) ->
     ],
     [?assertMatch({ok, _}, arizona_socket:handle_in(F, Socket0)) || F <- Frames].
 
-%% The ref is spliced into the front of whatever reply the frame produced, so it
-%% must stay valid JSON beside every combination of ops, effects and names a
-%% reply can carry. Pushes queued ahead of the event fold into its reply, which
-%% is how each combination is produced here.
+%% Pushes queued ahead of an event ship in their own frame, whatever combination
+%% of ops, effects and names they carry, and never take the ref: it answers the
+%% reply after them (alone here, the event changing nothing).
 ref_leads_every_reply_shape(Config) when is_list(Config) ->
     Ops = [[?OP_TEXT, ~"0", ~"x"]],
     Effects = [arizona_js:set_title(~"T")],
     Names = {[~"az-probe"], []},
     None = {[], []},
     Cases = [
-        {Ops, Effects, Names, [~"a", ~"e", ~"o", ~"r"]},
-        {[], Effects, Names, [~"a", ~"e", ~"r"]},
-        {Ops, [], Names, [~"a", ~"o", ~"r"]},
-        {[], [], Names, [~"a", ~"r"]},
-        {Ops, Effects, None, [~"e", ~"o", ~"r"]},
-        {[], Effects, None, [~"e", ~"r"]},
-        {Ops, [], None, [~"o", ~"r"]}
+        {Ops, Effects, Names, [~"a", ~"e", ~"o"]},
+        {[], Effects, Names, [~"a", ~"e"]},
+        {Ops, [], Names, [~"a", ~"o"]},
+        {Ops, Effects, None, [~"e", ~"o"]},
+        {[], Effects, None, [~"e"]},
+        {Ops, [], None, [~"o"]}
     ],
     lists:foreach(
         fun({PushOps, PushEffects, Observed, Keys}) ->
             Req = arizona_req_test_adapter:new(),
             {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
             self() ! {arizona_push, ~"other", PushOps, PushEffects, Observed},
-            {reply, Frame, _} =
+            {reply_many, [Push, Frame], _} =
                 arizona_socket:handle_in(event_frame(~"counter", ~"noop", 5), Socket),
-            Bin = iolist_to_binary(Frame),
-            ?assertMatch(<<"{\"r\":5,", _/binary>>, Bin, Keys),
-            Decoded = json:decode(Bin),
-            ?assertEqual(Keys, lists:sort(maps:keys(Decoded))),
-            ?assertMatch(#{~"r" := 5}, Decoded),
+            ?assertEqual(Keys, lists:sort(maps:keys(decode(Push)))),
+            ?assertEqual(<<"{\"r\":5}">>, iolist_to_binary(Frame)),
             nothing_left_queued()
         end,
         Cases
