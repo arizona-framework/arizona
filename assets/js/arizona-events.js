@@ -228,6 +228,7 @@ const AZ_DIRECTIVES = new Set([
     'drop',
     'view',
     'local',
+    'bound',
     'key',
     'hook',
     'target',
@@ -371,6 +372,7 @@ export function unbindDocuments() {
 export function bindDocumentEvents(target, signal, abort) {
     _eventDocs.set(target, { signal, abort });
     for (const type of _eventTypes) handleEvent(target, type, signal);
+    host.bindDocument?.(target, signal);
 
     // Form submission: flush any pending debounced/throttled inputs first so
     // the server sees final values, then execute JS commands from az-submit.

@@ -5,7 +5,7 @@
 # - resolve-playwright-version: Standalone, runs first for E2E jobs
 # - cache-erlang: Standalone, caches Erlang build artifacts
 # - check/test/artifacts: Depend on cache-erlang only
-# - e2e-parallel/e2e-sequential/e2e-json: Depend on both
+# - e2e-parallel/e2e-sequential/e2e-json/e2e-firefox: Depend on both
 #   resolve-playwright-version and cache-erlang
 #
 # E2E tests use Playwright Docker containers with pre-installed browsers,
@@ -588,5 +588,103 @@ jobs:
         if: failure()
         with:
           name: playwright-report-json
+          path: test-results/
+          retention-days: 7
+
+  # Runs the `firefox` E2E project: the specs whose behaviour differs per
+  # engine (form restoration, undo, caret, date and number editing) in
+  # Firefox, which the Playwright container ships. Same container setup as the
+  # other E2E jobs.
+  e2e-firefox:
+    name: E2E Tests (Firefox)
+
+    needs: [resolve-playwright-version, cache-erlang]
+
+    runs-on: ubuntu-26.04
+
+    # Set ImageOS for erlef/setup-beam to work in containers
+    # Set HOME=/root for Firefox to work when running as root
+    env:
+      ImageOS: ubuntu22
+      HOME: /root
+
+    container:
+      image: >-
+        mcr.microsoft.com/playwright:v${{
+          needs.resolve-playwright-version.outputs.version
+        }}-noble
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Fix Docker config warnings for GitHub Actions cleanup
+      - name: Setup Docker config
+        run: |
+          mkdir -p /root/.docker
+          echo '{}' > /root/.docker/config.json
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24
+        id: setup-beam
+        with:
+          version-type: strict
+          version-file: .tool-versions
+
+      # Composite actions don't work in container jobs, use manual apt caching
+      # Ref: https://github.com/orgs/community/discussions/53771
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-inotify-tools
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y inotify-tools make
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .tool-versions
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Restore _build cache
+        id: restore-build-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: _build
+          # The E2E jobs build inside the Playwright container, where the checkout
+          # sits at /__w: a _build from the host jobs links its deps by host paths
+          # that dangle there, so the container keeps a cache of its own.
+          key: e2e-${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: e2e-${{ needs.cache-erlang.outputs.build-cache-prefix }}
+
+      - name: Restore rebar3 cache
+        id: restore-rebar3-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/rebar3
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
+          restore-keys: |
+            rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
+            rebar3-${{ runner.os }}-
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Compile Arizona for test
+        run: make compile-test
+
+      - name: Run Firefox E2E tests
+        run: make test-e2e-firefox
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-report-firefox
           path: test-results/
           retention-days: 7

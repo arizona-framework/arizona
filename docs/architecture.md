@@ -256,7 +256,22 @@ a live handler's root is compiled live is `c:arizona_renderer:live_root/0`: a ta
 whose transport repaints whole frames (`?terminal`) answers `false`, so its root gets no
 view marker. `keyed_item_ops/0` false lets a stream `?each` body skip `az_key`, since
 nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
-error. Mentions of `?terminal` elsewhere in this document describe that package's target.
+error. `implied_attrs/3` adds static attributes from what an element carries: each
+attribute's name and whether the diff can rewrite it (`static | {static, Text} | dynamic`;
+a `?local` and anything in a nodiff unit are `static`, a literal is `{static, Text}`), and
+whether it has such content. It answers the attributes and whether the element is a form
+control showing a server-owned property, which the transform stamps on the template as `bound`
+(an az-nodiff root refuses one); that answer must be `false` when no attribute is `dynamic`
+and there is no such content, and the transform ignores it in an az-nodiff unit. `?html`
+uses it for `method="post"` on an `az-submit` form and for `az-bound`, which names the
+properties of a form control the server owns (`value` and `checked` of an `input` -- by a
+static `type`, `value` only in the "value" value mode and `checked` only on a checkbox or
+radio -- `selected` of an `option`, `value` of a `textarea` with dynamic content), since the
+DOM cannot tell them apart from client state (a dynamic `checked` that is `false` renders no
+attribute); see "Server-owned form controls -- `az-bound`". `reserved_attrs/0` names the
+attributes the backend emits on its own, which a template may not write (`reserved_attr`):
+`az`, `az-local` and `az-bound` for `?html`, `az` for `?json`. Mentions of `?terminal`
+elsewhere in this document describe that package's target.
 
 One callback is optional, `c:arizona_renderer:selection_role/1`, for a target whose output has no
 attribute for an element's chosen value. HTML is that target: `value` on a `<select>` is ignored by
@@ -1168,6 +1183,111 @@ Caveats (by design):
 - **Dangerous attributes are the author's responsibility.** Content writes are always text
   (never HTML), but binding `href`/`style`/an `on*` handler to author-supplied data is on you
   -- only the attribute *name* is fixed at compile time, the value is not escaped.
+
+## Server-owned form controls -- `az-bound`
+
+The opposite of a `?local`: a form control whose shown state the server renders
+(`{input, [{value, ?get(name)}, {az_input, arizona_js:push_event(~"edit")}]}`) carries a
+compile-time `az-bound` naming the properties the server owns (see "Render targets outside
+core" for which). The browser keeps a control's attribute (the default, what the diff
+writes) apart from its property (what is shown), and once the user edits, they detach. The
+diff only ships changes, so without help a refused edit (the user types "Capital", the
+handler keeps `~""`, nothing changes, no op) stays on screen forever, and the echo of an
+older keystroke overwrites newer typing.
+
+The rule: **a bound property of a control -- or of a radio group or a select, as one unit
+-- shows the server's value, except while a proposal capturing it is unanswered or the
+control is composing (IME).** On the reply that leaves no capture, if the live value is
+still the captured one (for a group or select, each member the capture saw that is still
+there; a radio or option the reply added counts as unchanged) and not
+`validity.badInput`, the client writes the default to the property where they differ,
+keeping a focused control's selection. A select's default is what a form reset shows: a
+single select showing one row with no option marked selected shows its first enabled one,
+so that one counts as unedited and a reconnect does not replay it. (An engine that renders
+every select as a dropdown, as mobile browsers may, may also show its first option at
+`size > 1`; that case is unverified.) While a capture is
+alive, a diff op to a bound attribute (`OP_SET_ATTR`, `OP_REM_ATTR`, a textarea's content
+`OP_TEXT`) is not applied at all -- Firefox clears a partial date when its value attribute
+changes -- and the latest one per element and attribute is applied when the last capture
+goes (a reply or a drop), before the reconcile; a control showing bad input then keeps
+them until its next `input` or `focusout` with good input (a composition delays only the
+reconcile: a dirty control ignores a default write). Other attributes are written at once, and the
+`set_attr`/`remove_attr`/`toggle_attr` effects and `?local` writes still set the property.
+
+A **proposal** is a `push_event` whose trigger is a control carrying `az-bound`, a select
+with bound options, or a form (its named, enabled, bound controls), whose nearest view or
+az-nodiff ancestor is a view not itself az-nodiff (a child view under an az-nodiff element
+diffs its own template, so it counts). Its frame carries a reply ref and the server answers it with
+exactly one frame. Not a proposal: any other trigger (a `div` holding controls, the view
+element a handler effect or `arizona_js:fetch` response runs against), an event whose
+default was prevented (the controlled checkbox: `az_click` + `az-prevent-default` reverts
+the click, so the server's write reaches the property), an `arizona_js:fetch` submission (a
+`422` promises the typed fields survive), and a hook's `pushEvent`. A reload or back/forward
+also drops values the browser restored into bound controls (autofill aside).
+
+A reconnect's resync rebuilds the DOM, and the client puts the user's state back by four
+rules (`saveFormState` / `restoreFormState`):
+
+1. **A unit** is a control, or a named radio group of one form owner (a form, else the
+   document). It is server-owned when any of its controls is `az-bound` and diffed, as
+   above; the same predicate decides an edit and a proposal.
+2. **A saved unit pairs** with a fresh unit of the same kind (text, a password, each input
+   type that sanitizes its value, a single or multiple select, a checkbox, a radio): a text
+   field or select by name, then stable id, else position, among its name's fields that are
+   no boxes; a checkbox by name, kind, value and occurrence; a radio group as one unit,
+   through its checked radio. Outside every form only server-owned units are saved, by id
+   (a group by name).
+3. **A saved unit holds the user's state** only if it was enabled at the drop, and unbound,
+   or server-owned and edited since the last reconcile (an `input` or `change` landing while
+   it showed something apart from its default, and still apart).
+4. **A fresh unit takes that state** only if it can show it exactly (not `readonly`, a value
+   it keeps as it is, a choice still offered: an option is its value and its order among the
+   options sharing it), and either it is unbound, or it is enabled, its replay is not
+   withheld, the saved unit was the user's edit of a server-owned one, and a replay proposes
+   it: its form's `az-change`, else its own event when that pushes one (a form `az-change`
+   that neither pushes nor fetches is not replayed). Otherwise the whole unit shows the
+   resync's state.
+
+So an unbound field the resync kept in place keeps the user's state when it can show it
+exactly, even when the resync disabled it, while a server-owned one the resync disabled
+shows the server's. A server-owned field the user never touched shows the resync's state,
+and what it held at the drop is restored nowhere. A choice no longer offered leaves the
+whole unit at the resync's state, so a radio group is never left empty. A field whose id
+changed pairs by position (an id minted in `mount/1` changes on every reconnect, so give
+same-name fields stable, unique ids), and one rendered as another kind keeps the resync's
+state (a password is shown by no other field). A replay that may have crashed the view (a
+`4500` before the server acknowledged it) is withheld, so its server-owned fields show the
+server's state. A hidden input is restored, since a client widget may keep the user's input
+there, and an unbound field outside every form is not.
+
+What this asks of a handler:
+
+- **Update the bound binding synchronously in `handle_event/3`.** The reply to the proposal
+  is the frame that decides; a value set later (a `?send`, an async task) arrives after
+  the client already showed the server's old value, and can lose a keystroke.
+- **A control with no event of its own or on its form is never reconciled**: nothing
+  proposes it.
+- **A key event that edits the value captures it before the key's input lands**, so it
+  never matches the live value and never reconciles (an `on_key` on a printable key); a key
+  that inserts nothing (`on_key(enter)`) reconciles like any proposal.
+- **Every server-rendered value is a controlled input, a submit's fields included.** A
+  handler that answers a failed validation with an error but leaves the bound bindings as
+  they were reverts the fields to them: the reply changed nothing, so the client shows the
+  server's value. Store what was submitted in the bindings the fields render, and the error
+  beside it:
+
+  ```erlang
+  handle_event(~"save", #{~"email" := Email} = Params, Bindings) ->
+      case validate(Params) of
+          ok -> {Bindings#{email => Email, error => <<>>}, #{}, []};
+          {error, Msg} -> {Bindings#{email => Email, error => Msg}, #{}, []}
+      end.
+  ```
+
+- **To keep a control client-owned**, render its value static, or seed a `?local` from the
+  server (`{value, ?local(~"q", ?get(q))}`): the server renders it once and never takes it
+  back.
+- **Cost:** each proposal gets a reply frame (`{"r":N}`) even when nothing changed.
 
 ## API -- `arizona_roadrunner_router.erl`
 

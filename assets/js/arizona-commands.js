@@ -51,6 +51,11 @@ function bodyQuery(body) {
  * @param {Array<Array<*>>} effects
  */
 export function applyEffects(effects) {
+    withOrigin(true, () => applyEach(effects));
+}
+
+/** @param {Array<Array<*>>} effects */
+function applyEach(effects) {
     for (const eff of effects) {
         // Isolate each effect: `applyOps` already isolates per op, so this is the only
         // step that can throw out of the worker's message handler, where it would skip
@@ -96,6 +101,36 @@ function submitter(event) {
 }
 
 /**
+ * The fields of `form` a pop-out moved into another document (`host.formAway`): the
+ * form still owns them as the server renders it, but `form.elements` and `FormData`
+ * see only its own document.
+ * @param {HTMLFormElement} form
+ * @returns {Element[]}
+ */
+const away = (form) => host.formAway?.(form) ?? [];
+
+/**
+ * What `form` submits, `FormData` as a native submit builds it plus the fields a
+ * pop-out moved into another document (`away`), each as a native submit adds one.
+ * @param {HTMLFormElement} form
+ * @param {Event|null} event
+ * @returns {FormData}
+ */
+function formData(form, event) {
+    const fd = new FormData(form, submitter(event));
+    for (const el of away(form)) {
+        const f = /** @type {any} */ (el);
+        if (!f.name || !isSubmittableField(el) || el.matches(':disabled')) continue;
+        if (f.type === 'checkbox' || f.type === 'radio') {
+            if (f.checked) fd.append(f.name, f.value || 'on');
+        } else if (el.tagName === 'SELECT') {
+            for (const o of f.selectedOptions) fd.append(f.name, o.value);
+        } else if (f.type !== 'file') fd.append(f.name, f.value);
+    }
+    return fd;
+}
+
+/**
  * The names in `form` that hold a list by their markup: a `<select multiple>`,
  * a checkbox name shared by more than one box (a group), and any field whose
  * name ends in `[]` -- the convention for a list whose rendered size can be one
@@ -111,7 +146,7 @@ function multiValuedNames(form) {
     const names = new Set();
     /** @type {Map<string, {boxes: number, enabled: boolean}>} */
     const groups = new Map();
-    for (const el of form.elements) {
+    for (const el of [...form.elements, ...away(form)]) {
         const f = /** @type {any} */ (el);
         const name = f.name;
         if (!name) continue;
@@ -200,7 +235,7 @@ function autoPayload(el, event) {
     const tag = el.tagName;
     if (tag === 'FORM')
         return formFields(
-            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
+            formData(/** @type {HTMLFormElement} */ (el), event),
             /** @type {HTMLFormElement} */ (el),
         );
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
@@ -307,6 +342,25 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
+ * Does a parsed command (single or list) send what it is raised with whenever it
+ * runs: a `push_event` (with `fetch`, a `fetch` too, whose body is the form), at the
+ * top or under a view transition. One under `on_key` runs only on a matching key,
+ * which a replay, raising no event, never presses.
+ * @param {Array<*>} cmds
+ * @param {boolean} fetch
+ * @returns {boolean}
+ */
+export function sendsValues(cmds, fetch) {
+    const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+    return list.some(
+        (c) =>
+            c[0] === JS_PUSH_EVENT ||
+            (fetch && c[0] === JS_FETCH) ||
+            (c[0] === JS_TRANSITION && sendsValues(c[2], fetch)),
+    );
+}
+
+/**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
  * searched across the main document and any PiP documents. First-match only --
  * the single-target effects `focus`/`blur`/`scroll_to` use this, since those act
@@ -350,6 +404,30 @@ function withQueryAll(sel, fn) {
  */
 export function executeJS(el, event, cmds) {
     runCommands(el, event, cmds, '');
+}
+
+// Whether the commands running now act for the server: a frame's effects, a fetch
+// response's, or what one of those deferred (a view transition's update). What they
+// change is the server's, a statement (`host.serverBatch`); what a user's event
+// attribute runs is not.
+let _server = false;
+
+/**
+ * Run `fn` for the server when `server`, as one of its batches, and keep that origin
+ * for what `fn` defers.
+ * @template T
+ * @param {boolean} server
+ * @param {() => T} fn
+ * @returns {T}
+ */
+function withOrigin(server, fn) {
+    const outer = _server;
+    _server = server;
+    try {
+        return server && host.serverBatch ? host.serverBatch(fn) : fn();
+    } finally {
+        _server = outer;
+    }
 }
 
 // The view transition whose inner commands are running now, if it waits for a
@@ -421,18 +499,21 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
                 const later = host.holdReplay();
+                const server = _server;
                 runTransition(opts, () =>
-                    later(() => {
-                        try {
-                            runCommands(el, event, inner, `${prefix}${index}.`);
-                        } catch (err) {
-                            const detail = err instanceof Error ? err.message : String(err);
-                            warnOnce(
-                                `[arizona] az-transition command failed: ${detail}`,
-                                'az-transition',
-                            );
-                        }
-                    }),
+                    later(() =>
+                        withOrigin(server, () => {
+                            try {
+                                runCommands(el, event, inner, `${prefix}${index}.`);
+                            } catch (err) {
+                                const detail = err instanceof Error ? err.message : String(err);
+                                warnOnce(
+                                    `[arizona] az-transition command failed: ${detail}`,
+                                    'az-transition',
+                                );
+                            }
+                        }),
+                    ),
                 );
             }
             break;
@@ -443,13 +524,16 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const frame = [resolveTarget(el), evt, payload];
             const transition = _transitionScope;
+            // Before scheduleSend, so a server write in the debounce window is held too.
+            const caps = host.propose?.(el, event) ?? null;
             if (event) {
                 const epoch = host.epoch();
-                scheduleSend(el, event, prefix, index, () => {
-                    host.sendEvent(evt, frame, epoch, transition);
-                });
+                /** @type {Send} */
+                const send = () => host.sendEvent(evt, frame, epoch, transition, caps);
+                if (caps) send.drop = () => host.release?.(caps);
+                scheduleSend(el, event, prefix, index, send);
             } else {
-                host.sendEvent(evt, frame, undefined, transition);
+                host.sendEvent(evt, frame, undefined, transition, caps);
             }
             break;
         }
@@ -556,9 +640,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 let params = null;
                 if (opts.body !== undefined) params = bodyQuery(opts.body);
                 else if (form) {
-                    params = new URLSearchParams(
-                        /** @type {any} */ (new FormData(form, submitter(event))),
-                    );
+                    params = new URLSearchParams(/** @type {any} */ (formData(form, event)));
                 }
                 const qs = params ? params.toString() : '';
                 if (qs) target = appendQuery(url, qs);
@@ -568,12 +650,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             } else if (form) {
                 // Mirror a normal form POST: application/x-www-form-urlencoded.
                 // (multipart / file uploads are a documented non-goal.)
-                body = new URLSearchParams(
-                    /** @type {any} */ (new FormData(form, submitter(event))),
-                );
+                body = new URLSearchParams(/** @type {any} */ (formData(form, event)));
             }
+            const server = _server;
             const onError = (/** @type {object} */ detail) => {
-                if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                if (opts.on_error)
+                    withOrigin(server, () =>
+                        runCommands(el, event, opts.on_error, `${prefix}${index}e.`),
+                    );
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
             const later = host.holdReplay();
@@ -626,7 +710,8 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                                     if (id) trigger.setAttribute('az-target', id);
                                 }
                                 try {
-                                    executeJS(trigger, null, effects);
+                                    // The server's, whoever sent the request.
+                                    withOrigin(true, () => executeJS(trigger, null, effects));
                                 } catch (err) {
                                     console.error('[arizona] fetch response effect threw', err);
                                 }
@@ -773,13 +858,18 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
 }
 
 /**
+ * A deferred send; `drop` lets go of what it captured when a later one replaces it.
+ * @typedef {(() => void) & {drop?: () => void}} Send
+ */
+
+/**
  * One deferred send's state. An element holds one per (event type, command
  * position), so two push_events in one command list, or `az-input` beside
  * `az-keydown`, each keep their own timer instead of the later one replacing the
  * earlier.
  * @typedef {{
  *   id?: ReturnType<typeof setTimeout>,
- *   pending?: Function|null,
+ *   pending?: Send|null,
  *   prevKey?: string
  * }} TimerState
  */
@@ -790,6 +880,29 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
  * @type {WeakMap<Element, {slots: Map<string, TimerState>, eventBound?: boolean, blurBound?: boolean}>}
  */
 const _timers = new WeakMap();
+
+/**
+ * Elements holding a send parked until a named event (`az-debounce="blur"`). Such an
+ * event never fires on a removed element, so its send would neither go nor drop, and
+ * what it captured (a radio group outlives one radio) would stay held for good.
+ * @type {Set<Element>}
+ */
+const _parked = new Set();
+
+/**
+ * Drop the parked sends of elements no longer in a document, after a batch of ops:
+ * an element a batch moves is back in by then.
+ */
+export function releaseParked() {
+    for (const el of _parked) {
+        if (el.isConnected) continue;
+        _parked.delete(el);
+        for (const t of /** @type {any} */ (_timers.get(el)).slots.values()) {
+            t.pending?.drop?.();
+            t.pending = null;
+        }
+    }
+}
 
 /**
  * Three send modes controlled by az-debounce and az-throttle attributes:
@@ -820,7 +933,7 @@ const _timers = new WeakMap();
  * @param {Event|KeyboardEvent} event
  * @param {string} prefix index path of the wrapper holding the command
  * @param {number} index the command's position in its list
- * @param {Function} send
+ * @param {Send} send
  */
 function scheduleSend(el, event, prefix, index, send) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
@@ -845,7 +958,9 @@ function scheduleSend(el, event, prefix, index, send) {
     const slot = t;
     // Event-name debounce: just store the latest send, flush on the named event.
     if (debounceEvent) {
+        slot.pending?.drop?.();
         slot.pending = send;
+        _parked.add(el);
         if (!rec.eventBound) {
             rec.eventBound = true;
             el.addEventListener(debounceEvent, () => flushTimer(el));
@@ -855,6 +970,7 @@ function scheduleSend(el, event, prefix, index, send) {
     if (debounceMs > 0) {
         // Classic debounce: reset timer on every event.
         clearTimeout(slot.id);
+        slot.pending?.drop?.();
         slot.pending = send;
         slot.id = setTimeout(() => {
             slot.id = undefined;
@@ -870,6 +986,7 @@ function scheduleSend(el, event, prefix, index, send) {
             slot.id = undefined;
         }
         if (event.type === 'keydown') slot.prevKey = /** @type {KeyboardEvent} */ (event).key;
+        slot.pending?.drop?.();
         slot.pending = send;
         if (slot.id) return;
         send();
@@ -907,6 +1024,7 @@ function scheduleSend(el, event, prefix, index, send) {
 export function flushTimer(el) {
     const rec = _timers.get(el);
     if (!rec) return;
+    _parked.delete(el);
     for (const t of rec.slots.values()) {
         if (t.id) clearTimeout(t.id);
         const pending = t.pending;

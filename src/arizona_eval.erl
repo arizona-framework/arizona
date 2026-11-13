@@ -753,6 +753,8 @@ eval_val({arizona_raw, {arizona_raw, _} = V}) ->
 eval_val({arizona_raw, V} = Raw) ->
     ok = refuse_effect(V),
     Raw;
+eval_val({arizona_nodiff_root, V}) ->
+    arizona_template:refuse_nodiff_bound(eval_val(V));
 eval_val(Val) ->
     Val.
 
@@ -931,6 +933,9 @@ eval_val_v({arizona_raw, {arizona_raw, _} = V}, Views) ->
 eval_val_v({arizona_raw, V} = Raw, Views) ->
     ok = refuse_effect(V),
     {Raw, Views};
+eval_val_v({arizona_nodiff_root, V}, Views0) ->
+    {Snap, Views1} = eval_val_v(V, Views0),
+    {arizona_template:refuse_nodiff_bound(Snap), Views1};
 eval_val_v(Val, Views) ->
     {Val, Views}.
 

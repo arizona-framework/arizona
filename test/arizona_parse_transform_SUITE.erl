@@ -187,6 +187,10 @@
     nodiff_token_item_key/1,
     nodiff_token_unkeyed_item/1,
     nodiff_token_only_on_nodiff_roots/1,
+    nodiff_mixed_fragment_root/1,
+    nodiff_fragment_root_markup_renders/1,
+    nodiff_fragment_root_bound_is_structural/1,
+    nodiff_fragment_root_ssr_matches_live/1,
     nodiff_value_raises/1,
     nodiff_branch_swaps_away/1,
     nodiff_branch_same_template_skips_eval/1,
@@ -426,6 +430,13 @@
     az_key_folds_ascii_case_only/1,
     reserved_attr_case_insensitive/1,
     az_submit_form_implies_post/1,
+    az_bound_marks_server_owned_controls/1,
+    az_bound_excludes_client_owned_and_static/1,
+    az_bound_follows_static_input_type/1,
+    az_bound_nested_compile_units/1,
+    nodiff_unit_never_bound/1,
+    reserved_az_bound_attr_raises/1,
+    reserved_attrs_follow_backend/1,
     duplicate_attr_rejected/1,
     duplicate_attr_quotes_name_as_written/1,
     duplicate_attr_folds_ascii_case_only/1,
@@ -681,6 +692,10 @@ groups() ->
             nodiff_token_item_key,
             nodiff_token_unkeyed_item,
             nodiff_token_only_on_nodiff_roots,
+            nodiff_mixed_fragment_root,
+            nodiff_fragment_root_markup_renders,
+            nodiff_fragment_root_bound_is_structural,
+            nodiff_fragment_root_ssr_matches_live,
             nodiff_value_raises
         ]},
         %% Tests 1-25: basic element parsing
@@ -717,6 +732,13 @@ groups() ->
             void_tag_case_insensitive_rejects_children,
             reserved_attr_case_insensitive,
             az_submit_form_implies_post,
+            az_bound_marks_server_owned_controls,
+            az_bound_excludes_client_owned_and_static,
+            az_bound_follows_static_input_type,
+            az_bound_nested_compile_units,
+            nodiff_unit_never_bound,
+            reserved_az_bound_attr_raises,
+            reserved_attrs_follow_backend,
             duplicate_attr_rejected,
             duplicate_attr_quotes_name_as_written,
             duplicate_attr_folds_ascii_case_only,
@@ -2137,7 +2159,7 @@ void_element(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<div><input az=\"0\" type=\"text\"">>,
-                <<" /></div>">>
+                <<" az-bound=\"value\" /></div>">>
             ]
         ),
         maps:get(s, T)
@@ -4347,7 +4369,9 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
         )
     ),
     %% Other targets have no native form submission to guard.
-    ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>])),
+    ?assertEqual(
+        {[], false}, arizona_json:implied_attrs(form, [{<<"az-submit">>, dynamic}], false)
+    ),
     NativeMod = compile_module(
         "-module(pt_sub_json). -export([render/1]). render(Bindings) -> "
         "_ = Bindings, arizona_template:target(arizona_json, {form, [{az_submit, "
@@ -4355,6 +4379,307 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
     ),
     {Native, _} = arizona_render:render(NativeMod:render(#{})),
     ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"method">>)).
+
+%% The diff ships only a change, so a control whose value the server rendered and
+%% then refuses to change stays as the user left it. The client can only correct
+%% it knowing exactly which property of which control the server owns, which the
+%% DOM cannot tell (a static value beside a dynamic attribute also gets an `az`, a
+%% dynamic `checked` that is `false` renders nothing), so the html target names
+%% them in a static `az-bound`.
+render_bound(Mod, Body, Bindings) ->
+    M = compile_module(
+        lists:flatten([
+            "-module(",
+            Mod,
+            "). -export([render/1]). render(Bindings) -> ",
+            "_ = Bindings, arizona_template:target(arizona_html, ",
+            Body,
+            "). "
+        ])
+    ),
+    {HTML, _Snap} = arizona_render:render(M:render(Bindings)),
+    iolist_to_binary(HTML).
+
+bound_attr(HTML) ->
+    case re:run(HTML, ~" az-bound=\"([^\"]*)\"", [global, {capture, all_but_first, binary}]) of
+        {match, Found} -> [V || [V] <:- Found];
+        nomatch -> []
+    end.
+
+az_bound_marks_server_owned_controls(Config) when is_list(Config) ->
+    B = #{v => ~"x", c => true, n => ~"n", s => false},
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    Cases = [
+        {"pt_bnd_val", "{input, [{value, " ++ Get("v") ++ "}]}", [~"value"]},
+        {"pt_bnd_chk", "{input, [{type, <<\"checkbox\">>}, {checked, " ++ Get("c") ++ "}]}", [
+            ~"checked"
+        ]},
+        {"pt_bnd_both",
+            "{input, [{checked, " ++ Get("c") ++ "}, {name, <<\"a\">>}, {value, " ++ Get("v") ++
+                "}]}",
+            [~"value checked"]},
+        %% A dynamic `false` renders no attribute, but the property is still the server's.
+        {"pt_bnd_falsy", "{input, [{checked, " ++ Get("s") ++ "}]}", [~"checked"]},
+        {"pt_bnd_expr", "{input, [{value, <<\"p\", (" ++ Get("v") ++ ")/binary>>}]}", [~"value"]},
+        {"pt_bnd_interp", "{input, [{value, [<<\"pre-\">>, " ++ Get("v") ++ "]}]}", [~"value"]},
+        {"pt_bnd_raw", "{input, [{value, arizona_template:raw(" ++ Get("v") ++ ")}]}", [~"value"]},
+        {"pt_bnd_case",
+            "{input, [{value, case " ++ Get("c") ++
+                " of true -> <<\"y\">>; false -> <<\"n\">> end}]}",
+            [~"value"]},
+        {"pt_bnd_opt", "{option, [{selected, " ++ Get("c") ++ "}], [<<\"A\">>]}", [~"selected"]},
+        {"pt_bnd_ta", "{textarea, [], [" ++ Get("v") ++ "]}", [~"value"]},
+        {"pt_bnd_ta_mix", "{textarea, [], [<<\"a\">>, " ++ Get("v") ++ "]}", [~"value"]},
+        {"pt_bnd_ta_raw", "{textarea, [], [arizona_template:raw(" ++ Get("v") ++ ")]}", [~"value"]},
+        %% Tag and attribute names in any casing.
+        {"pt_bnd_up", "{'INPUT', [{'VALUE', " ++ Get("v") ++ "}]}", [~"value"]},
+        {"pt_bnd_bin", "{<<\"Input\">>, [{<<\"Checked\">>, " ++ Get("c") ++ "}]}", [~"checked"]},
+        {"pt_bnd_ta_up", "{'TextArea', [], [" ++ Get("v") ++ "]}", [~"value"]},
+        {"pt_bnd_opt_up", "{'OPTION', [{'SELECTED', " ++ Get("c") ++ "}], []}", [~"selected"]},
+        %% Several controls in one template, each marked for its own properties.
+        {"pt_bnd_many",
+            "{form, [], [{input, [{value, " ++ Get("v") ++ "}]}, {input, [{name, " ++ Get("n") ++
+                "}]}, {select, [], [{option, [{selected, " ++ Get("c") ++
+                "}], []}]}, {textarea, [], [" ++ Get("v") ++ "]}]}",
+            [~"value", ~"selected", ~"value"]}
+    ],
+    lists:foreach(
+        fun({Mod, Body, Want}) ->
+            HTML = render_bound(Mod, Body, B),
+            ?assertEqual(Want, bound_attr(HTML), HTML)
+        end,
+        Cases
+    ),
+    %% Emitted after the author's attributes, as one static attribute.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            render_bound("pt_bnd_pos", "{input, [{value, " ++ Get("v") ++ "}]}", B),
+            ~" value=\"x\" az-bound=\"value\" />"
+        )
+    ).
+
+%% An input's `value` is shown state only in the "value" value mode (the client's
+%% `VALUE_MODE_INPUTS`); elsewhere it reflects the attribute (hidden, the buttons, the
+%% checkable types) or refuses a write (file). Checkedness is shown state only on a
+%% checkbox or radio. A static type decides; a dynamic or absent one (text) cannot,
+%% so both stay marked. An unknown type reads back as text.
+az_bound_follows_static_input_type(Config) when is_list(Config) ->
+    B = #{v => ~"x", c => true, t => ~"hidden"},
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    Input = fun(Type) ->
+        "{input, [" ++ Type ++ "{value, " ++ Get("v") ++ "}, {checked, " ++ Get("c") ++ "}]}"
+    end,
+    Static = fun(T) -> "{type, <<\"" ++ T ++ "\">>}, " end,
+    Cases =
+        [
+            {"pt_bty_" ++ T, Input(Static(T)), []}
+         || T <- ["hidden", "submit", "button", "reset", "image", "file"]
+        ] ++
+            [
+                {"pt_bty_" ++ T, Input(Static(T)), [~"checked"]}
+             || T <- ["checkbox", "radio", "RADIO"]
+            ] ++
+            [
+                {"pt_bty_v" ++ integer_to_list(N), Input(Static(T)), [~"value"]}
+             || {N, T} <- lists:enumerate(["text", "Email", "date", "range", "color", "bogus"])
+            ] ++
+            [
+                {"pt_bty_absent", Input(""), [~"value checked"]},
+                {"pt_bty_dyn", Input("{type, " ++ Get("t") ++ "}, "), [~"value checked"]},
+                {"pt_bty_list", Input("{type, [<<\"hid\">>, <<\"den\">>]}, "), []}
+            ],
+    lists:foreach(
+        fun({Mod, Body, Want}) ->
+            HTML = render_bound(Mod, Body, B),
+            ?assertEqual(Want, bound_attr(HTML), HTML)
+        end,
+        Cases
+    ).
+
+%% Only a value the diff can rewrite is the server's. A `?local` is the client's, a
+%% literal never changes, a static `false` renders nothing, an attribute other than
+%% the control's own property (`name`, `option`'s `value`) is not shown state, and
+%% nothing in a nodiff unit is ever patched.
+az_bound_excludes_client_owned_and_static(Config) when is_list(Config) ->
+    B = #{v => ~"x", c => true},
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    Local = "arizona_template:local(<<\"k\">>, <<\"i\">>)",
+    Cases = [
+        {"pt_nbnd_local", "{input, [{value, " ++ Local ++ "}]}"},
+        {"pt_nbnd_ilocal", "{input, [{value, [<<\"a-\">>, " ++ Local ++ "]}]}"},
+        {"pt_nbnd_clocal", "{input, [{checked, arizona_template:local(<<\"k\">>, false)}]}"},
+        {"pt_nbnd_static", "{input, [{value, <<\"x\">>}, {name, " ++ Get("v") ++ "}]}"},
+        {"pt_nbnd_slist", "{input, [{value, [<<\"a\">>, <<\"b\">>]}, {id, " ++ Get("v") ++ "}]}"},
+        {"pt_nbnd_true", "{input, [{checked, true}, {id, " ++ Get("v") ++ "}]}"},
+        {"pt_nbnd_bare", "{input, [checked, {id, " ++ Get("v") ++ "}]}"},
+        {"pt_nbnd_false", "{input, [{checked, false}, {id, " ++ Get("v") ++ "}]}"},
+        {"pt_nbnd_name", "{input, [{name, " ++ Get("v") ++ "}]}"},
+        {"pt_nbnd_optval", "{option, [{value, " ++ Get("v") ++ "}], [" ++ Get("v") ++ "]}"},
+        {"pt_nbnd_ta_static", "{textarea, [{name, " ++ Get("v") ++ "}], [<<\"t\">>]}"},
+        {"pt_nbnd_ta_slist", "{textarea, [{name, " ++ Get("v") ++ "}], [[<<\"a\">>, <<\"b\">>]]}"},
+        {"pt_nbnd_div",
+            "{'div', [{value, " ++ Get("v") ++ "}, {checked, " ++ Get("c") ++
+                "}, {selected, " ++ Get("c") ++ "}], [" ++ Get("v") ++ "]}"},
+        {"pt_nbnd_nodiff",
+            "{form, ['az-nodiff'], [{input, [{value, " ++ Get("v") ++
+                "}]}, {textarea, [], [" ++ Get("v") ++ "]}, {option, [{selected, " ++ Get("c") ++
+                "}], []}]}"},
+        {"pt_nbnd_nodiff_root", "{input, ['az-nodiff', {value, " ++ Get("v") ++ "}]}"}
+    ],
+    lists:foreach(
+        fun({Mod, Body}) ->
+            HTML = render_bound(Mod, Body, B),
+            ?assertEqual([], bound_attr(HTML), HTML)
+        end,
+        Cases
+    ),
+    %% A form's own implied attribute still lands beside the mark.
+    Cmd = "arizona_js:push_event(<<\"s\">>)",
+    Form = render_bound(
+        "pt_bnd_form",
+        "{form, [{az_submit, " ++ Cmd ++ "}], [{input, [{value, " ++ Get("v") ++
+            "}]}]}",
+        B
+    ),
+    ?assertMatch({_, _}, binary:match(Form, ~" method=\"post\">")),
+    ?assertEqual([~"value"], bound_attr(Form)),
+    %% Other targets have no browser control to correct.
+    ?assertEqual({[], false}, arizona_json:implied_attrs(input, [{~"value", dynamic}], true)),
+    JsonMod = compile_module(
+        "-module(pt_bnd_json). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_json, {input, [{value, "
+        "arizona_template:get(v, Bindings)}], []}). "
+    ),
+    {Json, _} = arizona_render:render(JsonMod:render(B)),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Json), ~"bound")).
+
+%% Every compile unit marks its own controls: an `?each` item, a stream item, a
+%% `?stateless` component and a conditional branch.
+az_bound_nested_compile_units(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bnd_units). "
+        "-export([each/1, stream/1, comp/1, field/1, branch/1]). "
+        "each(Bindings) -> arizona_template:target(arizona_html, {ul, [], ["
+        "    arizona_template:each(fun(I) -> {li, [], [{input, [{value, I}]}]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+        "stream(Bindings) -> arizona_template:target(arizona_html, {ul, [], ["
+        "    arizona_template:each(fun(I, K) -> {li, [{az_key, K}], [{textarea, [], [I]}]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+        "comp(Bindings) -> arizona_template:target(arizona_html, {'div', [], ["
+        "    arizona_template:stateless(fun field/1, #{v => arizona_template:get(v, Bindings)})"
+        "]}). "
+        "field(Bindings) -> arizona_template:target(arizona_html, "
+        "    {input, [{checked, arizona_template:get(v, Bindings)}]}). "
+        "branch(Bindings) -> arizona_template:target(arizona_html, {'div', [], ["
+        "    case arizona_template:get(v, Bindings) of "
+        "        true -> {option, [{selected, arizona_template:get(v, Bindings)}], []}; "
+        "        false -> <<>> "
+        "    end]}). "
+    ),
+    Render = fun(F, B) ->
+        {HTML, _} = arizona_render:render(Mod:F(B)),
+        bound_attr(iolist_to_binary(HTML))
+    end,
+    ?assertEqual([~"value", ~"value"], Render(each, #{items => [~"a", ~"b"]})),
+    ?assertEqual(
+        [~"value", ~"value"],
+        Render(stream, #{items => arizona_stream:new(fun(X) -> X end, [~"a", ~"b"])})
+    ),
+    ?assertEqual([~"checked"], Render(comp, #{v => true})),
+    ?assertEqual([~"selected"], Render(branch, #{v => true})).
+
+%% A nodiff unit renders once, so it shows no server-owned property whatever the
+%% backend's `implied_attrs/3` answers; the snapshot drops `bound` there
+%% (`arizona_template:maybe_propagate/2`) and the template must agree. A backend
+%% claiming every element bound is ignored inside one and heard outside.
+nodiff_unit_never_bound(Config) when is_list(Config) ->
+    Delegates = [
+        io_lib:format("~ts(~ts) -> arizona_text_backend:~ts(~ts). ", [F, Args, F, Args])
+     || {F, A} <- arizona_text_backend:module_info(exports),
+        F =/= module_info,
+        F =/= implied_attrs,
+        Args <- [lists:join(", ", [[$A | integer_to_list(N)] || N <- lists:seq(1, A)])]
+    ],
+    pt_bound_liar = compile_module(
+        lists:flatten([
+            "-module(pt_bound_liar). -compile(export_all). -compile(nowarn_export_all). ",
+            "implied_attrs(_Tag, _Attrs, _DynamicContent) -> {[], true}. ",
+            Delegates
+        ])
+    ),
+    Mod = compile_module(
+        "-module(pt_bound_liar_tmpl). -export([nodiff/1, live/1]). "
+        "nodiff(Bindings) -> arizona_template:target(pt_bound_liar, "
+        "    {line, ['az-nodiff'], [{span, [], [arizona_template:get(x, Bindings)]}]}). "
+        "live(Bindings) -> arizona_template:target(pt_bound_liar, "
+        "    {line, [], [{span, [], [arizona_template:get(x, Bindings)]}]}). "
+    ),
+    ?assertNot(maps:is_key(bound, Mod:nodiff(#{x => ~"a"}))),
+    ?assertMatch(#{bound := true}, Mod:live(#{x => ~"a"})).
+
+%% `az-bound` is the transform's to emit: an authored one would claim (or deny) the
+%% server's ownership of a property the template does not bind.
+reserved_az_bound_attr_raises(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:target(arizona_html, {input, [",
+                    Attr,
+                    ", {value, arizona_template:get(v, Bindings)}]}). "
+                ]),
+                fun
+                    ({reserved_attr, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        [
+            {"pt_res_bnd_tuple", "{az_bound, <<\"value\">>}"},
+            {"pt_res_bnd_dash", "{'az-bound', <<\"value\">>}"},
+            {"pt_res_bnd_atom", "az_bound"},
+            {"pt_res_bnd_bin", "<<\"az-bound\">>"},
+            {"pt_res_bnd_up", "{'AZ-BOUND', <<\"value\">>}"},
+            {"pt_res_bnd_binup", "{<<\"Az-Bound\">>, <<\"\">>}"}
+        ]
+    ).
+
+%% A name is reserved only where the backend emits it (`reserved_attrs/0`): JSON
+%% never emits `az-bound` or `az-local`, so a `?json` prop of either name is the
+%% author's, while `az` (its diff address) stays reserved there too.
+reserved_attrs_follow_backend(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_res_json_ok). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_json, {'Input', [{az_bound, ~\"v\"}, "
+        "{az_local, ~\"l\"}, {value, arizona_template:get(v, Bindings)}]}). "
+    ),
+    {Json, _Snap} = arizona_render:render(Mod:render(#{v => ~"x"})),
+    ?assertMatch(
+        #{~"az_bound" := ~"v", ~"az_local" := ~"l", ~"value" := ~"x"},
+        json:decode(iolist_to_binary(Json))
+    ),
+    assert_parse_error(
+        "-module(pt_res_json_az). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_json, {'Input', [{az, ~\"0\"}, "
+        "{value, arizona_template:get(v, Bindings)}]}). ",
+        fun
+            ({reserved_attr, ~"az"}) -> true;
+            (_) -> false
+        end
+    ),
+    assert_parse_error(
+        "-module(pt_res_html_bnd). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_html, {input, [{az_bound, ~\"v\"}, "
+        "{value, arizona_template:get(v, Bindings)}]}). ",
+        fun
+            ({reserved_attr, _}) -> true;
+            (_) -> false
+        end
+    ).
 
 %% `[{class, ~"a"}, {class, ?get(x)}]` renders `class="a" class="1"`: the browser keeps
 %% the first, the diff patches the dynamic one, and the DOM after an update no longer
@@ -4545,7 +4870,7 @@ static_after_dynamic_attr(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\"">>,
-                <<" type=\"text\" />">>
+                <<" type=\"text\" az-bound=\"value\" />">>
             ]
         ),
         maps:get(s, T)
@@ -4930,7 +5255,7 @@ template2_void_item(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\" type=\"text\"">>,
-                <<" />">>
+                <<" az-bound=\"value\" />">>
             ]
         ),
         maps:get(s, Tmpl)
@@ -5560,7 +5885,7 @@ bool_dynamic_false(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{c => false}),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
-    ?assertEqual(nomatch, binary:match(HTML, <<"checked">>)).
+    ?assertEqual(nomatch, binary:match(HTML, <<" checked">>)).
 
 %% Dynamic bool: {checked, Expr} where Expr evaluates to a string value.
 bool_dynamic_value(Config) when is_list(Config) ->
@@ -6516,11 +6841,16 @@ layout_mixed_list(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{title => <<"Hello">>}),
     Statics = maps:get(s, T),
-    ?assertEqual([<<"<!DOCTYPE html><html><head><title>">>, <<"</title></head></html>">>], Statics),
+    ?assertEqual(
+        [<<"<!DOCTYPE html><html">>, <<"><head><title>">>, <<"</title></head></html>">>], Statics
+    ),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
     %% A title value renders through the backend's raw-text path: markerless, escaped.
-    [{undefined, Fun, {pt_layout_mixed, 1}}] = maps:get(d, T),
+    %% Not a layout (no `?inner_content`): its one az-nodiff element is named.
+    [Name, {undefined, Fun, {pt_layout_mixed, 1}}] = maps:get(d, T),
+    {undefined, {attr, ~"az-nodiff", Tok}, _} = Name,
+    ?assertEqual(arizona_template:nodiff_token(maps:get(f, T), undefined, undefined), Tok()),
     ?assertEqual({arizona_raw, <<"Hello">>}, Fun()).
 
 %% Test 70: Layout with dynamic attribute -- plain fun, no az attr.
@@ -6561,9 +6891,12 @@ layout_render_integration(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{title => <<"My Page">>, content => <<"Hello World">>}),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
+    Tok = arizona_template:nodiff_token(maps:get(f, T), undefined, undefined),
     ?assertEqual(
         <<
-            "<!DOCTYPE html><html><head><title>My Page</title></head>"
+            "<!DOCTYPE html><html az-nodiff=\"",
+            Tok/binary,
+            "\"><head><title>My Page</title></head>"
             "<body>Hello World</body></html>"
         >>,
         HTML
@@ -6729,7 +7062,7 @@ layout_mixed_with_bare_dynamic(Config) when is_list(Config) ->
     ?assertEqual(<<"mid">>, FunX()),
     ?assertEqual(<<"end">>, FunY()),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
-    ?assertEqual(<<"prefixmid<p>end</p>">>, HTML),
+    ?assertEqual(<<"prefixmid<p az-nodiff>end</p>">>, HTML),
     %% No markers or az attrs anywhere
     StaticsBin = iolist_to_binary(maps:get(s, T)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"az=\"">>)),
@@ -6976,7 +7309,7 @@ void_two_element_dynamic_attr(Config) when is_list(Config) ->
             Fp,
             [
                 <<"<input az=\"0\" type=\"text\"">>,
-                <<" />">>
+                <<" az-bound=\"value\" />">>
             ]
         ),
         maps:get(s, T)
@@ -8821,10 +9154,16 @@ az_layout_mixed(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{title => <<"Hello">>}),
     Statics = maps:get(s, T),
-    ?assertEqual([<<"<!DOCTYPE html><html><head><title>">>, <<"</title></head></html>">>], Statics),
+    ?assertEqual(
+        [<<"<!DOCTYPE html><html">>, <<"><head><title>">>, <<"</title></head></html>">>], Statics
+    ),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_az_layout_mixed, 1}}] = maps:get(d, T),
+    %% A title value renders through the backend's raw-text path: markerless, escaped.
+    %% Not a layout (no `?inner_content`): its one az-nodiff element is named.
+    [Name, {undefined, Fun, {pt_az_layout_mixed, 1}}] = maps:get(d, T),
+    {undefined, {attr, ~"az-nodiff", Tok}, _} = Name,
+    ?assertEqual(arizona_template:nodiff_token(maps:get(f, T), undefined, undefined), Tok()),
     ?assertEqual({arizona_raw, <<"Hello">>}, Fun()).
 
 %% Test 115: az:html nested elements -- az counter threading at depth.
@@ -13002,12 +13341,400 @@ nodiff_token_only_on_nodiff_roots(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(Layout, ~"az-nodiff")),
     Native = iolist_to_binary(arizona_render:render_to_iolist(Mod:json(#{}))),
     ?assertEqual(nomatch, binary:match(Native, ~"az-nodiff")),
-    %% A root of a multi-element fragment keeps its directive bare: the element the
-    %% author marked, no other, and no token -- it is not a single az-nodiff element.
+    %% Every root of a multi-element fragment is marked bare: the whole fragment never
+    %% diffs, and no token -- it is not a single az-nodiff element.
     ?assertEqual(
-        ~"<p az-nodiff>a</p><p>b</p>",
+        ~"<p az-nodiff>a</p><p az-nodiff>b</p>",
         iolist_to_binary(arizona_render:render_to_iolist(Mod:fragment(#{})))
     ).
+
+%% The one element carrying the directive in a mixed text+element fragment is named
+%% like a single-root az-nodiff element, so the client keeps it whole (an az-nodiff
+%% element nested in it with it) and tells what never diffs by the marker, under
+%% which a component's control still names its server-owned properties. Its token is
+%% the identity the diff keeps it by: the fragment's fingerprint and its `az_key`. A
+%% token after a dynamic could not take a runtime branch stamp, several directive
+%% elements cannot be told apart, and an unkeyed `?each` item names nothing: those
+%% stay bare. A layout stays unmarked.
+nodiff_mixed_fragment_root(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_mixed). "
+        "-export([mixed/1, keyed/1, after_dynamic/1, two/1, items/1, layout/1, field/1, "
+        "         siblings/1]). "
+        "mixed(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"text \">>, "
+        "        {'section', ['az-nodiff'], ["
+        "            arizona_template:stateless(fun field/1, "
+        "                #{v => arizona_template:get(v, Bindings)})"
+        "        ]}]). "
+        "keyed(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"t\">>, "
+        "        {'p', ['az-nodiff', {az_key, arizona_template:get(k, Bindings)}], [<<\"a\">>]}]). "
+        "after_dynamic(Bindings) -> "
+        "    arizona_template:target(arizona_html, [arizona_template:get(t, Bindings), "
+        "        {'p', ['az-nodiff'], [<<\"a\">>]}]). "
+        "two(_Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        [<<\"t\">>, {'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "         {'p', ['az-nodiff'], [<<\"b\">>]}]). "
+        "items(Bindings) -> "
+        "    arizona_template:target(arizona_html, {'div', [], ["
+        "        arizona_template:each(fun(I) -> [<<\"t\">>, {'p', ['az-nodiff'], [I]}] end, "
+        "            arizona_template:get(items, Bindings))"
+        "    ]}). "
+        "siblings(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"t\">>, "
+        "        {'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        {'p', [], [arizona_template:stateless(fun field/1, "
+        "            #{v => arizona_template:get(v, Bindings)})]}]). "
+        "field(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'input', [{value, arizona_template:get(v, Bindings)}]}). "
+        "layout(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"<!DOCTYPE html>\">>, "
+        "        {'html', ['az-nodiff'], [az:inner_content(Bindings)]}]). "
+    ),
+    Render = fun(T) -> strip_markers(iolist_to_binary(arizona_render:render_to_iolist(T))) end,
+    Mixed = Mod:mixed(#{v => ~"x"}),
+    MixedTok = arizona_template:nodiff_token(maps:get(f, Mixed), undefined, undefined),
+    ?assertEqual(
+        <<"text <section az-nodiff=\"", MixedTok/binary,
+            "\"><input value=\"x\" az-bound=\"value\" /></section>">>,
+        Render(Mixed)
+    ),
+    Keyed = Mod:keyed(#{k => 7}),
+    ?assertEqual(7, maps:get(az_key, Keyed)),
+    KeyedTok = arizona_template:nodiff_token(maps:get(f, Keyed), undefined, 7),
+    ?assertEqual(<<"t<p az-nodiff=\"", KeyedTok/binary, "\" az-key=\"7\">a</p>">>, Render(Keyed)),
+    ?assertEqual(~"x<p az-nodiff>a</p>", Render(Mod:after_dynamic(#{t => ~"x"}))),
+    %% Every element root of the fragment never diffs, the one named and the others
+    %% bare: a component's control under any of them is not the server's to correct.
+    Siblings = Mod:siblings(#{v => ~"x"}),
+    SibTok = arizona_template:nodiff_token(maps:get(f, Siblings), undefined, undefined),
+    ?assertEqual(
+        <<"t<p az-nodiff=\"", SibTok/binary,
+            "\">a</p><p az-nodiff><input value=\"x\" az-bound=\"value\" /></p>">>,
+        Render(Siblings)
+    ),
+    ?assertEqual(~"t<p az-nodiff>a</p><p az-nodiff>b</p>", Render(Mod:two(#{}))),
+    ?assertEqual(
+        ~"<div>t<p az-nodiff>1</p>t<p az-nodiff>2</p></div>", Render(Mod:items(#{items => [1, 2]}))
+    ),
+    Layout = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:layout(#{inner_content => ~"page"}))
+    ),
+    ?assertEqual(nomatch, binary:match(Layout, ~"az-nodiff")).
+
+%% A root of an az-nodiff fragment that is not an element carries no marker, so a
+%% server-owned control (`az-bound`) rendered there outside a child view would look
+%% live to the client. What the root renders decides, on the SSR and the live path
+%% alike; everything else renders as anywhere else. Each expected HTML is the
+%% pre-marker rendering with the fragment's element roots marked.
+nodiff_fragment_root_markup_renders(Config) when is_list(Config) ->
+    Icons = compile_module(
+        "-module(pt_nodiff_root_icons). "
+        "-export([star/0, field/1, rows/1, deep/1, enclosed/1]). "
+        "star() -> "
+        "    arizona_template:target(arizona_html, "
+        "        {svg, [{width, <<\"16\">>}], [{path, [{d, <<\"M0 0\">>}]}]}). "
+        "field(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'input', [{value, arizona_template:get(v, Bindings)}]}). "
+        "rows(Bindings) -> "
+        "    arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
+        "        fun(I) -> {'input', [{value, I}]} end, arizona_template:get(items, Bindings))]}). "
+        "deep(Bindings) -> "
+        "    arizona_template:target(arizona_html, {span, [], [arizona_template:target("
+        "        arizona_html, {'input', [{value, arizona_template:get(v, Bindings)}]})]}). "
+        "enclosed(_Bindings) -> "
+        "    arizona_template:target(arizona_html, {'div', ['az-nodiff'], "
+        "        [arizona_template:stateless(fun field/1, #{v => <<\"e\">>})]}). "
+    ),
+    pt_nodiff_root_child = compile_module(
+        "-module(pt_nodiff_root_child). "
+        "-export([mount/1, render/1]). "
+        "mount(Bindings) -> {#{id => maps:get(id, Bindings), v => <<\"c\">>}, #{}}. "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, {'div', [], "
+        "        [{'input', [{value, arizona_template:get(v, Bindings)}]}]}). "
+    ),
+    Mod = compile_module(
+        "-module(pt_nodiff_root_renders). "
+        "-export([remote/1, conditional/1, nested/1, each/1, opaque/1, icon/1, star/1, "
+        "    field/1, field_root/1, field_branch/1, field_nested/1, field_each/1, view/1]). "
+        "remote(_Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"Rating \">>, "
+        "        {canvas, ['az-nodiff', {az_hook, <<\"Chart\">>}], []}, "
+        "        pt_nodiff_root_icons:star()]). "
+        "conditional(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"Hi \">>, "
+        "        {'div', ['az-nodiff'], [<<\"x\">>]}, "
+        "        case arizona_template:get(f, Bindings) of "
+        "            true -> {p, [], [<<\"y\">>]}; false -> <<>> end]). "
+        "nested(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"Hi \">>, "
+        "        {'div', ['az-nodiff'], [<<\"x\">>]}, "
+        "        arizona_template:target(arizona_html, "
+        "            {b, [], [arizona_template:get(v, Bindings)]})]). "
+        "each(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"Hi \">>, "
+        "        {'div', ['az-nodiff'], [<<\"x\">>]}, "
+        "        arizona_template:each(fun(I) -> {b, [], [I]} end, "
+        "            arizona_template:get(items, Bindings))]). "
+        "opaque(Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"Hi \">>, "
+        "        {'div', ['az-nodiff'], [<<\"x\">>]}, arizona_template:get(t, Bindings)]). "
+        "icon(_Bindings) -> "
+        "    arizona_template:target(arizona_html, [<<\"Rating \">>, "
+        "        {canvas, ['az-nodiff', {az_hook, <<\"Chart\">>}], []}, "
+        "        arizona_template:stateless(fun star/1, #{})]). "
+        "star(_Bindings) -> pt_nodiff_root_icons:star(). "
+        "field(Bindings) -> pt_nodiff_root_icons:field(Bindings). "
+        "field_root(_Bindings) -> "
+        "    arizona_template:target(arizona_html, [{'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:stateless(fun field/1, #{v => <<\"f\">>})]). "
+        "field_branch(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        case arizona_template:get(f, Bindings) of "
+        "            true -> {'div', [], "
+        "                [arizona_template:stateless(fun field/1, #{v => <<\"f\">>})]}; "
+        "            false -> <<>> end]). "
+        "field_nested(_Bindings) -> "
+        "    arizona_template:target(arizona_html, [{'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:target(arizona_html, {'div', [], "
+        "            [arizona_template:stateless(fun field/1, #{v => <<\"f\">>})]})]). "
+        "field_each(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:each(fun(I) -> {'div', [{id, I}], "
+        "            [arizona_template:stateless(fun field/1, #{v => I})]} end, "
+        "            arizona_template:get(items, Bindings))]). "
+        "view(_Bindings) -> "
+        "    arizona_template:target(arizona_html, [{'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:target(arizona_html, {section, [], "
+        "            [arizona_template:stateful(pt_nodiff_root_child, #{id => <<\"c\">>})]})]). "
+    ),
+    B = #{f => true, v => ~"val", items => [~"1", ~"2"]},
+    RenderSsr = fun(F, Bs) ->
+        strip_nodiff_token(iolist_to_binary(arizona_render:render_to_iolist(Mod:F(Bs))))
+    end,
+    RenderLive = fun(F, Bs) ->
+        {HTML, _Snap, _Views} = arizona_render:render(Mod:F(Bs), #{}),
+        strip_nodiff_token(iolist_to_binary(HTML))
+    end,
+    Star = ~"<svg width=\"16\"><path d=\"M0 0\"></path></svg>",
+    Canvas = ~"Rating <canvas az-nodiff az-hook=\"Chart\"></canvas>",
+    [
+        begin
+            ?assertEqual(<<Canvas/binary, Star/binary>>, Render(remote, B)),
+            ?assertEqual(<<Canvas/binary, Star/binary>>, Render(icon, B)),
+            ?assertEqual(~"Hi <div az-nodiff>x</div><p>y</p>", Render(conditional, B)),
+            ?assertEqual(~"Hi <div az-nodiff>x</div>", Render(conditional, B#{f => false})),
+            ?assertEqual(~"Hi <div az-nodiff>x</div><b>val</b>", Render(nested, B)),
+            ?assertEqual(~"Hi <div az-nodiff>x</div><b>1</b><b>2</b>", Render(each, B)),
+            ?assertEqual(~"Hi <div az-nodiff>x</div>text", Render(opaque, B#{t => ~"text"})),
+            ?assertEqual(
+                <<"Hi <div az-nodiff>x</div>", Star/binary>>,
+                Render(opaque, B#{t => Icons:star()})
+            ),
+            ?assertEqual(
+                <<"Hi <div az-nodiff>x</div>", Star/binary>>,
+                Render(opaque, B#{t => arizona_template:stateless(fun Mod:star/1, #{})})
+            ),
+            %% A branch that renders no control is not refused for the one that would.
+            ?assertEqual(~"<p az-nodiff>a</p>", Render(field_branch, B#{f => false})),
+            ?assertEqual(~"<p az-nodiff>a</p>", Render(field_each, B#{items => []})),
+            %% Refused once it renders a server-owned control outside a child view.
+            [
+                ?assertError({arizona_loc, _, nodiff_root_markup}, Render(F, B))
+             || F <- [field_root, field_branch, field_nested, field_each]
+            ],
+            [
+                ?assertError({arizona_loc, _, nodiff_root_markup}, Render(opaque, B#{t => T}))
+             || T <- [
+                    Icons:field(B),
+                    Icons:deep(B),
+                    arizona_template:stateless(fun Icons:field/1, #{v => ~"x"})
+                ]
+            ]
+        end
+     || Render <- [RenderSsr, RenderLive]
+    ],
+    %% A control inside a child view, or inside an az-nodiff unit of its own whose
+    %% element roots carry the marker, is no root's to refuse.
+    [
+        begin
+            ?assertMatch({_, _}, binary:match(Render(view, B), ~"az-bound=\"value\"")),
+            Enclosed = Render(opaque, B#{t => Icons:enclosed(B)}),
+            ?assertMatch({_, _}, binary:match(Enclosed, ~"<div az-nodiff><input ")),
+            ?assertMatch({_, _}, binary:match(Enclosed, ~"az-bound=\"value\""))
+        end
+     || Render <- [RenderSsr, RenderLive]
+    ],
+    #{d := [{_Az, EachFun, _Loc}]} = Icons:rows(B),
+    ?assertError({arizona_loc, _, nodiff_root_markup}, RenderSsr(opaque, B#{t => EachFun()})),
+    ?assertError({arizona_loc, _, nodiff_root_markup}, RenderLive(opaque, B#{t => EachFun()})),
+    Empty = (EachFun())#{source := []},
+    ?assertEqual(~"Hi <div az-nodiff>x</div>", RenderSsr(opaque, B#{t => Empty})),
+    ?assertEqual(~"Hi <div az-nodiff>x</div>", RenderLive(opaque, B#{t => Empty})),
+    %% A target whose client keeps no az-nodiff element marks no root, so none is refused.
+    Json = compile_module(
+        "-module(pt_nodiff_root_json). "
+        "-export([render/1, child/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:target(arizona_json, [{'Text', ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:stateless(fun child/1, #{})]). "
+        "child(_Bindings) -> "
+        "    arizona_template:target(arizona_json, {'Text', [], [<<\"c\">>]}). "
+    ),
+    JsonOut = iolist_to_binary(arizona_render:render_to_iolist(Json:render(#{}))),
+    ?assertMatch({_, _}, binary:match(JsonOut, ~"\"c\"")).
+
+%% Whether a root shows a server-owned control is what the compiler stamped on each
+%% template (`bound`, `nodiff_marked`), never a scan of its bytes: text or an attribute
+%% value mentioning az-nodiff exempts nothing, and text mentioning az-bound is no control.
+nodiff_fragment_root_bound_is_structural(Config) when is_list(Config) ->
+    Parts = compile_module(
+        "-module(pt_nodiff_root_bytes). "
+        "-export([mention/1, class/1, sample/1, rows/1]). "
+        "mention(Bindings) -> "
+        "    arizona_template:target(arizona_html, {'div', [], [<<\"Use az-nodiff here\">>, "
+        "        {'input', [{value, arizona_template:get(v, Bindings)}]}]}). "
+        "class(Bindings) -> "
+        "    arizona_template:target(arizona_html, {'div', [{class, <<\"x az-nodiff\">>}], "
+        "        [{'input', [{value, arizona_template:get(v, Bindings)}]}]}). "
+        "sample(_Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {code, [], [<<\"az-bound=\\\"value\\\"\">>]}). "
+        "rows(Bindings) -> "
+        "    arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
+        "        fun(I) -> {li, [], [<<\" az-nodiff\">>, {'input', [{value, I}]}]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+    ),
+    Root = compile_module(
+        "-module(pt_nodiff_root_opaque). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{'p', ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:get(t, Bindings)]). "
+    ),
+    B = #{v => ~"x", items => [~"1"]},
+    RenderSsr = fun(T) ->
+        iolist_to_binary(arizona_render:render_to_iolist(Root:render(#{t => T})))
+    end,
+    RenderLive = fun(T) ->
+        {HTML, _Snap, _Views} = arizona_render:render(Root:render(#{t => T}), #{}),
+        iolist_to_binary(HTML)
+    end,
+    #{d := [{_Az, EachFun, _Loc}]} = Parts:rows(B),
+    ?assertNot(is_map_key(bound, Parts:sample(B))),
+    [
+        begin
+            [
+                ?assertError({arizona_loc, _, nodiff_root_markup}, Render(T))
+             || T <- [Parts:mention(B), Parts:class(B), EachFun()]
+            ],
+            ?assertMatch(
+                {_, _}, binary:match(Render(Parts:sample(B)), ~"<code>az-bound=\"value\"</code>")
+            )
+        end
+     || Render <- [RenderSsr, RenderLive]
+    ].
+
+%% A value at an az-nodiff root renders on SSR exactly as on the live path, whatever it
+%% holds: an escaped list, stream or nested `?each`, a `?raw`, a child view whose own
+%% list and stream `?each` render with markers. SSR keeps an `?each`'s item structure
+%% only while such a root renders: refused or nested, the render leaves nothing behind.
+nodiff_fragment_root_ssr_matches_live(Config) when is_list(Config) ->
+    pt_nodiff_root_eachview = compile_module(
+        "-module(pt_nodiff_root_eachview). "
+        "-export([mount/1, render/1]). "
+        "mount(Bindings) -> "
+        "    {#{id => maps:get(id, Bindings), items => [<<\"a&\">>, <<\"b\">>], "
+        "       s => arizona_stream:new(fun(#{k := K}) -> K end, [#{k => 1, t => <<\"t<\">>}])}, "
+        "     #{}}. "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'div', [{id, arizona_template:get(id, Bindings)}], ["
+        "        arizona_template:each(fun(I) -> {b, [{title, I}], [I]} end, "
+        "            arizona_template:get(items, Bindings)), "
+        "        {ul, [], [arizona_template:each("
+        "            fun(I, K) -> {li, [{az_key, K}], [maps:get(t, I)]} end, "
+        "            arizona_template:get(s, Bindings))]}, "
+        "        {'input', [{value, arizona_template:get(id, Bindings)}]}]}). "
+    ),
+    Mod = compile_module(
+        "-module(pt_nodiff_root_live). "
+        "-export([list/1, stream/1, nested/1, raw/1, view/1, opaque/1, field/1]). "
+        "list(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{p, ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:each(fun(I) -> {b, [{title, I}], [I]} end, "
+        "            arizona_template:get(items, Bindings))]). "
+        "stream(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{p, ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:each(fun(I, K) -> {b, [{az_key, K}], [maps:get(t, I)]} end, "
+        "            arizona_template:get(s, Bindings))]). "
+        "nested(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{p, ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:each(fun(L) -> {ul, [], [arizona_template:each("
+        "            fun(I) -> {li, [], [I]} end, L)]} end, arizona_template:get(ll, Bindings))]). "
+        "raw(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{p, ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:raw(arizona_template:get(r, Bindings))]). "
+        "view(_Bindings) -> "
+        "    arizona_template:target(arizona_html, [{p, ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:target(arizona_html, {section, [], "
+        "            [arizona_template:stateful(pt_nodiff_root_eachview, #{id => <<\"c\">>})]})]). "
+        "opaque(Bindings) -> "
+        "    arizona_template:target(arizona_html, [{p, ['az-nodiff'], [<<\"a\">>]}, "
+        "        arizona_template:get(t, Bindings)]). "
+        "field(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'input', [{value, arizona_template:get(v, Bindings)}]}). "
+    ),
+    RenderSsr = fun(T) -> iolist_to_binary(arizona_render:render_to_iolist(T)) end,
+    RenderLive = fun(T) ->
+        {HTML, _Snap, _Views} = arizona_render:render(T, #{}),
+        iolist_to_binary(HTML)
+    end,
+    Stream = arizona_stream:new(fun(#{k := K}) -> K end, [#{k => 1, t => ~"x&y"}]),
+    Cases = [
+        {
+            Mod:list(#{items => [~"a&b", ~"<x>"]}),
+            ~"<b title=\"a&amp;b\">a&amp;b</b><b title=\"&lt;x&gt;\">&lt;x&gt;</b>"
+        },
+        {Mod:stream(#{s => Stream}), ~"<b az-key=\"1\">x&amp;y</b>"},
+        {Mod:nested(#{ll => [[~"1&"], [~"2"]]}), ~"<ul><li>1&amp;</li></ul><ul><li>2</li></ul>"},
+        {Mod:raw(#{r => ~"<i>raw</i>"}), ~"<i>raw</i>"}
+    ],
+    [
+        begin
+            HTML = RenderSsr(T),
+            ?assertEqual(HTML, RenderLive(T)),
+            ?assertMatch({_, _}, binary:match(HTML, <<"</p>", Expected/binary>>))
+        end
+     || {T, Expected} <- Cases
+    ],
+    View = Mod:view(#{}),
+    ViewHTML = RenderSsr(View),
+    ?assertEqual(ViewHTML, RenderLive(View)),
+    [
+        ?assertMatch({_, _}, binary:match(ViewHTML, Part))
+     || Part <- [~"<!--az:", ~"title=\"a&amp;\"", ~"az-key=\"1\"", ~"t&lt;", ~"az-bound=\"value\""]
+    ],
+    Flag = '$arizona_in_nodiff_root',
+    Inner = Mod:opaque(#{t => ~"x"}),
+    ?assertEqual(RenderSsr(Mod:opaque(#{t => Inner})), RenderLive(Mod:opaque(#{t => Inner}))),
+    ?assertEqual(undefined, erlang:get(Flag)),
+    Refused = Mod:opaque(#{t => Mod:opaque(#{t => Mod:field(#{v => ~"v"})})}),
+    ?assertError({arizona_loc, _, nodiff_root_markup}, RenderSsr(Refused)),
+    ?assertEqual(undefined, erlang:get(Flag)),
+    ?assertError(
+        {arizona_loc, _, nodiff_root_markup}, RenderSsr(Mod:opaque(#{t => Mod:field(#{v => ~"v"})}))
+    ),
+    ?assertEqual(undefined, erlang:get(Flag)).
+
+strip_nodiff_token(HTML) ->
+    re:replace(HTML, ~"az-nodiff=\"[^\"]*\"", ~"az-nodiff", [global, {return, binary}]).
 
 %% `az-nodiff` is a bare directive: its value in the HTML is the compiler's, so an
 %% authored one, in any spelling and on any element, is a compile error.

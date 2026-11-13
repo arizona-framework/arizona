@@ -149,6 +149,15 @@ answer `none` for every tag -- their wire format has no comment markers to corru
 -export_type([raw_text_kind/0]).
 
 -doc """
+Whether the diff can rewrite an attribute's value. `dynamic` is a server-rendered
+value outside a nodiff compile unit; a literal, a folded command, a client-owned
+`?local` and anything in a nodiff unit (rendered once) are `static`, or
+`{static, Text}` when the value is literal text known at compile time.
+""".
+-type attr_kind() :: static | {static, binary()} | dynamic.
+-export_type([attr_kind/0]).
+
+-doc """
 Prefix a static's embedded `az` references with `Prefix`, so a child template
 inlined into a parent does not collide on `az` targets.
 
@@ -217,12 +226,33 @@ is stripped. A backend capability, declared by each backend.
 
 -doc """
 Static attributes this backend adds to an element because of what its own
-attributes imply, given the tag and the wire names of the attributes it carries
-(a `false` one excluded: it renders nothing). Emitted after the author's
-attributes. HTML gives a method-less `az-submit` form `method="post"`; a backend
-with nothing to imply returns `[]`.
+attributes imply, given the tag, the wire name and `t:attr_kind/0` of each
+attribute it carries (a static `false` one excluded: it renders nothing), and
+whether a direct child is content the diff can rewrite (same rule as a
+`dynamic` attribute). Emitted after the author's attributes. Beside them, whether
+the element is a form control showing a property the server owns, which the parse
+transform stamps on the template as `bound` (an az-nodiff root refuses one). HTML
+gives a method-less `az-submit` form `method="post"` and names a form control's
+server-owned properties in `az-bound`; a backend with nothing to imply returns
+`{[], false}`. `Bound` must be `false` when no attribute is `dynamic` and
+`DynamicContent` is `false`: nothing the server renders there can change, which is
+what an az-nodiff unit relies on (every attribute in one is `static`), and the
+transform ignores `Bound` inside one.
 """.
--callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
+-callback implied_attrs(
+    Tag :: tag(), Attrs :: [{binary(), attr_kind()}], DynamicContent :: boolean()
+) -> {Implied :: [{binary(), binary()}], Bound :: boolean()}.
+
+-doc """
+The attribute names this backend emits on its own (lowercase, `-`-separated), so a
+template may not write them: an authored copy would sit beside the emitted one, and
+which of the two takes effect would depend on the target. The parse transform rejects
+one with `reserved_attr`, comparing names ASCII case-insensitively with `_` read as
+`-`. HTML reserves `az` (an element's diff address, `az_attr/1`), `az-local` (the
+`?local` descriptor) and `az-bound` (from `implied_attrs/3`); a backend that emits no
+attribute of its own returns `[]`.
+""".
+-callback reserved_attrs() -> [binary()].
 
 -doc """
 The part `Tag` plays when one element picks some of its descendants by a value:

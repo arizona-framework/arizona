@@ -49,3 +49,38 @@ if (typeof globalThis.CSS.escape !== 'function') {
         return result;
     };
 }
+
+// jsdom caches a form's `elements` and, after some moves of a form between
+// documents and re-renders inside it, keeps radios that left the form there while
+// missing the ones that replaced them. Browsers keep the collection live, so give
+// it a spec-faithful replacement here: the listed elements of the form's tree whose
+// form owner is the form, in tree order, with `namedItem` (an element for one
+// match, a list for several).
+{
+    const LISTED = 'button, fieldset, input, object, output, select, textarea';
+    Object.defineProperty(HTMLFormElement.prototype, 'elements', {
+        configurable: true,
+        get() {
+            const els = [...this.getRootNode().querySelectorAll(LISTED)].filter(
+                (e) => e.form === this && !(e.localName === 'input' && e.type === 'image'),
+            );
+            return Object.assign(Object.create(null), els, {
+                length: els.length,
+                [Symbol.iterator]: () => els[Symbol.iterator](),
+                item: (i) => els[i] ?? null,
+                namedItem(name) {
+                    const hits = els.filter(
+                        (e) => e.id === name || e.getAttribute('name') === name,
+                    );
+                    if (hits.length === 0) return null;
+                    if (hits.length === 1) return hits[0];
+                    return Object.assign(Object.create(null), hits, {
+                        length: hits.length,
+                        [Symbol.iterator]: () => hits[Symbol.iterator](),
+                        item: (i) => hits[i] ?? null,
+                    });
+                },
+            });
+        },
+    });
+}

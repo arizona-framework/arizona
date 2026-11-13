@@ -176,8 +176,10 @@ option_without_value_uses_its_text(Config) when is_list(Config) ->
     HTML = iolist_to_binary(
         arizona_render:render_to_iolist(arizona_select_value:text_value(#{v => ~"a"}))
     ),
-    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected> a </option>"), HTML),
-    ?assertEqual(1, count_selected(HTML)).
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected[^>]*> a </option>"), HTML),
+    ?assertEqual(1, count_selected(HTML)),
+    %% The server renders the value, so it owns each option's selection.
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* az-bound=\"selected\""), HTML).
 
 multiple_selects_every_listed_value(Config) when is_list(Config) ->
     HTML = iolist_to_binary(
@@ -862,14 +864,16 @@ option_with_runtime_text_compiles(Config) when is_list(Config) ->
     ),
     B = #{v => ~"x", label => ~" x ", n => 7, s => ~"c"},
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B))),
-    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>"), HTML),
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected[^>]*>"), HTML),
     ?assertEqual(1, count_selected(HTML), HTML),
     ?assertEqual(nomatch, re:run(HTML, ~"<select[^>]* value[ =>]"), HTML),
     %% Every part counts, whitespace collapsed; a literal list is text, `&` included.
     Tag = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B#{v => ~"Tag: 7"}))),
-    ?assertMatch({match, _}, re:run(Tag, ~"<option[^>]* selected>Tag: "), Tag),
+    ?assertMatch({match, _}, re:run(Tag, ~"<option[^>]* selected[^>]*>Tag: "), Tag),
     Amp = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B#{v => ~"a&bc"}))),
-    ?assertMatch({match, _}, re:run(Amp, ~"<option[^>]* selected>(<!--[^>]*-->)?a&amp;b"), Amp),
+    ?assertMatch(
+        {match, _}, re:run(Amp, ~"<option[^>]* selected[^>]*>(<!--[^>]*-->)?a&amp;b"), Amp
+    ),
     {Live, _Snap, _Views} = arizona_render:render(Mod:render(B), #{}),
     ?assertEqual(1, count_selected(iolist_to_binary(Live))).
 
@@ -892,7 +896,7 @@ runtime_text_option_valued_by_its_markup(Config) when is_list(Config) ->
     Label = Mod:label(~"A<B"),
     B0 = #{v => ~"Pick A<B&!", label => Label},
     SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
-    ?assertMatch({match, _}, re:run(SSR, ~"<option[^>]* selected>Pick "), SSR),
+    ?assertMatch({match, _}, re:run(SSR, ~"<option[^>]* selected[^>]*>Pick "), SSR),
     ?assertEqual(1, count_selected(SSR), SSR),
     ?assertEqual(nomatch, re:run(SSR, ~"<select[^>]* value[ =>]"), SSR),
     Miss = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0#{v => ~"A<B&!"}))),
@@ -914,7 +918,9 @@ runtime_text_option_valued_by_its_markup(Config) when is_list(Config) ->
     ),
     ?assertNotEqual(nomatch, string:find(Message, "arizona_select_value_child"), Message),
     {Live, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
-    ?assertMatch({match, _}, re:run(iolist_to_binary(Live), ~"<option[^>]* selected>Pick "), Live),
+    ?assertMatch(
+        {match, _}, re:run(iolist_to_binary(Live), ~"<option[^>]* selected[^>]*>Pick "), Live
+    ),
     ?assertEqual(1, count_selected(iolist_to_binary(Live))),
     B1 = B0#{label => Mod:label(~"Z")},
     {Ops1, Snap1, V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, #{label => true}),
@@ -939,7 +945,7 @@ raw_template_option_is_valued_by_its_text(Config) when is_list(Config) ->
     ),
     B0 = #{v => ~"A&B", label => Mod:label(~"A&B")},
     SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
-    ?assertMatch({match, _}, re:run(SSR, ~"<option[^>]* selected>(<!--[^>]*-->)?<b"), SSR),
+    ?assertMatch({match, _}, re:run(SSR, ~"<option[^>]* selected[^>]*>(<!--[^>]*-->)?<b"), SSR),
     ?assertEqual(1, count_selected(SSR), SSR),
     ?assertEqual(nomatch, re:run(SSR, ~"<select[^>]* value[ =>]"), SSR),
     {Live, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -1107,7 +1113,7 @@ static_text_with_references_folds(Config) when is_list(Config) ->
         arizona_render:render_to_iolist(Dyn:render(#{v => <<"Caf", 16#E9/utf8>>}))
     ),
     ?assertEqual(nomatch, binary:match(HTML, [~"<!--az", ~" value="]), HTML),
-    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected>Caf&eacute;"), HTML).
+    ?assertMatch({match, _}, re:run(HTML, ~"<option[^>]* selected[^>]*>Caf&eacute;"), HTML).
 
 %% The parser normalizes newlines and NUL before an attribute value exists, so a value
 %% and an option compare as it reads them on every path: an option the transform
@@ -1520,6 +1526,8 @@ local_value_marks_only_the_page(Config) when is_list(Config) ->
             _ = ssr_picked([~"c"], M, B0),
             {Live, Snap0, V0} = arizona_render:render(M:render(B0), #{}),
             ?assertEqual([], selected_values(iolist_to_binary(Live)), {Mod, Live}),
+            %% The client owns the selection: no option is the server's.
+            ?assertEqual(nomatch, binary:match(iolist_to_binary(Live), ~"az-bound"), {Mod, Live}),
             B1 = B0#{
                 x => ~"aa",
                 os => [~"a", ~"c", ~"ac", ~"aa"],

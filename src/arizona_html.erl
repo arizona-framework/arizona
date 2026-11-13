@@ -9,6 +9,10 @@ identical to the previous inlined emission.
 """.
 -behaviour(arizona_renderer).
 
+%% Every export is an arizona_renderer callback the HTML target implements, so the
+%% count follows the behaviour, not the module's own surface.
+-elvis([{elvis_style, no_god_modules, disable}]).
+
 -export([name/1]).
 -export([element_open/1]).
 -export([az_attr/1]).
@@ -37,7 +41,8 @@ identical to the previous inlined emission.
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([keyed_item_ops/0]).
--export([implied_attrs/2]).
+-export([implied_attrs/3]).
+-export([reserved_attrs/0]).
 -export([selection_role/1]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
@@ -361,23 +366,64 @@ supports_nodiff_keep() -> true.
 
 keyed_item_ops() -> true.
 
--spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [{binary(), binary()}].
+-spec reserved_attrs() -> [binary()].
+reserved_attrs() -> [~"az", ~"az-local", ~"az-bound"].
+
+-spec implied_attrs(
+    arizona_renderer:tag(), [{binary(), arizona_renderer:attr_kind()}], boolean()
+) ->
+    {[{binary(), binary()}], boolean()}.
+implied_attrs(Tag, Attrs, DynamicContent) ->
+    TagName = tag_name(Tag),
+    Lower = [{ascii_lowercase(N), Kind} || {N, Kind} <:- Attrs],
+    Method = submit_method(TagName, Lower),
+    case bound_props(TagName, Lower, DynamicContent) of
+        [] -> {Method, false};
+        Props -> {Method ++ [{~"az-bound", iolist_to_binary(lists:join(~" ", Props))}], true}
+    end.
+
 %% The client intercepts every `az-submit` submit, but only once arizona.js runs: a
 %% submit before that (Enter while the deferred module still loads) is native, and a
 %% method-less form submits as a GET -- every field, a password included, in the
 %% URL. As a POST the fields stay in the body (a live route answers 405). The
 %% client's `fetch` already treats a method-less form as POST, so nothing else moves.
-implied_attrs(Tag, Names) ->
-    case tag_name(Tag) of
-        ~"form" ->
-            Lower = [ascii_lowercase(N) || N <- Names],
-            case lists:member(~"az-submit", Lower) andalso not lists:member(~"method", Lower) of
-                true -> [{~"method", ~"post"}];
-                false -> []
-            end;
-        _Other ->
-            []
-    end.
+submit_method(~"form", Attrs) ->
+    case lists:keymember(~"az-submit", 1, Attrs) andalso not lists:keymember(~"method", 1, Attrs) of
+        true -> [{~"method", ~"post"}];
+        false -> []
+    end;
+submit_method(_TagName, _Attrs) ->
+    [].
+
+%% A control's attribute is only its default; once the user edits, the shown
+%% property detaches from it, and a value the server refuses and keeps unchanged
+%% produces no diff op, so the stale edit stays on screen. The client can only
+%% correct it knowing which property the server owns, which the DOM cannot tell (a
+%% dynamic `checked` that is `false` renders no attribute at all).
+bound_props(~"input", Attrs, _DynamicContent) ->
+    Type =
+        case lists:keyfind(~"type", 1, Attrs) of
+            {_, {static, T}} -> ascii_lowercase(T);
+            _Unknown -> unknown
+        end,
+    [P || P <- [~"value", ~"checked"], lists:member({P, dynamic}, Attrs), shown(P, Type)];
+bound_props(~"option", Attrs, _DynamicContent) ->
+    [~"selected" || lists:member({~"selected", dynamic}, Attrs)];
+bound_props(~"textarea", _Attrs, true) ->
+    [~"value"];
+bound_props(_TagName, _Attrs, _DynamicContent) ->
+    [].
+
+%% Whether the property holds state the user edits apart from the attribute, by a
+%% static `type`: `value` in the "value" value mode only (the web client's
+%% `VALUE_MODE_INPUTS`; an unknown type is text), checkedness on a checkbox or radio.
+%% A dynamic or absent type cannot say, so both count.
+shown(_Prop, unknown) -> true;
+shown(~"value", Type) -> not lists:member(Type, non_value_mode_inputs());
+shown(~"checked", Type) -> Type =:= ~"checkbox" orelse Type =:= ~"radio".
+
+non_value_mode_inputs() ->
+    [~"hidden", ~"checkbox", ~"radio", ~"submit", ~"image", ~"reset", ~"button", ~"file"].
 
 -spec selection_role(arizona_renderer:tag()) ->
     none

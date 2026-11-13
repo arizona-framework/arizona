@@ -95,6 +95,8 @@ render(Bindings) ->
 -export([same_nodiff/3]).
 -export([same_nodiff/2]).
 -export([nodiff_token/3]).
+-export([nodiff_root/1]).
+-export([refuse_nodiff_bound/1]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -108,6 +110,7 @@ render(Bindings) ->
 -ignore_xref([branch/2]).
 %% Emitted by the parse transform as an az-nodiff element's `az-nodiff` value.
 -ignore_xref([nodiff_token/3]).
+-ignore_xref([nodiff_root/1]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
 %% Emitted by the parse transform around an attribute value holding a literal `?raw`.
@@ -180,6 +183,11 @@ render(Bindings) ->
     %% Stamped when the backend's document must be one node (see
     %% arizona_renderer:single_root_document/0) and the body is several.
     multi_root => true,
+    %% What its own markup is, for refuse_nodiff_bound/1: an element of it names
+    %% server-owned properties (`az-bound`), or its element roots carry the
+    %% `az-nodiff` marker.
+    bound => true,
+    nodiff_marked => true,
     backend => module()
 }.
 
@@ -200,6 +208,11 @@ render(Bindings) ->
     %% A 2-arg callback whose one root element has no `az_key`: legal over a map,
     %% refused over a stream by each/2.
     keyless => true,
+    %% What its own markup is, for refuse_nodiff_bound/1: an element of it names
+    %% server-owned properties (`az-bound`), or its element roots carry the
+    %% `az-nodiff` marker.
+    bound => true,
+    nodiff_marked => true,
     backend => module()
 }.
 
@@ -217,6 +230,8 @@ render(Bindings) ->
     diff => false,
     nodiff => nodiff_identity(),
     view_id => binary(),
+    bound => true,
+    nodiff_marked => true,
     backend => module()
 }.
 
@@ -779,6 +794,12 @@ format_error({effect_in_content, V}) ->
             [V]
         )
     );
+format_error(nodiff_root_markup) ->
+    "a value at the root of an az-nodiff fragment rendered a form control whose server-owned "
+    "properties it names (az-bound) in no element carrying the az-nodiff marker, so the "
+    "client would treat it as live and put back the value it was rendered with after every "
+    "edit. Put the component inside an element of the fragment, e.g. "
+    "[<<\"text \">>, {span, [], [?stateless(...)]}]";
 format_error(stream_each_multi_root) ->
     "an ?each over a stream must return ONE element per item, not a list of elements, a "
     "fragment mixing text and elements, or bare text: a keyed op (insert, remove, move, "
@@ -829,6 +850,8 @@ format_error({markup_in_raw_text, _Element, _V} = Reason, _ST) ->
 format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(parse_transform_not_applied = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error(nodiff_root_markup = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(stream_each_multi_root = Reason, _ST) ->
     #{general => format_error(Reason)};
@@ -1231,9 +1254,8 @@ rendered one -- the field is a uniform invariant on every snapshot.
 maybe_propagate(Tmpl, Snap) ->
     Snap1 =
         case Tmpl of
-            #{diff := false, branch := _} -> Snap#{diff => false, nodiff => nodiff_identity(Tmpl)};
-            #{diff := false, az_key := _} -> Snap#{diff => false, nodiff => nodiff_identity(Tmpl)};
-            #{diff := false} -> Snap#{diff => false};
+            #{diff := false} -> nodiff_snap(Tmpl, Snap);
+            #{bound := true} -> Snap#{bound => true};
             #{} -> Snap
         end,
     Snap2 = maybe_put_fingerprint(Tmpl, Snap1),
@@ -1241,6 +1263,21 @@ maybe_propagate(Tmpl, Snap) ->
         #{backend := Backend} -> Snap2#{backend => Backend};
         #{} -> Snap2
     end.
+
+%% No `bound` here: a nodiff unit compiles every attribute static.
+nodiff_snap(#{branch := _} = Tmpl, Snap) ->
+    named_nodiff_snap(Tmpl, Snap);
+nodiff_snap(#{az_key := _} = Tmpl, Snap) ->
+    named_nodiff_snap(Tmpl, Snap);
+nodiff_snap(#{nodiff_marked := true}, Snap) ->
+    Snap#{diff => false, nodiff_marked => true};
+nodiff_snap(#{}, Snap) ->
+    Snap#{diff => false}.
+
+named_nodiff_snap(#{nodiff_marked := true} = Tmpl, Snap) ->
+    Snap#{diff => false, nodiff => nodiff_identity(Tmpl), nodiff_marked => true};
+named_nodiff_snap(Tmpl, Snap) ->
+    Snap#{diff => false, nodiff => nodiff_identity(Tmpl)}.
 
 %% An az-nodiff element's identity beside its fingerprint. Only a template that has one puts it
 %% on its snapshot (an `?each` item never does), so an absent `nodiff` field reads as the
@@ -1403,6 +1440,66 @@ nodiff_branch_part(Branch) -> <<".b", (integer_to_binary(Branch))/binary>>.
 %% A key is any term, so it is hashed: the attribute names it, it does not carry it.
 nodiff_key_part(undefined) -> <<>>;
 nodiff_key_part(Key) -> <<".k", (integer_to_binary(erlang:phash2(Key, 1 bsl 32), 36))/binary>>.
+
+%% Internal: the value of a dynamic at a root of an az-nodiff fragment, which no marked
+%% element carries. Markup is wrapped for the evaluator to render once as it would
+%% anyway and then hand to `refuse_nodiff_bound/1`: what it shows is known only then.
+-doc false.
+-spec nodiff_root(Value) -> Value | {arizona_nodiff_root, Value} when
+    Value :: term().
+nodiff_root(#{s := _, d := _} = V) -> {arizona_nodiff_root, V};
+nodiff_root(#{callback := _, props := _} = V) -> {arizona_nodiff_root, V};
+nodiff_root(#{t := ?EACH} = V) -> {arizona_nodiff_root, V};
+nodiff_root(V) -> V.
+
+%% Internal: the rendered value of a nodiff root (a live snapshot, or the SSR one), refused
+%% when it shows a server-owned control (`az-bound`) the client would take for a live
+%% one: not inside a child view, which diffs its own template, nor inside an az-nodiff
+%% unit of its own, whose element roots carry the marker.
+-doc false.
+-spec refuse_nodiff_bound(Rendered) -> Rendered when
+    Rendered :: term().
+refuse_nodiff_bound(Rendered) ->
+    case shows_bound_control(Rendered) of
+        true -> erlang:error(nodiff_root_markup, none, [{error_info, #{module => ?MODULE}}]);
+        false -> Rendered
+    end.
+
+%% What the compiler stamped (`bound`, `nodiff_marked`, see maybe_propagate/2) decides,
+%% never the bytes: text may mention either attribute.
+shows_bound_control(#{view_id := _}) ->
+    false;
+shows_bound_control(#{nodiff_marked := true}) ->
+    false;
+shows_bound_control(#{bound := true}) ->
+    true;
+shows_bound_control(#{s := _, d := D}) ->
+    lists:any(fun entry_shows_bound_control/1, D);
+shows_bound_control(#{t := ?EACH, items := Items, template := Tmpl}) ->
+    each_shows_bound_control(Tmpl, each_items(Items));
+shows_bound_control(_Value) ->
+    false.
+
+%% Every item shares one template, so its stamps answer for all of them at once;
+%% only an unstamped one has its items' values to look into.
+each_shows_bound_control(#{nodiff_marked := true}, _Items) ->
+    false;
+each_shows_bound_control(#{bound := true}, Items) ->
+    Items =/= [];
+each_shows_bound_control(_Tmpl, Items) ->
+    lists:any(
+        fun(Item) -> lists:any(fun entry_shows_bound_control/1, item_entries(Item)) end, Items
+    ).
+
+entry_shows_bound_control({_Az, V}) -> shows_bound_control(V);
+entry_shows_bound_control({_Az, V, _Deps}) -> shows_bound_control(V).
+
+%% A stream's items are keyed, by a map or by `{Key, D}` pairs.
+each_items(Items) when is_map(Items) -> maps:values(Items);
+each_items(Items) -> Items.
+
+item_entries({_Key, D}) when is_list(D) -> D;
+item_entries(D) when is_list(D) -> D.
 
 -doc """
 Renders a `?stateless` descriptor to its template, passing on the branch stamp

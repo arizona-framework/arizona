@@ -1,4 +1,5 @@
 import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
+import { defer } from './arizona-bound.js';
 import {
     _pipWindows,
     _viewDocs,
@@ -288,8 +289,17 @@ function mountHooksOutside(root, kept) {
  * @param {string} az
  * @param {string} val
  * @param {boolean} [isHtml]
+ * @param {boolean} [prop] false for a held write being applied: a textarea's shown
+ *   value is then the reconcile's to set
  */
-function applyTextOp(el, az, val, isHtml) {
+function applyTextOp(el, az, val, isHtml, prop = true) {
+    // A server-owned textarea's content is its default value, held like an attribute.
+    if (
+        prop &&
+        el.localName === 'textarea' &&
+        defer(el, 'value', () => applyTextOp(el, az, val, isHtml, false))
+    )
+        return;
     const marker = findMarker(el, az);
     if (marker) {
         // A re-rendered slot keeps the az-nodiff elements its new content names again:
@@ -334,8 +344,42 @@ function applyTextOp(el, az, val, isHtml) {
                 el.textContent = val;
             }
         }
+        if (prop) showDefaultValue(el);
     }
     notifyUpdated(el);
+}
+
+/**
+ * A diff write of attribute `name`, held while a proposal waits on it (`defer`).
+ * @param {Element} el
+ * @param {string} name
+ * @param {string | unknown[] | {raw: string}} val
+ */
+function setAttr(el, name, val) {
+    if (!defer(el, name, () => applySetAttrOp(el, name, val, false))) applySetAttrOp(el, name, val);
+}
+
+/**
+ * A diff removal of attribute `name`, held while a proposal waits on it (`defer`).
+ * @param {Element} el
+ * @param {string} name
+ */
+function remAttr(el, name) {
+    if (!defer(el, name, () => applyRemAttrOp(el, name, false))) applyRemAttrOp(el, name);
+}
+
+/**
+ * A textarea's content is only its default value: once the user types, the shown
+ * value detaches from it, so a content write alone leaves the user's text on
+ * screen. Matched by `localName`, not `instanceof`: a PiP document is another
+ * realm, with its own `HTMLTextAreaElement`.
+ * @param {Element} el
+ */
+function showDefaultValue(el) {
+    if (el.localName === 'textarea') {
+        const ta = /** @type {HTMLTextAreaElement} */ (el);
+        ta.value = ta.defaultValue;
+    }
 }
 
 /**
@@ -444,10 +488,10 @@ export function applyOps(ops, resync = false) {
                     applyTextOp(el, az, op[2], op[3]);
                     break;
                 case OP.SET_ATTR:
-                    applySetAttrOp(el, op[2], op[3]);
+                    setAttr(el, op[2], op[3]);
                     break;
                 case OP.REM_ATTR:
-                    applyRemAttrOp(el, op[2]);
+                    remAttr(el, op[2]);
                     break;
                 case OP.REPLACE: {
                     // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
@@ -1060,10 +1104,10 @@ function applyItemOps(item, innerOps, streams = null) {
                     applyTextOp(el, az, op[2], op[3]);
                     break;
                 case OP.SET_ATTR:
-                    applySetAttrOp(el, op[2], op[3]);
+                    setAttr(el, op[2], op[3]);
                     break;
                 case OP.REM_ATTR:
-                    applyRemAttrOp(el, op[2]);
+                    remAttr(el, op[2]);
                     break;
                 case OP.INSERT:
                     insertItemEl(el, op[2], op[3], op[4], streams, az);

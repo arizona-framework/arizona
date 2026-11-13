@@ -1,13 +1,32 @@
 import { applyChoosers } from './arizona-attrs.js';
-import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
-import { allDocs, closeAllPip } from './arizona-docs.js';
+import {
+    actedOn,
+    bindControls,
+    edited,
+    formAway,
+    formOf,
+    markTouched,
+    ownedControl,
+    propose,
+    proposed,
+    resetRestored,
+    serverBatch,
+    serverChoice,
+    settle,
+    showDefaults,
+    standingPick,
+    sweepKept,
+    userEdited,
+} from './arizona-bound.js';
+import { applyEffects, executeJS, osHost, releaseParked, sendsValues } from './arizona-commands.js';
+import { allDocs, closeAllPip, findViewRoot } from './arizona-docs.js';
 import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
 import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
-import { isWebUrl, loadPage } from './arizona-util.js';
+import { isWebUrl, loadPage, warnOnce } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -211,12 +230,487 @@ let _currentQs = '';
 /** @type {string} */
 let _connectQs = '';
 
+// The reconnect restore keeps what the user typed across a resync that rebuilds the
+// DOM, by four rules (see `.claude/rules/js.md`):
+// 1. A unit is a control, or a named radio group of one form owner: what one
+//    proposal captures. The server owns a unit when any of it is (`ownedControl`).
+// 2. A saved unit pairs with a fresh one of its kind: a text or select by name, then
+//    stable id, else position (`matchControls`); a box by name, kind, value and
+//    occurrence (a radio group through its checked radio).
+// 3. A saved unit holds the user's state when it was enabled at the drop, and
+//    unbound, or server-owned and edited since the last reconcile.
+// 4. A fresh unit takes it when it can show it exactly, and is unbound, or enabled,
+//    not withheld and proposed by a replay. Otherwise the unit shows the resync's.
+
 /**
- * Typed form fields saved on an abnormal close, restored by the next resync.
- * `replay` says whether that restore re-sends the form's `az-change`.
- * @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null, replay: boolean}>}
+ * A named control as saved: its `id` when that names it alone among its scope's
+ * controls, its `kind` (see `kindOf`), a box's value (`box`, else null) and
+ * checkedness (`on`), the `value` of a control restored by value (a select: its
+ * chosen values), whether the unit holds the user's state (`user`, rule 3), whether
+ * that is an edit of a server-owned unit (`mine`), when the user last acted on the
+ * unit (`at`, see `actedOn`), and whether its replay may run (`replay`: a crash did not make
+ * it suspect).
+ * @typedef {{id: string|null, kind: string, box: string|null, on: boolean,
+ *   value: string|string[]|undefined, user: boolean, mine: boolean, at: number,
+ *   replay: boolean}} SavedControl
+ */
+
+/**
+ * Typed form fields saved on an abnormal close, restored by the next resync, by
+ * `formKey`: the controls of a form by the view holding them (a view is its id), so
+ * a form's controls in one view never take the state of another view's, whatever
+ * form owns them. `controls` holds each name's controls in order (see
+ * `matchControls`); `replay` is false when a crash withholds the replay of a form
+ * owning any of them.
+ * @type {Map<string, {view: string, id: string, controls: Map<string, SavedControl[]>,
+ *   replay: boolean}>}
  */
 const _savedForms = new Map();
+
+/**
+ * The `_savedForms` key of the controls in the view of id `view` (`''` outside every
+ * view) of a form of id `id`, and the `_replayedForms` key of a form, by its own view
+ * and id: a form is withheld as a whole, the controls naming it from another view
+ * (`form=`) too. An id holds no U+0000, so it holds one and a formless key
+ * (`unitKey`) two.
+ * @param {string} view
+ * @param {string} id
+ */
+const formKey = (view, id) => `${view}\0${id}`;
+
+/** The `_replayedForms` key of form `form` (see `formKey`). @param {Element} form */
+const formKeyOf = (form) => formKey(viewOf(form), form.id);
+
+/**
+ * A saved formless unit: its `controls` under pairing name `name` in the view of id
+ * `view` (see `viewOf`).
+ * @typedef {{view: string, name: string, controls: SavedControl[]}} FormlessUnit
+ */
+
+/**
+ * Server-owned controls outside every form, saved by the view holding them (a view
+ * is its id: a remount under another id is another view), each control by its id
+ * (`fieldKey`), each named radio group by its name -- a group spanning views in
+ * parts, one per view. A unit is restored only into the fresh view of its view's id,
+ * wherever that is now; a view gone, its state goes nowhere.
+ * @type {FormlessUnit[]}
+ */
+let _savedFormless = [];
+
+/**
+ * What control `el` holds, as a restore puts it back: `text` (a textarea or a
+ * text-like input, which share their text), `select`, `multi` (a multiple select),
+ * a box (`checkbox`, `radio`), a password or an input that sanitizes its value (a
+ * number, a range, a color, a date or time) by its type, or `other`. A saved state
+ * is restored only into a control of its kind: a select's choice is no text, a
+ * checkbox's value no choice, a password is shown by no other field, and text in a
+ * range would show its midpoint.
+ * @param {any} el
+ * @returns {string}
+ */
+function kindOf(el) {
+    if (el.localName === 'textarea') return 'text';
+    if (el.localName === 'select') return el.multiple ? 'multi' : 'select';
+    if (el.localName !== 'input') return 'other';
+    const t = el.type;
+    if (['file', 'submit', 'image', 'reset', 'button'].includes(t)) return 'other';
+    const own = ['checkbox', 'radio', 'password', 'number', 'range', 'color'];
+    return own.includes(t) || /^(date|month|week|time|datetime-local)$/.test(t) ? t : 'text';
+}
+
+/** A form control's pairing name. @param {any} el */
+const formName = (el) => el.name;
+
+/**
+ * A formless control's pairing name: a named radio's group, else its id
+ * (`fieldKey`), else none.
+ * @param {any} el
+ */
+const formlessName = (el) =>
+    el.type === 'radio' && el.name ? el.name : el.id ? fieldKey(el.id) : '';
+
+/**
+ * The server-owned controls of `doc` outside every form: the formless controls a
+ * restore takes back.
+ * @param {Document} doc
+ */
+const formless = (doc) =>
+    [...doc.querySelectorAll('input, textarea, select')].filter(
+        (/** @type {any} */ el) => !formOf(el) && ownedControl(el),
+    );
+
+/**
+ * The controls of `els` by the name `nameOf` gives them, in order; nameless ones
+ * are left out.
+ * @param {any[]} els
+ * @param {(el: any) => string} nameOf
+ * @returns {Map<string, any[]>}
+ */
+function namedControls(els, nameOf) {
+    const by = new Map();
+    for (const el of els) {
+        const name = nameOf(el);
+        if (!name) continue;
+        const list = by.get(name);
+        if (list) list.push(el);
+        else by.set(name, [el]);
+    }
+    return by;
+}
+
+/**
+ * The name of the control of `els` carrying each id, or null for an id two of them
+ * share.
+ * @param {any[]} els
+ * @param {(el: any) => string} nameOf
+ * @returns {Object<string, string|null>}
+ */
+function idNames(els, nameOf) {
+    /** @type {Object<string, string|null>} */
+    const n = Object.create(null);
+    for (const el of els) if (el.id) n[el.id] = el.id in n ? null : nameOf(el);
+    return n;
+}
+
+/**
+ * Pair each fresh control of `named` that is no box (by name; `ids` names each id's
+ * control) with the saved control it takes the user's state from, and a key naming
+ * that control apart from the others of its scope. Boxes are left out of the ids and
+ * positions, since they pair by value: a radio added to a group keeps a text field
+ * sharing its name in place. A
+ * name whose saved ids each name one control of that name in the fresh scope pairs
+ * by id (and its controls with no id by their position among those), so a resync
+ * that inserts a control of the same name earlier keeps each edit on its control --
+ * as long as its id-less controls are still the ones saved without an id: every
+ * fresh id was saved, or as many controls have none as did. Any other name pairs by
+ * position: an id two controls share names neither, one minted at mount changes on
+ * the remount a reconnect runs, and a control that gains an id would shift the
+ * id-less ones after it onto their neighbours.
+ * @param {Map<string, any[]>} named
+ * @param {Object<string, string|null>} ids
+ * @param {Map<string, SavedControl[]>} saved
+ * @returns {Map<any, [SavedControl, string]>}
+ */
+function matchControls(named, ids, saved) {
+    const out = new Map();
+    for (const [name, all] of named) {
+        // Boxes pair by value (see `restoreScope`), so they take no position here.
+        const els = all.filter((el) => el.type !== 'checkbox' && el.type !== 'radio');
+        const was = saved.get(name)?.filter((c) => c.box === null);
+        if (!was) continue;
+        /** @type {Map<string, number>} */
+        const at = new Map();
+        /** @type {number[]} */
+        const idless = [];
+        was.forEach((c, i) => {
+            if (c.id) at.set(c.id, i);
+            else idless.push(i);
+        });
+        const fresh = els.filter((el) => !el.id).length;
+        const byId =
+            at.size > 0 &&
+            (fresh === idless.length || els.every((el) => !el.id || at.has(el.id))) &&
+            [...at.keys()].every((id) => ids[id] === name);
+        let k = 0;
+        els.forEach((el, n) => {
+            let i = n;
+            if (byId) i = el.id ? (at.get(el.id) ?? -1) : (idless[k++] ?? -1);
+            if (i >= 0 && i < was.length) out.set(el, [was[i], `${name}\0${i}`]);
+        });
+    }
+    return out;
+}
+
+/**
+ * The options of select `el` as choices: each one's value and its occurrence among
+ * the options of that value, so options sharing a value are told apart.
+ * @param {any} el
+ * @returns {string[]}
+ */
+function choices(el) {
+    /** @type {Object<string, number>} */
+    const n = Object.create(null);
+    return [...el.options].map((o) => {
+        n[o.value] = (n[o.value] ?? -1) + 1;
+        return `${n[o.value]}\0${o.value}`;
+    });
+}
+
+/**
+ * The value control `el` is restored by (a select: its selected choices, see
+ * `choices`), else undefined: a single select showing no option holds no choice. A
+ * box's (restored by checkedness) is never read.
+ * @param {any} el
+ * @returns {string|string[]|undefined}
+ */
+function savedValue(el) {
+    const kind = kindOf(el);
+    if (kind !== 'select' && kind !== 'multi') return kind === 'other' ? undefined : el.value;
+    const on = choices(el).filter((_, i) => el.options[i].selected);
+    return on.length > 0 || el.multiple ? on : undefined;
+}
+
+/**
+ * Select the choices `v` of select `el`, and say whether it did: a choice the resync
+ * no longer offers keeps the resync's selection, since selecting the others alone
+ * would show a set the user never chose -- unless `partial`: an unbound multiple
+ * select keeps the choices still offered, as it does live when a diff removes one
+ * of its options.
+ * @param {any} el
+ * @param {string[]} v
+ * @param {boolean} partial
+ * @returns {boolean}
+ */
+function selectChoices(el, v, partial) {
+    const cs = choices(el);
+    const offered = new Set(cs);
+    if (!partial && !v.every((x) => offered.has(x))) return false;
+    const want = new Set(v);
+    cs.forEach((x, i) => {
+        el.options[i].selected = want.has(x);
+    });
+    return true;
+}
+
+/**
+ * Show saved control `c` in fresh control `el`, and say whether it did: only into a
+ * control of its kind, and only what it can show exactly -- a readonly field keeps
+ * the resync's value (the user cannot have typed into it), and so does a field that
+ * would sanitize the value (a textarea's line breaks in a text input) or a select no
+ * longer offering the choice, but an unbound (`partial`) multiple select takes the
+ * choices still offered. A hidden input is restored: a widget (rich text, a date
+ * picker, tags) may hold the user's input there, which outweighs a stale
+ * server-owned value.
+ * @param {any} el
+ * @param {SavedControl} c
+ * @param {boolean} partial
+ * @returns {boolean}
+ */
+function show(el, c, partial) {
+    if (c.kind !== kindOf(el)) return false;
+    if (c.box !== null) {
+        el.checked = c.on;
+        return true;
+    }
+    const v = c.value;
+    if (v === undefined) return false;
+    if (Array.isArray(v)) return selectChoices(el, v, partial && el.multiple);
+    // Tried on a copy: a value written and taken back would leave the field dirty,
+    // no longer showing a default the server writes.
+    const probe = el.cloneNode();
+    probe.value = v;
+    if (el.readOnly || probe.value !== v) return false;
+    el.value = v;
+    return true;
+}
+
+/**
+ * The saved scope of fresh controls `els` named by `nameOf`: each name's controls in
+ * order, each with what rule 3 makes of it. A radio holds its group's ownership and
+ * edit, since the server owns a group as one unit. `replay` says whether a control's
+ * replay may run.
+ * @param {any[]} els
+ * @param {(el: any) => string} nameOf
+ * @param {(group: any[]) => boolean} replay
+ * @returns {Map<string, SavedControl[]>}
+ */
+function saveScope(els, nameOf, replay) {
+    const ids = idNames(els, nameOf);
+    /** @type {Map<string, SavedControl[]>} */
+    const out = new Map();
+    for (const [name, list] of namedControls(els, nameOf)) {
+        // An id that names two controls of a name names neither, so the whole name
+        // is saved by position.
+        const shared = list.some((el) => el.id && ids[el.id] === null);
+        const radios = list.filter((el) => el.type === 'radio');
+        // The group's ownership and edit, read once: it is every radio's.
+        const group = radios.length > 0 && ownedControl(radios[0]);
+        // A server-owned part's pick, when it still stands: what it holds, whatever
+        // the group shows since (a pop-back, a move), as the user's edit. An unbound
+        // part holds what it shows: code may move it after the user's pick.
+        const pick = radios.length > 0 ? standingPick(radios) : null;
+        const groupMine = group && !!pick;
+        // When the user last chose a radio of this part of the group.
+        const groupAt = Math.max(0, ...radios.map(actedOn));
+        const groupReplay = replay(radios);
+        // The server's own choice, which a part holding it holds as none of the user's.
+        const theirs = group ? serverChoice(radios) : null;
+        out.set(
+            name,
+            list.map((el) => {
+                const radio = el.type === 'radio';
+                const owns = radio ? group : ownedControl(el);
+                const mine =
+                    !el.matches(':disabled') && (radio ? groupMine : owns && userEdited(el));
+                const box = radio || el.type === 'checkbox';
+                return {
+                    id: (!shared && el.id) || null,
+                    kind: kindOf(el),
+                    box: box ? el.value : null,
+                    on: radio && group && pick ? el === pick : el.checked,
+                    value: box ? undefined : savedValue(el),
+                    user: !el.matches(':disabled') && (!owns || mine) && el !== theirs,
+                    mine,
+                    at: radio ? groupAt : 0,
+                    replay: radio ? groupReplay : replay([el]),
+                };
+            }),
+        );
+    }
+    return out;
+}
+
+/**
+ * Restore saved scope `saved` into fresh controls `els` named by `nameOf`, by the
+ * four rules. Returns the server-owned controls it gave the user's state, with
+ * their pairing key: a replay must propose them, or they show the server's.
+ * @param {any[]} els
+ * @param {(el: any) => string} nameOf
+ * @param {Map<string, SavedControl[]>} saved
+ * @returns {Array<[any, string]>}
+ */
+function restoreScope(els, nameOf, saved) {
+    const named = namedControls(els, nameOf);
+    const match = matchControls(named, idNames(els, nameOf), saved);
+    /** Each name's saved boxes, by kind and value, in order. */
+    /** @type {Map<string, SavedControl[]>} */
+    const boxes = new Map();
+    for (const [name, cs] of saved)
+        for (const c of cs) {
+            if (c.box === null) continue;
+            const k = `${name}\0${c.kind}\0${c.box}`;
+            const list = boxes.get(k);
+            if (list) list.push(c);
+            else boxes.set(k, [c]);
+        }
+    /** @type {Array<[any, string]>} */
+    const out = [];
+    for (const [name, list] of named) {
+        // Each fresh box's position among those of its name, kind and value: boxes
+        // sharing a value (value-less checkboxes all submit "on") pair by order.
+        /** @type {Map<string, number>} */
+        const seen = new Map();
+        /** @type {Map<any, [SavedControl|undefined, string]>} */
+        const pair = new Map();
+        for (const el of list) {
+            if (el.type !== 'checkbox' && el.type !== 'radio') continue;
+            const k = `${name}\0${el.type}\0${el.value}`;
+            const n = seen.get(k) ?? 0;
+            seen.set(k, n + 1);
+            pair.set(el, [boxes.get(k)?.[n], `${name}\0v${el.value}\0${n}`]);
+        }
+        const radios = list.filter((el) => el.type === 'radio');
+        const group = radios.length > 0 && ownedControl(radios[0]);
+        /**
+         * The fresh units of the name, each with the control the user's state goes
+         * into: a radio group is one unit, restored through the radio its saved
+         * checked radio pairs with.
+         */
+        /** @type {Array<[any, SavedControl|undefined, string]>} */
+        const units = [];
+        for (const el of list) {
+            if (el.type === 'radio') continue;
+            const [c, slot] = pair.get(el) ?? match.get(el) ?? [undefined, ''];
+            units.push([el, c, slot]);
+        }
+        const pick = radios.find((r) => pair.get(r)?.[0]?.on);
+        if (pick) units.push([pick, pair.get(pick)?.[0], name]);
+        for (const [el, c, slot] of units) {
+            if (!c?.user) continue;
+            const owns = el.type === 'radio' ? group : ownedControl(el);
+            if (owns && (el.matches(':disabled') || !c.mine || !c.replay || !_connected)) continue;
+            if (!show(el, c, !owns)) continue;
+            if (!owns) continue;
+            // As the user made it: of two choices a later restore can show only one
+            // of, it takes the later.
+            markTouched(el, c.at || undefined);
+            out.push([el, slot]);
+        }
+    }
+    return out;
+}
+
+/**
+ * Of the parts of radio name `name` -- each a view's saved radios of it (`cs`) and
+ * that view's fresh controls (`fresh`) -- the index of the one whose choice its
+ * group shows: the part the user acted on last, of those holding no choice or one a
+ * radio of their view can still take, by value and order among those of that
+ * value; null when no part qualifies. That part holding none (a return to the
+ * server's choice), it restores nothing and the server's shows.
+ * @param {Array<{cs: SavedControl[], fresh: any[]}>} parts
+ * @param {string} name
+ * @returns {number|null}
+ */
+function lastActed(parts, name) {
+    const at = (/** @type {{cs: SavedControl[]}} */ p) => p.cs[0]?.at ?? 0;
+    const choice = (/** @type {{cs: SavedControl[]}} */ p) =>
+        p.cs.find((c) => c.kind === 'radio' && c.on && c.user);
+    const placeable = (/** @type {{cs: SavedControl[], fresh: any[]}} */ p) => {
+        const c = /** @type {SavedControl} */ (choice(p));
+        const n = p.cs.filter((x) => x.kind === 'radio' && x.box === c.box);
+        const fresh = p.fresh.filter(
+            (el) => el.type === 'radio' && el.name === name && el.value === c.box,
+        );
+        return fresh.length > n.indexOf(c);
+    };
+    /** @type {number|null} */
+    let last = null;
+    parts.forEach((p, i) => {
+        if (choice(p) && !placeable(p)) return;
+        if (last === null || at(p) > at(parts[last])) last = i;
+    });
+    return last;
+}
+
+/**
+ * The pairing name of a formless control by its id: an id cannot hold U+0000 (the
+ * HTML parser replaces it), so it never reads as a radio group's name.
+ * @param {string} id
+ */
+const fieldKey = (id) => `\0${id}`;
+
+/**
+ * The id of the view holding control `el`: its nearest `az-view`, else none.
+ * @param {Element} el
+ */
+const viewOf = (el) => el.closest('[az-view]')?.id ?? '';
+
+/**
+ * Controls `els` by the view holding each (see `viewOf`), in order.
+ * @param {any[]} els
+ * @returns {Map<string, any[]>}
+ */
+function byView(els) {
+    /** @type {Map<string, any[]>} */
+    const out = new Map();
+    for (const el of els) {
+        const v = viewOf(el);
+        const list = out.get(v);
+        if (list) list.push(el);
+        else out.set(v, [el]);
+    }
+    return out;
+}
+
+/**
+ * The `_replayedForms` key of the formless unit `name` (see `formlessName`) of
+ * `view`: a view's units apart from another's, whatever document holds them. It
+ * starts with U+0000, which no id holds (the HTML parser replaces it), so it never
+ * names a form.
+ * @param {string} view
+ * @param {string} name
+ */
+const unitKey = (view, name) => `\0${view}\0${name}`;
+
+/**
+ * The `_replayedForms` keys of formless unit `els` (a control, or a radio group's
+ * radios in one document), one per view holding them: the same function of the unit
+ * at the replay, at the save a crash makes suspect, and at the restore that withholds
+ * it, so a group spanning views, or split across documents by a pop-out after it
+ * replayed, is withheld whole.
+ * @param {Element[]} els
+ */
+const unitKeys = (els) => [...new Set(els.map((el) => unitKey(viewOf(el), formlessName(el))))];
 
 /**
  * Forms whose `az-change` the last restore replayed, until the server proves it
@@ -226,6 +720,20 @@ const _savedForms = new Map();
  * @type {Set<string>}
  */
 const _replayedForms = new Set();
+
+/**
+ * The `_replayedForms` keys a crash made suspect, withheld from replay until the
+ * next restore. Kept apart from what is saved: a field holding the server's value
+ * at the crash saves nothing, yet the user may edit it before the resync.
+ * @type {Set<string>}
+ */
+const _withheld = new Set();
+
+/**
+ * Whether a save waits on the next restore: the resync saves again then, to keep
+ * what was typed while disconnected, also when the drop found nothing to keep.
+ */
+let _unrestored = false;
 
 /**
  * The current connection's form replay: how many of its parts have yet to post
@@ -468,6 +976,11 @@ const _navRefs = new Set();
 
 let _navAwaitResync = false;
 
+// The server-owned controls each unanswered proposal frame captured, by its reply
+// ref. Settled when the reply is applied; a close drops them, since no reply comes.
+/** @type {Map<number, Array<*>>} */
+const _owed = new Map();
+
 // Bumped per armed navigate and by `disconnect()`, so a send scheduled before
 // either (a debounced or throttled push_event) is dropped when it fires later.
 let _navEpoch = 0;
@@ -486,12 +999,16 @@ let _navEpoch = 0;
  * disconnected (the worker drops it, so no reply comes), so the intent cannot
  * settle onto a later, unrelated reply. A 'replace' transition waits for a
  * navigate, not for an event raised under it, so neither touches it.
+ *
+ * `caps` are the server-owned controls the event proposes values for: its frame
+ * waits on a reply too (sharing the transition's ref), and a dropped one lets them go.
  * @param {string} name event name, for the warning
  * @param {Array<*>} frame `[target, event, payload]`
  * @param {number} [epoch] `_navEpoch` when the event was raised
  * @param {typeof _pendingTransition} [transition]
+ * @param {Array<*>|null} [caps]
  */
-function sendEvent(name, frame, epoch = _navEpoch, transition = null) {
+function sendEvent(name, frame, epoch = _navEpoch, transition = null, caps = null) {
     const waits =
         transition !== null &&
         transition === _pendingTransition &&
@@ -500,15 +1017,34 @@ function sendEvent(name, frame, epoch = _navEpoch, transition = null) {
     if (_navRefs.size > 0 || _navAwaitResync || epoch !== _navEpoch) {
         console.warn(`[arizona] dropped stale event "${name}"`);
         if (waits) armPendingTransition(null);
+        if (caps) settle(caps, false);
         return;
     }
-    if (waits && _connected) {
-        _transitionRef = nextRef();
-        frame = [...frame, _transitionRef];
-    } else if (waits) {
-        armPendingTransition(null);
+    let ref = null;
+    if (waits && _connected) ref = _transitionRef = nextRef();
+    else if (waits) armPendingTransition(null);
+    // Disconnected, the worker drops the frame: no reply will come.
+    if (caps && _connected) {
+        ref ??= nextRef();
+        _owed.set(ref, caps);
+    } else if (caps) {
+        settle(caps, false);
     }
-    workerPost(W_SEND, JSON.stringify(frame));
+    if (ref !== null) frame = [...frame, ref];
+    workerPost(W_SEND, JSON.stringify(frame, wellFormed));
+}
+
+/**
+ * JSON.stringify escapes a lone surrogate (a field a script set, say) as `\ud800`,
+ * which the server cannot decode: it drops the frame, ref and all, so a reply that
+ * proposals and transitions wait on never comes. U+FFFD is what UTF-8 can carry.
+ * @param {string} _key
+ * @param {unknown} v
+ */
+function wellFormed(_key, v) {
+    return typeof v === 'string' && /** @type {any} */ (v).isWellFormed?.() === false
+        ? /** @type {any} */ (v).toWellFormed()
+        : v;
 }
 
 // The user-facing query string carried to the worker for the next reconnect
@@ -617,6 +1153,8 @@ function settleNavReplies(ref, resync) {
  * longer comes would otherwise sit armed until something re-armed it.
  */
 function dropOwedReplies() {
+    for (const caps of _owed.values()) settle(caps, false);
+    _owed.clear();
     if (_navRefs.size > 0) {
         _navRefs.clear();
         _navAwaitResync = true;
@@ -778,6 +1316,9 @@ export function pushEventTo(view, event, payload) {
     sendEvent(event, [view ?? null, event, payload]);
 }
 
+// Whether this document's restored form state was already reset (see `connect`).
+let _restoreChecked = false;
+
 // Whether this page has already handed the shell its OS-event callback. Module
 // scope, and deliberately NOT cleared by disconnect(): the shell's onEvent contract
 // is a bare callback with no unregister, so a registration outlives the connection
@@ -789,27 +1330,117 @@ let _osEventBound = false;
  * to preserve user input across reconnections, and again just before the resync
  * replaces the view, to keep what the user typed while disconnected.
  *
- * The values are always the DOM's, so the user's typing is never lost. Only the
- * `az-change` replay is withheld: for the `suspect` forms (see `_replayedForms`),
- * and for a form already saved without it that has not been restored since.
+ * The values are always the DOM's. Only the `az-change` replay is withheld: for
+ * the `suspect` forms and fields (see `_replayedForms`) until the next restore,
+ * whether or not this save finds anything of them to keep. A withheld replay
+ * proposes nothing, so the restore keeps what the user typed except in
+ * server-owned (`az-bound`) fields, which show the resync's value, the server's.
  * @param {Set<string>|null} [suspect]
  */
 export function saveFormState(suspect = null) {
-    const held = new Map(_savedForms);
+    if (suspect) for (const key of suspect) _withheld.add(key);
+    _unrestored = true;
     _savedForms.clear();
+    _savedFormless = [];
     // Every hosting document, not just the main one: a view popped out to a PiP
     // window keeps its forms in THAT window's document, and a reconnect has to
     // preserve the user's typing there exactly as it does on the main page.
     for (const doc of allDocs()) {
-        doc.querySelectorAll('form[id]').forEach((form) => {
-            const data = formFields(
-                new FormData(/** @type {HTMLFormElement} */ (form)),
-                /** @type {HTMLFormElement} */ (form),
-            );
-            const azChange = form.getAttribute('az-change') || null;
-            const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
-            _savedForms.set(form.id, { fields: data, azChange, replay });
-        });
+        // The controls of a form, by the view holding each and the form's id: what a
+        // restore finds again. A form is a part of its own view even holding none.
+        /** @type {Map<string, {view: string, id: string, els: any[], replay: boolean}>} */
+        const parts = new Map();
+        const owners = [...doc.querySelectorAll('form[id]')].map((f) => [f, null]);
+        const controls = [...doc.querySelectorAll('input, textarea, select')].map((el) => [
+            formOf(el),
+            el,
+        ]);
+        for (const [form, el] of [...owners, ...controls]) {
+            if (!form?.id) continue;
+            const view = viewOf(el ?? form);
+            const key = formKey(view, form.id);
+            const part = parts.get(key) ?? {
+                view,
+                id: form.id,
+                els: /** @type {any[]} */ ([]),
+                replay: true,
+            };
+            parts.set(key, part);
+            if (el) part.els.push(el);
+            if (_withheld.has(formKeyOf(form))) part.replay = false;
+        }
+        for (const [key, { view, id, els, replay }] of parts)
+            _savedForms.set(key, {
+                view,
+                id,
+                controls: saveScope(els, formName, () => replay),
+                replay,
+            });
+        // Outside every form, each view's controls apart. A unit's replay is its own
+        // event's: withheld when it replayed before the crash.
+        for (const [view, els] of byView(formless(doc)))
+            for (const [name, controls] of saveScope(
+                els,
+                formlessName,
+                (unit) => !unitKeys(unit).some((k) => _withheld.has(k)),
+            ))
+                _savedFormless.push({ view, name, controls });
+    }
+}
+
+/**
+ * The commands of a control's own event a replay proposes with: `az-change`, else
+ * `az-input`, whichever pushes an event. Any other command would run with nothing
+ * to propose (a toggle, a navigate), so a field with none is not replayed.
+ * @param {Element} el
+ * @returns {string|null}
+ */
+function ownProposal(el) {
+    for (const name of ['az-change', 'az-input']) {
+        const cmds = proposing(el.getAttribute(name), false);
+        if (cmds) return cmds;
+    }
+    return null;
+}
+
+/**
+ * `raw` when it is a command list that sends values (see `sendsValues`), else
+ * null. A static `az-*` value is app data and need not be JSON (`az-input="lookup"`),
+ * so a parse failure is an answer, not an error: a throw here would escape the
+ * close handler and the resync before either finished.
+ * @param {string|null} raw
+ * @param {boolean} fetch
+ * @returns {string|null}
+ */
+function proposing(raw, fetch) {
+    if (!raw) return null;
+    try {
+        return sendsValues(JSON.parse(raw), fetch) ? raw : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Run commands as part of the current replay. Contained like a delegated event
+ * (`arizona-events.js`): a command list that parses can still crash the
+ * interpreter, and a throw here would end the restore halfway -- the other forms
+ * unrestored, the saved state unspent, and the frame's connect never announced.
+ * Warned once per form or control (`key`), so one failing replay does not hide
+ * another's; a delegated event instead warns once per attribute name page-wide.
+ * @param {Element} el
+ * @param {string} cmds
+ * @param {string} key
+ */
+function runReplay(el, cmds, key) {
+    _replayRunning = _replay;
+    try {
+        executeJS(el, null, JSON.parse(cmds));
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        warnOnce(`[arizona] a replayed command list did not run: ${detail}`, `replay ${key}`);
+    } finally {
+        _replayRunning = null;
     }
 }
 
@@ -902,83 +1533,219 @@ function restoreFocus(marks) {
  * Restore form state after reconnection. Sets field values on matching forms
  * and replays az-change events to sync server state, once: a replayed form is
  * tracked in `_replayedForms` until the server acknowledges the replay.
+ *
+ * A server-owned field gets what the user typed only when the user edited it (an
+ * `input` or `change` since a reconcile last showed the server's value, and apart
+ * from its default: a diff can move a select's default under an untouched one, and
+ * an untouched one saved an older server value) and a replay proposes it: its
+ * form's `az-change`, else its own event (once per field, and per radio group from
+ * its checked radio). Left unproposed, it would show a value the server never had,
+ * so it shows the server's. Whether a replay proposed it is read off the
+ * captures it made, not off the attributes: an `az-change` that toggles or fetches
+ * proposes nothing.
  */
 export function restoreFormState() {
     _replay = { pending: 1 }; // the restore itself
-    for (const [formId, { fields, azChange, replay }] of _savedForms) {
-        // Saved from any hosting document, so look in all of them -- a form popped
-        // out to a PiP window is not reachable from the main document.
-        let form = null;
-        for (const doc of allDocs()) {
-            form = doc.getElementById(formId);
-            if (form) break;
-        }
-        if (!form) continue;
-        const formEl = /** @type {HTMLFormElement} */ (form);
-        // A duplicate name (a repeated text input, a checkbox group) was saved as
-        // an array. Value-setting fields consume it positionally, so track how many
-        // values each name has handed out; checkbox groups match by value instead.
-        /** @type {Object<string, number>} */
-        const cursor = Object.create(null);
-        /** @param {string} name @returns {string|undefined} */
-        const nextValue = (name) => {
-            const val = fields[name];
-            if (!Array.isArray(val)) return /** @type {string} */ (val);
-            const i = cursor[name] || 0;
-            cursor[name] = i + 1;
-            return val[i];
+    /**
+     * Owned controls showing what the user typed, with their `_replayedForms` keys
+     * and the warning key of their own replay: the form's key and the control's
+     * pairing key (two controls sharing a name are two failures), else the formless
+     * unit's keys (`unitKeys`), which name it alone. U+0000 cannot occur in a parsed
+     * id or name, so no form or other control reads the same.
+     */
+    /** @type {Array<[any, string[], string]>} */
+    const typed = [];
+    /** Each form the restore wrote into, by its key (`formKeyOf`). */
+    /** @type {Map<any, string>} */
+    const replays = new Map();
+    /**
+     * The controls and forms under each live view root, by `formKey`, read once per
+     * root however many saved parts it takes.
+     * @type {Map<any, {els: Map<string, any[]>, forms: Map<string, any[]>}>}
+     */
+    const byRoot = new Map();
+    const indexOf = (/** @type {any} */ root) => {
+        let ix = byRoot.get(root);
+        if (ix) return ix;
+        ix = { els: new Map(), forms: new Map() };
+        const add = (
+            /** @type {Map<string, any[]>} */ m,
+            /** @type {string} */ k,
+            /** @type {any} */ x,
+        ) => {
+            const list = m.get(k);
+            if (list) list.push(x);
+            else m.set(k, [x]);
         };
+        for (const el of root.querySelectorAll('input, textarea, select')) {
+            const f = formOf(el);
+            if (f?.id) add(ix.els, formKey(viewOf(el), f.id), el);
+        }
+        for (const f of [root, ...root.querySelectorAll('form')])
+            if (f.localName === 'form' && f.id) add(ix.forms, formKey(viewOf(f), f.id), f);
+        byRoot.set(root, ix);
+        return ix;
+    };
+    /**
+     * Each saved part found again: its fresh controls and forms.
+     * @type {Array<{view: string, controls: Map<string, SavedControl[]>, replay: boolean,
+     *   els: any[], forms: any[]}>}
+     */
+    const found = [];
+    for (const [key, { view, controls, replay }] of _savedForms) {
+        // Only into the controls of a form of its id in the live view of its view's
+        // id, wherever that is (a popped-out view is in its window's document).
+        const root = view ? findViewRoot(view) : document;
+        if (!root) continue;
+        const ix = indexOf(root);
+        const els = ix.els.get(key) ?? [];
+        // The forms of its id in that view (the view's own element too), replayed
+        // whatever controls they hold now.
+        const forms = ix.forms.get(key) ?? [];
+        if (els.length === 0 && forms.length === 0) continue;
+        found.push({ view, controls, replay, els, forms });
+    }
+    // A radio group of a form spanning views is restored as one, like one outside
+    // every form: from the part the user acted on last (see `lastActed`), the others
+    // giving up their radios of the name.
+    /** @type {Map<any, Map<string, number[]>>} parts by fresh form, then radio name */
+    const groups = new Map();
+    found.forEach(({ controls, els }, i) => {
+        const form = els.length > 0 ? formOf(els[0]) : null;
+        if (!form) return;
+        for (const [name, cs] of controls) {
+            if (!cs.some((c) => c.kind === 'radio')) continue;
+            const names = groups.get(form) ?? new Map();
+            groups.set(form, names);
+            names.set(name, [...(names.get(name) ?? []), i]);
+        }
+    });
+    for (const names of groups.values())
+        for (const [name, is] of names) {
+            if (is.length < 2) continue;
+            const radiosOf = (/** @type {number} */ i) =>
+                /** @type {SavedControl[]} */ (found[i].controls.get(name)).filter(
+                    (c) => c.kind === 'radio',
+                );
+            // No act in any part: each holds what it held at the drop (rule 4).
+            if (is.every((i) => (radiosOf(i)[0]?.at ?? 0) === 0)) continue;
+            const last = lastActed(
+                is.map((i) => ({ cs: radiosOf(i), fresh: found[i].els })),
+                name,
+            );
+            is.forEach((i, k) => {
+                if (k === last) return;
+                const f = found[i];
+                f.controls = new Map(f.controls);
+                f.controls.set(
+                    name,
+                    /** @type {SavedControl[]} */ (f.controls.get(name)).filter(
+                        (c) => c.kind !== 'radio',
+                    ),
+                );
+            });
+        }
+    for (const { view, controls, replay, els, forms } of found) {
         // Matched by local name, not `instanceof`: a resync re-parses a popped-out
         // (PiP) form in its window's realm, whose constructors are not ours.
-        for (const field of formEl.elements) {
-            const el = /** @type {any} */ (field);
-            if (el.localName === 'input') {
-                if (!el.name || el.type === 'file') continue;
-                if (el.type === 'checkbox') {
-                    // Check by value membership: a checkbox group saves only the
-                    // checked boxes' values, so `name in fields` would tick them all.
-                    const val = fields[el.name];
-                    el.checked = Array.isArray(val) ? val.includes(el.value) : val === el.value;
-                } else if (el.type === 'radio') {
-                    el.checked = fields[el.name] === el.value;
-                } else if (el.name in fields) {
-                    const v = nextValue(el.name);
-                    // A readonly field is server-owned -- the user cannot have
-                    // typed into it -- so the resync's fresh value stands. Its
-                    // saved value is still consumed above, keeping a repeated
-                    // name's positions aligned. A hidden input is restored: a
-                    // widget (rich text, date picker, tags) may hold the user's
-                    // input there, which outweighs a stale server-owned value.
-                    if (v !== undefined && !el.readOnly) el.value = v;
-                }
-            } else if (el.localName === 'select') {
-                if (!el.name || !(el.name in fields)) continue;
-                if (el.multiple) {
-                    const val = fields[el.name];
-                    const arr = Array.isArray(val) ? val : [val];
-                    for (const opt of el.options) opt.selected = arr.includes(opt.value);
-                } else {
-                    const v = nextValue(el.name);
-                    if (v !== undefined) el.value = v;
-                }
-            } else if (el.localName === 'textarea') {
-                if (el.name && el.name in fields) {
-                    const v = nextValue(el.name);
-                    if (v !== undefined && !el.readOnly) el.value = v;
-                }
-            }
+        const mine = restoreScope(els, formName, controls);
+        if (!replay || !_connected) continue;
+        for (const form of [...forms, ...els.map(formOf)])
+            if (!replays.has(form)) replays.set(form, formKeyOf(form));
+        // Only what the restore wrote: a hook or widget that set an owned control
+        // apart from its default when the resync mounted it is no user's edit.
+        for (const [el, at] of mine) {
+            if (!edited(el)) continue;
+            const key = /** @type {string} */ (replays.get(formOf(el)));
+            // Its warning key names its part too: two parts of a form pair apart.
+            typed.push([el, [key], `${key}\0${view}\0${at}`]);
         }
-        if (replay && azChange && _connected) {
-            _replayRunning = _replay;
-            try {
-                executeJS(form, null, JSON.parse(azChange));
-            } finally {
-                _replayRunning = null;
+    }
+    // Each form's `az-change` as the resync renders it, once, replayed only when it
+    // sends the fields: anything else (a toggle, a navigate) would just run its side
+    // effect again.
+    for (const [form, key] of replays) {
+        const azChange = proposing(form.getAttribute('az-change'), true);
+        if (!azChange || _withheld.has(key)) continue;
+        runReplay(form, azChange, key);
+        _replayedForms.add(key);
+    }
+    // Each saved formless unit into the fresh view of its view's id, and only there.
+    for (const doc of allDocs()) {
+        const els = formless(doc);
+        const views = byView(els);
+        // The document's radios of each name: its group.
+        /** @type {Map<string, any[]>} */
+        const radiosOf = new Map();
+        for (const el of /** @type {any[]} */ (els))
+            if (el.type === 'radio' && el.name) {
+                const list = radiosOf.get(el.name);
+                if (list) list.push(el);
+                else radiosOf.set(el.name, [el]);
             }
-            _replayedForms.add(formId);
+        /** What each view of the document takes back, by name. */
+        /** @type {Map<string, Map<string, SavedControl[]>>} */
+        const take = new Map();
+        const keep = (/** @type {FormlessUnit} */ u) => {
+            const at = take.get(u.view) ?? new Map();
+            at.set(u.name, u.controls);
+            take.set(u.view, at);
+        };
+        /** The parts of each radio name, one per view. */
+        /** @type {Map<string, FormlessUnit[]>} */
+        const parts = new Map();
+        for (const u of _savedFormless) {
+            // A view id names one live view: a window not yet closed may still hold
+            // the copy the resync replaced.
+            // The view itself, holding a control of the unit's or not: a part the user
+            // acted on last decides even when nothing of it is left to restore.
+            if ((u.view ? findViewRoot(u.view)?.ownerDocument : document) !== doc) continue;
+            if (u.name.startsWith('\0')) {
+                keep(u);
+                continue;
+            }
+            const list = parts.get(u.name);
+            if (list) list.push(u);
+            else parts.set(u.name, [u]);
+        }
+        // A radio name is one group per document, which shows one state: that of the
+        // part the user acted on last, of those whose choice still has a radio to pair
+        // with in its view -- the server's when that act left it holding none.
+        for (const [name, us] of parts) {
+            const last = lastActed(
+                us.map((u) => ({ cs: u.controls, fresh: views.get(u.view) ?? [] })),
+                name,
+            );
+            if (last !== null) keep(us[last]);
+        }
+        /** @type {Array<[any, string]>} */
+        const mine = [];
+        // In the document's order, so the replay follows it.
+        for (const [view, vEls] of views) {
+            const saved = take.get(view);
+            if (saved) mine.push(...restoreScope(vEls, formlessName, saved));
+        }
+        // A radio group's replay proposes the document's whole group.
+        for (const [el] of mine) {
+            if (!edited(el)) continue;
+            const unit = el.type === 'radio' && el.name ? (radiosOf.get(el.name) ?? [el]) : [el];
+            const keys = unitKeys(unit);
+            typed.push([el, keys, keys.join('\n')]);
         }
     }
     _savedForms.clear();
+    _savedFormless = [];
+    _withheld.clear();
+    _unrestored = false;
+    for (const [el, keys, warnKey] of typed) {
+        const own = ownProposal(el);
+        if (!own || proposed(el)) continue;
+        runReplay(el, own, warnKey);
+        for (const key of keys) _replayedForms.add(key);
+    }
+    // What no replay proposes shows the server's again: a statement, ending the pick
+    // the restore wrote there.
+    serverBatch(() => showDefaults(typed.map(([el]) => el)));
     // The server handles a socket's frames in order, and an event synchronously,
     // so the pong to a ping sent after every replayed event proves they were
     // handled without crashing the view.
@@ -1016,6 +1783,25 @@ export function connect(endpoint, params = {}) {
     // Event delegation on the main document: az-* events, form submit, and
     // drag-and-drop. (requestPip binds the same set on a PiP window's document.)
     bindDocumentEvents(document, signal);
+
+    // A reload or back/forward refills controls from the browser's saved form
+    // state, which a server-owned one must not show: the server never had it.
+    // Firefox refills while parsing; Chromium on a back/forward only after `load`,
+    // just before `pageshow`, so a back/forward still loading resets again then,
+    // except what the user edited meanwhile (a refill raises no `input`).
+    // Once per document: the navigation type outlives a disconnect(), and a later
+    // connect() would reset what the user typed since.
+    const navType = /** @type {any} */ (performance.getEntriesByType?.('navigation')[0])?.type;
+    if (!_restoreChecked && (navType === 'reload' || navType === 'back_forward')) {
+        _restoreChecked = true;
+        resetRestored(document);
+        if (navType === 'back_forward' && document.readyState !== 'complete') {
+            window.addEventListener('pageshow', () => resetRestored(document), {
+                once: true,
+                signal,
+            });
+        }
+    }
 
     // Take over scroll restoration so the browser doesn't scroll to a stale
     // position before OP_REPLACE swaps in the new content. See the block
@@ -1252,17 +2038,33 @@ export function connect(endpoint, params = {}) {
                         settleNavReplies(msg[5], !!msg[3]);
                         // Re-save what was typed while disconnected: the resync's
                         // OP_REPLACE is about to discard it.
-                        if (msg[3] && _savedForms.size > 0) saveFormState();
+                        if (msg[3] && _unrestored) saveFormState();
                         // ...and so is the element being typed into: put focus
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
-                        if (msg[1]) applyOps(msg[1], !!msg[3]);
-                        // Identity-checked: an OP_REPLACE in this frame consumed it.
-                        if (patchReply && _pendingScroll === armedScroll) {
-                            if (msg[1]?.length) applyScroll(armedScroll);
-                            setPendingScroll(null);
-                        }
-                        if (msg[2]) applyEffects(msg[2]);
+                        // One server batch: each radio group it leaves another
+                        // checked radio was stated -- unless a reconnect's, whose
+                        // state the restore writes the user's picks over.
+                        serverBatch(() => {
+                            if (msg[1]) {
+                                applyOps(msg[1], !!msg[3]);
+                                releaseParked();
+                                sweepKept();
+                            }
+                            // After the ops: the frame's own writes are the defaults the
+                            // controls it answers are reconciled to.
+                            const caps = _owed.get(msg[5]);
+                            if (caps) {
+                                _owed.delete(msg[5]);
+                                settle(caps, true);
+                            }
+                            // Identity-checked: an OP_REPLACE in this frame consumed it.
+                            if (patchReply && _pendingScroll === armedScroll) {
+                                if (msg[1]?.length) applyScroll(armedScroll);
+                                setPendingScroll(null);
+                            }
+                            if (msg[2]) applyEffects(msg[2]);
+                        }, !!msg[3]);
                         if (msg[3]) restoreFormState();
                         if (focus) restoreFocus(focus);
                         // Here, not after the dispatch below: a transition defers
@@ -1478,10 +2280,14 @@ export function connect(endpoint, params = {}) {
         armPendingTransition(null);
         _heldFrames = null;
         _frameGen++;
+        dropOwedReplies();
         _navRefs.clear();
         _navAwaitResync = false;
         _connectQs = '';
         _savedForms.clear();
+        _savedFormless = [];
+        _withheld.clear();
+        _unrestored = false;
         closeAllPip();
         unbindDocuments();
         destroyAllHooks();
@@ -1517,6 +2323,11 @@ setHost({
         armPendingTransition(t);
     },
     holdReplay,
+    formAway,
+    serverBatch: (fn) => serverBatch(fn),
     navigate: navigateEffect,
     leavePage,
+    propose,
+    release: (caps) => settle(/** @type {any} */ (caps), false),
+    bindDocument: bindControls,
 });

@@ -12,9 +12,20 @@
  *   page while its socket is open, on a page with no server always
  * @property {() => number} epoch the navigation epoch a deferred event captures
  * @property {(name: string, frame: Array<*>, epoch?: number,
- *   transition?: {types?: string[], kind: 'any'|'replace'}|null) => void} sendEvent send
+ *   transition?: {types?: string[], kind: 'any'|'replace'}|null, caps?: object[]|null) => void} sendEvent send
  *   the view event `frame` (`[target, event, payload]`) raised in `epoch` (default:
- *   the current one), under the view transition that waits for its reply, if any
+ *   the current one), under the view transition that waits for its reply, if any,
+ *   proposing the values `caps` captured
+ * @property {(el: Element, event: Event|null) => object[]|null} [propose] capture the
+ *   server-owned controls a push_event from `el` proposes values for; a live page only
+ * @property {(caps: object[]) => void} [release] let go of a capture whose send was
+ *   replaced before it went out
+ * @property {<T>(fn: () => T) => T} [serverBatch] run `fn` as a batch of the server's:
+ *   what it changes of a radio group's choice is the server's statement; a live page only
+ * @property {(form: HTMLFormElement) => Element[]} [formAway] the fields of `form` a
+ *   pop-out moved into another document; a live page only
+ * @property {(doc: Document, signal: AbortSignal) => void} [bindDocument] bind what the
+ *   live side tracks per hosting document
  * @property {(url: string) => boolean} awaitsReply whether a navigate/patch to `url`
  *   is answered by a frame, so a view transition can wait for it
  * @property {(t: {types?: string[], kind: 'any'|'replace'}) => void} armTransition arm a view

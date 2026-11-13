@@ -38,7 +38,8 @@
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([keyed_item_ops/0]).
--export([implied_attrs/2]).
+-export([implied_attrs/3]).
+-export([reserved_attrs/0]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -111,7 +112,9 @@ supports_nodiff_keep() -> false.
 
 keyed_item_ops() -> false.
 
-implied_attrs(_Tag, _Names) -> [].
+implied_attrs(_Tag, _Attrs, _DynamicContent) -> {[], false}.
+
+reserved_attrs() -> [].
 
 boolean_attrs() -> presence.
 

@@ -54,6 +54,8 @@ op-code targets.
 
 %% Set while a layout layer renders (see render_layout/3).
 -define(IN_LAYOUT, '$arizona_in_layout').
+%% Set while SSR renders the value of an az-nodiff fragment root (ssr_nodiff_root/2).
+-define(IN_NODIFF_ROOT, '$arizona_in_nodiff_root').
 
 %% Set while a value renders for its text to be read (see render_markup/2).
 -define(IN_TEXT, '$arizona_in_text').
@@ -914,45 +916,39 @@ render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
     render_ssr_esc_val(Backend, Fun());
 render_ssr_val(Backend, Fun) when is_function(Fun, 0) ->
     render_ssr_val(Backend, Fun());
-render_ssr_val(Backend, #{
-    t := ?EACH, source := Items, template := #{s := ItemStatics, d := DynamicsFun}
-}) when
-    is_list(Items)
-->
+render_ssr_val(
+    Backend,
+    #{t := ?EACH, source := Source, template := #{s := ItemStatics, d := DynamicsFun}} = Each
+) ->
     %% SSR keeps no snapshot, so render the items and keep nothing else. Going through
     %% the item-snapshot shape instead materialised a `{Az, Value, Deps}` triple per
     %% dynamic, a list of those per item, and a list of those -- all of it read once,
     %% by the walk that turns it into exactly this output, and then dropped. The live
     %% paths still build it, because their snapshot is what the next diff reads.
     %% What the items render TO is the backend's concern, as everywhere else here.
-    {ssr_rendered,
-        join_items(Backend, [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items])};
-render_ssr_val(Backend, #{
-    t := ?EACH,
-    source := #stream{
-        items = ItemsMap,
-        order = Order,
-        limit = Limit
-    },
-    template := #{s := ItemStatics, d := DynamicsFun}
-}) ->
-    {ssr_rendered,
-        join_items(Backend, [
-            zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
-         || K <- arizona_template:visible_keys(Order, Limit)
-        ])};
-render_ssr_val(Backend, #{
-    t := ?EACH, source := Source, template := #{s := ItemStatics, d := DynamicsFun}
-}) when
-    is_map(Source)
-->
-    %% Same entry order as the live path (`arizona_eval:render_map_items_simple/2`),
-    %% so a later diff lines up with what SSR put on the page.
-    {ssr_rendered,
-        join_items(Backend, [
-            zip_ssr(Backend, ItemStatics, DynamicsFun(K, V))
-         || K := V <- Source
-        ])};
+    %% A map iterates in the live path's entry order
+    %% (`arizona_eval:render_map_items_simple/2`), so a later diff lines up with what
+    %% SSR put on the page.
+    case erlang:get(?IN_NODIFF_ROOT) of
+        undefined ->
+            {ssr_rendered,
+                join_items(
+                    Backend,
+                    case Source of
+                        Items when is_list(Items) ->
+                            [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items];
+                        #stream{items = ItemsMap, order = Order, limit = Limit} ->
+                            [
+                                zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
+                             || K <- arizona_template:visible_keys(Order, Limit)
+                            ];
+                        Map when is_map(Map) ->
+                            [zip_ssr(Backend, ItemStatics, DynamicsFun(K, V)) || K := V <- Map]
+                    end
+                )};
+        true ->
+            ssr_nodiff_each(Backend, Each)
+    end;
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
     ok = refuse_stateful(H),
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
@@ -961,7 +957,7 @@ render_ssr_val(Backend, #{stateful := H, props := Props}) ->
     %% a restricted key must fail here rather than SSR cleanly and crash only at
     %% WS connect.
     ok = arizona_eval:check_restricted_keys(B1, Props, H),
-    Snap = render_ssr_val(Backend, arizona_stateful:call_render(H, B1)),
+    Snap = ssr_view(Backend, arizona_stateful:call_render(H, B1)),
     %% Mark the child as a view boundary (mirroring the live path's
     %% make_child_snap `view_id`) so a scope_slot pass over an enclosing
     %% stateless parent skips it -- a stateful child's inner az ids are resolved
@@ -1044,6 +1040,8 @@ render_ssr_esc_val(Backend, #{az_local := _, v := Init}) ->
     render_ssr_local_init(Backend, Init);
 render_ssr_esc_val(Backend, V) when is_map(V) ->
     render_ssr_val(Backend, V);
+render_ssr_esc_val(Backend, {arizona_nodiff_root, V}) ->
+    ssr_nodiff_root(Backend, V);
 render_ssr_esc_val(Backend, V) ->
     case arizona_template:mark_esc(V) of
         {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
@@ -1052,6 +1050,63 @@ render_ssr_esc_val(Backend, V) ->
 
 render_ssr_local_init(Backend, {arizona_raw, _} = Raw) -> render_ssr_val(Backend, Raw);
 render_ssr_local_init(Backend, Init) -> render_ssr_esc_val(Backend, Init).
+
+%% An az-nodiff fragment root is checked once rendered (`arizona_template:refuse_nodiff_bound/1`),
+%% which needs the structure an `?each` normally renders straight to bytes: under the
+%% flag its items keep the shape a live snapshot gives them (ssr_each/3).
+ssr_nodiff_root(Backend, V) ->
+    Outer = erlang:put(?IN_NODIFF_ROOT, true),
+    Rendered =
+        try
+            render_ssr_val(Backend, V)
+        after
+            restore_nodiff_root(Outer)
+        end,
+    arizona_template:refuse_nodiff_bound(Rendered).
+
+%% A child view is its own unit: the az-nodiff root check stops at it, so its `?each`s
+%% render straight to bytes even under a nodiff root.
+ssr_view(Backend, Tmpl) ->
+    case erlang:erase(?IN_NODIFF_ROOT) of
+        undefined ->
+            render_ssr_val(Backend, Tmpl);
+        true ->
+            try
+                render_ssr_val(Backend, Tmpl)
+            after
+                undefined = erlang:put(?IN_NODIFF_ROOT, true)
+            end
+    end.
+
+restore_nodiff_root(true) ->
+    ok;
+restore_nodiff_root(undefined) ->
+    true = erlang:erase(?IN_NODIFF_ROOT),
+    ok.
+
+%% Under a nodiff root an `?each` keeps the item structure a live snapshot gives it,
+%% for `arizona_template:refuse_nodiff_bound/1` to walk.
+ssr_nodiff_each(Backend, #{source := Source, template := #{d := DynamicsFun} = Tmpl}) ->
+    ItemsDynamics =
+        case Source of
+            Items when is_list(Items) ->
+                [DynamicsFun(Item) || Item <- Items];
+            #stream{items = ItemsMap, order = Order, limit = Limit} ->
+                [
+                    DynamicsFun(maps:get(K, ItemsMap), K)
+                 || K <- arizona_template:visible_keys(Order, Limit)
+                ];
+            Map when is_map(Map) ->
+                [DynamicsFun(K, V) || K := V <- Map]
+        end,
+    #{
+        t => ?EACH,
+        items => [
+            [{arizona_template:dyn_az(D), render_ssr_one(Backend, D), #{}} || D <- Dynamics]
+         || Dynamics <- ItemsDynamics
+        ],
+        template => Tmpl
+    }.
 
 render_fp_val(Backend, {arizona_esc, V}) ->
     %% The fingerprint (initial hydration) payload carries a scalar content value

@@ -238,6 +238,9 @@ render(Bindings) ->
     %% chooser's value and multiple, which the child's slot hands its value with
     %% (arizona_template:choices/3). `none` otherwise.
     choices = none :: none | {erl_parse:abstract_expr(), erl_parse:abstract_expr()},
+    %% Whether an element compiled so far is a control showing a server-owned
+    %% property (`arizona_renderer:implied_attrs/3`): stamped on the template as `bound`.
+    bound = false :: boolean(),
     %% The target's renderer. No default: every template is compiled for the target
     %% it sits in, so each construction names it.
     backend :: module()
@@ -1410,10 +1413,11 @@ format_source_error(tracked_get_on_non_bindings_map) ->
 format_attr_error(reserved_attr, Name) ->
     lists:flatten(
         io_lib:format(
-            "the ~ts attribute is reserved -- the parse transform emits it itself "
-            "(az addresses an element for the diff, az-local describes its ?local "
-            "slots), so a template-authored one renders as a duplicate whose value "
-            "can collide with a real slot address and misroute a patch. Remove it: "
+            "the ~ts attribute is reserved -- this render target emits it itself "
+            "(in ?html, az addresses an element for the diff, az-local describes its "
+            "?local slots, az-bound names a form control's server-owned properties), "
+            "so a template-authored one can collide with a real slot address and "
+            "misroute a patch, or misstate which properties the server owns. Remove it: "
             "az-key, the az-* event attributes and any az-* name of your own are "
             "unaffected",
             [Name]
@@ -4140,6 +4144,12 @@ put_nodiff_key({tuple, _, [_Tag, Attrs | _]}, {map, L, Fields} = TmplAST) ->
         [KeyAST] -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, az_key}, KeyAST}]};
         [] -> TmplAST
     end;
+put_nodiff_key({cons, _, _, _} = Arg, TmplAST) ->
+    %% A fragment's one directive element names it the same way (keepable_mixed_root/2).
+    case [Item || Item <- ast_list_to_list(Arg), nodiff_directive_attrs(Item) =/= error] of
+        [Elem] -> put_nodiff_key(Elem, TmplAST);
+        _NoneOrMany -> TmplAST
+    end;
 put_nodiff_key(_Arg, TmplAST) ->
     TmplAST.
 
@@ -4485,7 +4495,9 @@ compile_body_parts(ExprAST, Module, LiveRender, Backend, CCtx, Inherited, Unit) 
         element_tuple ->
             compile_fragment_parts([ExprAST], Module, LiveRender, Backend, CCtx, {Inherited, Unit});
         Class ->
-            compile_classified_body(Class, ExprAST, Module, LiveRender, Backend, CCtx, Inherited)
+            compile_classified_body(
+                Class, ExprAST, Module, LiveRender, Backend, CCtx, {Inherited, Unit}
+            )
     end.
 
 classify_body(AST) ->
@@ -4513,24 +4525,28 @@ classify_other_body(AST) ->
     end.
 
 compile_classified_body(
-    static_binary, ExprAST, _Module, _LiveRender, _Backend, _CCtx, _Inherited
+    static_binary, ExprAST, _Module, _LiveRender, _Backend, _CCtx, _InheritedUnit
 ) ->
     Statics = [[extract_binary_value(ExprAST)]],
     {Statics, [], generate_fingerprint(Statics), #{}};
-compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx, Inherited) ->
+compile_classified_body(
+    element_list, ExprAST, Module, LiveRender, Backend, CCtx, {Inherited, _Unit}
+) ->
     compile_fragment_parts(
         ast_list_to_list(ExprAST), Module, LiveRender, Backend, CCtx, {Inherited, template}
     );
-compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, Inherited) ->
-    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, Inherited);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, true) ->
+compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, InheritedUnit) ->
+    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, InheritedUnit);
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, {true, _Unit}) ->
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
     ok = reject_orphaned_local(ExprAST),
     DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend, CCtx)],
     Statics = [[], []],
     {Statics, DynASTs, generate_fingerprint(Statics), #{diff => false}};
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, false) ->
+compile_classified_body(
+    text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, {false, _Unit}
+) ->
     %% The slot's own markers anchor it (see below), but a marker is not an
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
@@ -4574,11 +4590,12 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
         backend = Backend,
         content_ctx = CCtx
     },
+    Nodiff = Marked andalso maps:is_key(diff, Opts),
     State1 = fold_fragment_items(
         fun(Elem, State) ->
             {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
-            {Attrs, ElemOpts} = extract_directives(Attrs0),
-            Mark = nodiff_mark(ElemOpts, Marked, Keepable),
+            {Attrs, _ElemOpts} = extract_directives(Attrs0),
+            Mark = nodiff_mark(Nodiff, Keepable),
             compile_element(Tag, Attrs, Children, ElemLine, State#state{nodiff_mark = Mark})
         end,
         State0,
@@ -4591,19 +4608,30 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
             true -> fill_nodiff_fingerprint(Fingerprint, DynASTs0);
             false -> DynASTs0
         end,
-    {Statics, DynASTs, Fingerprint, Opts}.
+    {Statics, DynASTs, Fingerprint, unit_facts(Nodiff, State1, Opts)}.
 
-%% The `az-nodiff` directive stays in the HTML on the element that carries it,
-%% compiler-owned, when the backend's client keeps az-nodiff elements across a wholesale
-%% re-render (`supports_nodiff_keep/0`) -- not in a template that only inherits
-%% nodiff (it is part of the enclosing az-nodiff element) nor in a layout (nodiff for
-%% `?inner_content`, rendered once outside any view). Its value is the az-nodiff element's
-%% token when the element is keepable (is_keepable_nodiff/4); otherwise it is
-%% bare -- client-owned markup the client must never carry over: an unkeyed `?each`
-%% item root, or a root of a multi-element fragment.
-nodiff_mark(#{diff := false}, true, true) -> token;
-nodiff_mark(#{diff := false}, true, false) -> bare;
-nodiff_mark(_ElemOpts, _Marked, _Keepable) -> none.
+%% What a template's own markup is, for `arizona_template:refuse_nodiff_bound/1`, which
+%% must not guess it from bytes (text can mention either attribute): `nodiff_marked`
+%% when its element roots carry the `az-nodiff` marker, `bound` when an element of it
+%% names server-owned properties. Absent means false.
+unit_facts(true, _State, Opts) -> Opts#{nodiff_marked => true};
+unit_facts(false, #state{bound = true}, Opts) -> Opts#{bound => true};
+unit_facts(false, #state{bound = false}, Opts) -> Opts.
+
+%% The `az-nodiff` directive stays in the HTML, compiler-owned, on every element root of
+%% a template that carries it (`Nodiff`), when the backend's client keeps az-nodiff
+%% elements across a wholesale re-render (`supports_nodiff_keep/0`) -- not in a
+%% template that only inherits nodiff (it is part of the enclosing az-nodiff element)
+%% nor in a layout (nodiff for `?inner_content`, rendered once outside any view). The
+%% client tells what never diffs only by the marker, and a component's control under
+%% a root still names its server-owned properties. Its value is the az-nodiff element's
+%% token when the element is keepable (is_keepable_nodiff/4, keepable_mixed_root/2);
+%% otherwise it is bare -- client-owned markup the client must never carry over: an
+%% unkeyed `?each` item root, a root of a multi-element fragment, or any other element
+%% root of a mixed text+element fragment.
+nodiff_mark(true, true) -> token;
+nodiff_mark(true, false) -> bare;
+nodiff_mark(false, _Keepable) -> none.
 
 %% A keepable az-nodiff element is the single root element of a template that carries the directive
 %% itself -- not one that inherits it from an enclosing az-nodiff element, which is part of that
@@ -4708,8 +4736,15 @@ replace_ast(Fun, Nodes) when is_list(Nodes) ->
 replace_ast(_Fun, Leaf) ->
     Leaf.
 
-compile_mixed_items(Items, Module, Backend, CCtx, Inherited) ->
+compile_mixed_items(Items, Module, Backend, CCtx, {Inherited, Unit}) ->
     Opts = prescan_directives(Items, Inherited),
+    %% Marked like a multi-element fragment's roots: the client sees the boundary
+    %% only through the marker, and a component under it still carries `az-bound`.
+    Marked =
+        not Inherited andalso not lists:any(fun contains_inner_content/1, Items) andalso
+            Backend:supports_nodiff_keep(),
+    Nodiff = Marked andalso maps:is_key(diff, Opts),
+    Keepable = Nodiff andalso keepable_mixed_root(Items, Unit),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
@@ -4717,11 +4752,53 @@ compile_mixed_items(Items, Module, Backend, CCtx, Inherited) ->
         content_ctx = CCtx
     },
     State1 = fold_fragment_items(
-        fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
+        fun(Item, State) -> compile_mixed_item(Item, Module, {Nodiff, Keepable}, State) end,
+        State0,
+        Items
     ),
-    {Statics, DynASTs} = finalize(State1),
+    {Statics, DynASTs0} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
-    {Statics, DynASTs, Fingerprint, Opts}.
+    DynASTs =
+        case Keepable of
+            true -> fill_nodiff_fingerprint(Fingerprint, DynASTs0);
+            false -> DynASTs0
+        end,
+    {Statics, DynASTs, Fingerprint, unit_facts(Nodiff, State1, Opts)}.
+
+%% The one element of a mixed text+element fragment carrying the directive is kept
+%% whole like a single-root az-nodiff element (an `?each` item only when keyed, see
+%% is_keepable_nodiff/4): its token names it, so an az-nodiff element nested in it is
+%% carried over with it. Two such elements cannot be told apart by place, so both
+%% stay bare.
+keepable_mixed_root(Items, Unit) ->
+    case [Attrs || Item <- Items, {ok, Attrs} <- [nodiff_directive_attrs(Item)]] of
+        [Attrs] -> Unit =:= template orelse has_az_key(Attrs);
+        _NoneOrMany -> false
+    end.
+
+nodiff_directive_attrs(Item) ->
+    case is_element_tuple(Item) of
+        true ->
+            {_Tag, Attrs, _Children, _Line} = extract_element(Item),
+            {_Rest, ElemOpts} = extract_directives(Attrs),
+            case maps:is_key(diff, ElemOpts) of
+                true -> {ok, Attrs};
+                false -> error
+            end;
+        false ->
+            error
+    end.
+
+%% A root of a marked nodiff fragment sits in no element carrying the marker, so what
+%% its value renders is checked for a server-owned control once it has rendered
+%% (`arizona_template:nodiff_root/1`); a `?stateful` is its own view, a `?raw` text.
+nodiff_root_value({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args} = Item) when
+    (M =:= arizona_template orelse M =:= az) andalso (F =:= stateful orelse F =:= raw)
+->
+    Item;
+nodiff_root_value(Item) ->
+    L = line(Item),
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, nodiff_root}}, [Item]}.
 
 %% Compile a fragment's top-level items in order, with the backend's children
 %% separator between them as an element's children get one (JSON joins
@@ -4750,34 +4827,48 @@ compile_mixed_item(
         Value, Multiple, Child
     ]},
     Module,
+    {Nodiff, _Keepable},
     State
 ) ->
     %% A content list item under a chooser, as compile_child/4 takes a child.
     Marked = compile_mixed_dynamic(
-        choices_slot_child(Child), Module, State#state{choices = {Value, Multiple}}
+        choices_slot_child(Child), Module, Nodiff, State#state{choices = {Value, Multiple}}
     ),
     Marked#state{choices = none};
-compile_mixed_item(Item, Module, State) ->
+compile_mixed_item(Item, Module, Marks, State) ->
     case static_child_bytes(Item, State) of
         {ok, Bytes} -> buf_append(State, Bytes);
-        error -> compile_mixed_non_static(Item, Module, State)
+        error -> compile_mixed_non_static(Item, Module, Marks, State)
     end.
 
-compile_mixed_non_static(Item, Module, State) ->
+compile_mixed_non_static(Item, Module, {Nodiff, Keepable}, State) ->
     case is_element_tuple(Item) of
         true ->
             {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
-            {Attrs, _ElemOpts} = extract_directives(Attrs0),
-            compile_element(Tag, Attrs, Children, ElemLine, State);
+            {Attrs, ElemOpts} = extract_directives(Attrs0),
+            %% The runtime branch stamp (`arizona_template:branch/2`) finds the token
+            %% as the template's first dynamic, so one after a dynamic stays bare.
+            Named =
+                Keepable andalso maps:is_key(diff, ElemOpts) andalso
+                    State#state.dynamics =:= [],
+            Mark = nodiff_mark(Nodiff, Named),
+            compile_element(Tag, Attrs, Children, ElemLine, State#state{nodiff_mark = Mark});
         false ->
             ok = reject_orphaned_local(Item),
-            compile_mixed_dynamic(Item, Module, State)
+            compile_mixed_dynamic(Item, Module, Nodiff, State)
     end.
 
-compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
+compile_mixed_dynamic(Item, Module, true, #state{backend = Backend} = State) ->
+    CCtx = State#state.content_ctx,
+    Expanded = expand_block_element_tails(Item, Module, Backend, true, CCtx),
+    DynAST = make_nodiff_dynamic_ast(
+        nodiff_root_value(Expanded), Module, line(Item), Backend, CCtx
+    ),
+    flush(State, with_choices(DynAST, State));
+compile_mixed_dynamic(Item, Module, false, #state{nodiff = true, backend = Backend} = State) ->
     DynAST = make_nodiff_dynamic_ast(Item, Module, line(Item), Backend, State#state.content_ctx),
     flush(State, with_choices(DynAST, State));
-compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
+compile_mixed_dynamic(Item, Module, false, #state{backend = Backend} = State0) ->
     %% A bare (non-element) dynamic at the fragment top level. Allocate it a
     %% unique az from the shared element counter and wrap it in text-slot markers,
     %% exactly like a content slot (emit_child_dynamic/4). A hardcoded, markerless
@@ -4875,7 +4966,7 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
             N ->
                 buf_az_attr(State3, integer_to_binary(N))
         end,
-    State5 = compile_element_attrs(Tag, Attrs, ElemAz, State4, Line),
+    State5 = compile_element_attrs(Tag, Attrs, Children, ElemAz, State4, Line),
     case Backend:is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
@@ -4984,34 +5075,63 @@ compile_static_false(NameAST, State0, ElemLine) ->
     end.
 
 %% The author's attributes, then the static ones the backend implies from them
-%% (`arizona_renderer:implied_attrs/2`).
-compile_element_attrs(Tag, Attrs, ElemAz, State0, Line) ->
+%% (`arizona_renderer:implied_attrs/3`). A nodiff unit is never `bound`, whatever the
+%% backend answers: its snapshot drops the stamp, so the template must not carry it.
+compile_element_attrs(Tag, Attrs, Children, ElemAz, State0, Line) ->
     Backend = State0#state.backend,
     State1 = compile_attrs(Attrs, ElemAz, State0, Line),
-    Names = [N || A <- Attrs, N <- [implied_attr_name(Backend, A)], is_binary(N)],
-    case Backend:implied_attrs(Tag, Names) of
-        [] ->
+    Nodiff = State0#state.nodiff,
+    Kinds = [K || A <- Attrs, {_, _} = K <- [implied_attr(Backend, A, Nodiff)]],
+    DynContent =
+        not Nodiff andalso
+            has_dynamic_child([C || C <- Children, not is_local_marker(C)], none),
+    case Backend:implied_attrs(Tag, Kinds, DynContent) of
+        {[], false} ->
             State1;
-        Implied ->
-            buf_append(State1, <<
+        {Implied, Bound} ->
+            State2 = buf_append(State1, <<
                 <<(emit_backend(fun() -> Backend:attr(N, V) end, Line))/binary>>
              || {N, V} <:- Implied
-            >>)
+            >>),
+            State2#state{bound = State2#state.bound orelse (Bound andalso not Nodiff)}
     end.
 
 %% A static `false` renders nothing, so it is not an attribute the element carries.
-implied_attr_name(_Backend, {tuple, _, [_NameAST, {atom, _, false}]}) ->
+implied_attr(_Backend, {tuple, _, [_NameAST, {atom, _, false}]}, _Nodiff) ->
     undefined;
-implied_attr_name(Backend, {tuple, _, [{atom, _, _} = NameAST, _Value]}) ->
-    extract_attr_name(Backend, NameAST);
-implied_attr_name(Backend, {tuple, _, [{bin, _, _} = NameAST, _Value]}) ->
-    extract_attr_name(Backend, NameAST);
-implied_attr_name(_Backend, {bin, _, _} = Bin) ->
-    extract_binary_value(Bin);
-implied_attr_name(Backend, {atom, _, Name}) ->
-    Backend:name(Name);
-implied_attr_name(_Backend, _Other) ->
+implied_attr(Backend, {tuple, _, [{atom, _, _} = NameAST, Value]}, Nodiff) ->
+    {extract_attr_name(Backend, NameAST), attr_kind(Value, Nodiff)};
+implied_attr(Backend, {tuple, _, [{bin, _, _} = NameAST, Value]}, Nodiff) ->
+    {extract_attr_name(Backend, NameAST), attr_kind(Value, Nodiff)};
+implied_attr(_Backend, {bin, _, _} = Bin, _Nodiff) ->
+    {extract_binary_value(Bin), static};
+implied_attr(Backend, {atom, _, Name}, _Nodiff) ->
+    {Backend:name(Name), static};
+implied_attr(_Backend, _Other, _Nodiff) ->
     undefined.
+
+%% Whether the diff can rewrite the value (`arizona_renderer:attr_kind/0`): a nodiff
+%% unit renders once, and a `?local`, whole or interpolated, is the client's.
+attr_kind(_Value, true) ->
+    static;
+attr_kind({atom, _, true}, false) ->
+    static;
+%% A choice's `selected` under a `?local` chooser value: only the page renders it, and
+%% the selection is the client's from then on (compile_dynamic_attr/5).
+attr_kind(
+    {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, ?CHOSEN_ONCE_MARK}}, [_]}, false
+) ->
+    static;
+attr_kind(Value, false) ->
+    case literal_text(Value) of
+        {ok, Text} ->
+            {static, Text};
+        error ->
+            case is_static_attr_value(Value) orelse attr_local_spec(Value, anno(Value)) =/= none of
+                true -> static;
+                false -> dynamic
+            end
+    end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
     State;
@@ -6945,7 +7065,7 @@ directive_opts_1(_Other) -> false.
 reject_framework_attrs(Backend, Attrs, Line) ->
     ok = reject_nested_directives(Attrs, Line),
     ok = reject_nodiff_value(Attrs, Line),
-    ok = reject_reserved_attrs(Attrs, Line),
+    ok = reject_reserved_attrs(Backend, Attrs, Line),
     reject_duplicate_attrs(Backend, Attrs, Line).
 
 %% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
@@ -7001,35 +7121,38 @@ bare_attr_name(_AtomName, {bin, _, _} = Bin) ->
 bare_attr_name(_AtomName, _) ->
     error.
 
-%% The two attribute names the transform emits into the rendered output itself:
-%% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
-%% carrying dynamics) and `az-local` (the `?local` descriptor injected by
-%% maybe_inject_local_descriptor/5). A template-authored copy is emitted *beside*
+%% The attribute names the backend emits into the rendered output itself
+%% (`Backend:reserved_attrs/0`) -- for HTML `az` (the element's diff address, from
+%% `Backend:az_attr/1` on any element carrying dynamics), `az-local` (the `?local`
+%% descriptor injected by maybe_inject_local_descriptor/5) and `az-bound` (a form
+%% control's server-owned properties, from `Backend:implied_attrs/3`; an authored one
+%% would claim or deny ownership the template does not have). A name the backend never
+%% emits is the author's. A template-authored copy is emitted *beside*
 %% the injected one: HTML keeps the first of a duplicate pair and the JSON wire
 %% keeps the last, so one of the two silently disappears -- and when the element
 %% has no dynamics the user's `az` is the only one, is fingerprint-scoped like a
 %% real address (`scope_static/2` rewrites every ` az="`), and can collide with a
 %% genuine slot id. The client resolves a slot with `querySelector('[az=...]')`,
 %% which takes the first match in document order, so the op then patches the wrong
-%% element. Reject both names at compile time.
+%% element. Reject them at compile time.
 %%
 %% Deliberately narrow: `az-view` has its own check (it is legal, and injected, on a
 %% live root), and every other `az-*` name is user territory -- `az-key` keys stream
 %% items, `az-click`/`az-submit`/... carry effects, and an app is free to invent its
 %% own `az-*` attributes.
-reserved_attr_name(undefined) ->
-    %% attr_name/1's "not a compile-time literal" answer (a dynamic attribute
-    %% name): there is no name to compare, so it is not a reserved one.
-    false;
-reserved_attr_name(Name) ->
-    is_reserved_attr_name(framework_attr_name(Name)).
-
-is_reserved_attr_name(~"az") -> true;
-is_reserved_attr_name(~"az-local") -> true;
-is_reserved_attr_name(_Other) -> false.
-
-reject_reserved_attrs(Attrs, Line) ->
-    case [Name || Attr <- Attrs, Name <- [attr_name(Attr)], reserved_attr_name(Name)] of
+%% attr_name/1 answers `undefined` for a name that is not a compile-time literal (a
+%% dynamic attribute name): there is no name to compare, so it is not a reserved one.
+reject_reserved_attrs(Backend, Attrs, Line) ->
+    Reserved = Backend:reserved_attrs(),
+    case
+        [
+            Name
+         || Attr <- Attrs,
+            Name <- [attr_name(Attr)],
+            Name =/= undefined,
+            lists:member(framework_attr_name(Name), Reserved)
+        ]
+    of
         [] -> ok;
         [Name | _] -> parse_error({reserved_attr, Name}, Line)
     end.

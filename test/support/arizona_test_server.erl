@@ -221,6 +221,13 @@ routes() ->
             bindings => #{title => <<"Form Submitter">>},
             layouts => Layouts
         }},
+        %% Server-owned form controls (az-bound): refused, normalised and accepted
+        %% edits reconcile to the server's value once each proposal is answered.
+        {live, <<"/bound-controls">>, arizona_bound_controls, #{
+            bindings => #{title => <<"Bound">>},
+            layouts => Layouts,
+            middlewares => [arizona_middleware:extract([params])]
+        }},
         %% arizona_js:fetch on_error -- the controller replies 500 with no effects body, so
         %% the client runs the fetch's on_error commands and fires arizona:fetch-error.
         {live, <<"/fetch-error">>, arizona_fetch_error, #{

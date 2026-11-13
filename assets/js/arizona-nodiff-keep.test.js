@@ -297,6 +297,34 @@ describe('a slot with an empty side', () => {
     });
 });
 
+// `[~"text ", {section, ['az-nodiff'], [?stateless(fun widget/1, #{})]}]` as a
+// conditional's branch, the widget an az-nodiff canvas with a hook: the section is
+// the fragment's one az-nodiff element, so it is named and kept whole on a resync,
+// the canvas with it. Marked bare it would keep nothing inside it.
+describe('the az-nodiff element of a mixed text and element fragment', () => {
+    const MIXED =
+        'text <section az-nodiff="1QGPF0N.b1"><canvas az-nodiff="I27MQS" az-hook="W">0</canvas></section>';
+
+    it('is kept with the az-nodiff element nested in it on a resync', () => {
+        const events = widgetHook();
+        setupPage(MIXED);
+        const canvas = document.querySelector('canvas');
+        applyOps([[OP.REPLACE, 'page', page(MIXED)]], true);
+        expect(document.querySelector('canvas')).toBe(canvas);
+        expect(events).toEqual(['mount:0']);
+    });
+
+    it('keeps nothing when marked bare', () => {
+        const events = widgetHook();
+        const bare = MIXED.replace('az-nodiff="1QGPF0N.b1"', 'az-nodiff');
+        setupPage(bare);
+        const canvas = document.querySelector('canvas');
+        applyOps([[OP.REPLACE, 'page', page(bare)]], true);
+        expect(canvas.isConnected).toBe(false);
+        expect(events).toEqual(['mount:0', 'destroy:0', 'mount:0']);
+    });
+});
+
 describe('OP.REPLACE', () => {
     it('keeps an az-nodiff element named again on a resync', () => {
         const events = widgetHook();

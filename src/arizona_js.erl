@@ -216,7 +216,15 @@ remove_class(Sel, Cls) -> {arizona_effect, [?EFFECT_REMOVE_CLASS, Sel, Cls]}.
     Class :: binary().
 toggle_class(Sel, Cls) -> {arizona_effect, [?EFFECT_TOGGLE_CLASS, Sel, Cls]}.
 
--doc "Sets an attribute on all elements matching the selector.".
+-doc """
+Sets an attribute on all elements matching the selector.
+
+On a form control whose live state the user can detach from its attribute, the
+write also sets that property, as a server diff does: `value` on a `<textarea>`,
+a `<select>` or a text-like `<input>`, `checked` on an `<input>`, `selected` on an
+`<option>`. So `set_attr(~"#qty", ~"value", ~"1")` puts `1` back in a field the
+user has typed into, which a diff cannot do when the server's value did not change.
+""".
 -spec set_attr(Selector, Attr, Value) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary(),
@@ -406,10 +414,9 @@ Unlike `focus/1`/`blur/1` (first match only), this broadcasts to every match,
 like the DOM-mutating selector effects (`toggle`, the class ops, `set_attr`). A
 match without a `reset()` method (a non-form element) is a safe no-op.
 
-Where `set_attr(value, ~"")` only rewrites the `value` **attribute** (leaving the
-user-typed value **property** untouched, and doing nothing at all for a
-`<textarea>` that has no value attribute), this drives the native form reset, so
-it clears text inputs and textareas alike. Unlike `az-form-reset` (which fires
+Where `set_attr/3` writes one attribute (and its live property) to one value on
+every match, this drives the native form reset, so each field returns to its own
+initial value. Unlike `az-form-reset` (which fires
 only on a successful submit/fetch), it's imperative: usable both as a web event
 command (e.g. `{az_click, arizona_js:reset_form(~"#signup")}`) and as a handler
 effect from `handle_event/3`.

@@ -25,6 +25,7 @@
 -export([page_without_body_is_left_as_rendered/1]).
 -export([target_decides_how_a_document_carries_names/1]).
 -export([leaves_the_collector_disarmed/1]).
+-export([marks_server_owned_controls/1]).
 
 all() ->
     [{group, generate}].
@@ -50,7 +51,8 @@ groups() ->
             page_without_events_has_no_attrs,
             page_without_body_is_left_as_rendered,
             target_decides_how_a_document_carries_names,
-            leaves_the_collector_disarmed
+            leaves_the_collector_disarmed,
+            marks_server_owned_controls
         ]}
     ].
 
@@ -216,6 +218,13 @@ collects_non_map_spec_opts(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+%% A generated page renders through the same compiled template as a live one, so a
+%% control's server-owned property is named there too.
+marks_server_owned_controls(Config) when is_list(Config) ->
+    Dir = subdir(Config, "bound"),
+    {[Out], []} = arizona_static:generate(Dir, [{arizona_textarea_child, ~"index.html"}]),
+    ?assertMatch({_, _}, binary:match(read(Out), ~" az-bound=\"value\">one</textarea>")).
 
 %% The static client delegates exactly the names the page carries: a counter's
 %% `az-click` is proven by the compiler and lands before `</body>`.

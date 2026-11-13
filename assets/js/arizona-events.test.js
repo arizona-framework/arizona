@@ -252,6 +252,21 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([['v', 'opened', {}]]);
     });
 
+    // `az-bound` names a control's server-owned properties; it is no event.
+    it('takes az-bound in host markup for a directive, not an event', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        const calls = recordListeners();
+
+        document.getElementById('v').innerHTML = `<input az-bound="value checked" value="x">`;
+        mod.mountHooks(document.getElementById('v'));
+
+        expect(calls.map(([t]) => t)).not.toContain('bound');
+    });
+
     it('fires a non-bubbling event only for the element that declares it', async () => {
         const mod = await fresh();
         document.body.innerHTML =

@@ -35,10 +35,11 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
-| `make test-e2e` | Playwright E2E tests (incl. the `json` wire project) |
+| `make test-e2e` | Playwright E2E tests (incl. the `json` wire and `firefox` projects; needs Chromium and Firefox, `make setup-e2e`) |
 | `make test-e2e-parallel` | Playwright `parallel` project only |
-| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, since its specs disturb every connection) |
+| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, `firefox` included, since its specs disturb every connection -- this target skips them with `--no-deps`) |
 | `make test-e2e-json` | Playwright `json` project only (`?json` wire, no browser) |
+| `make test-e2e-firefox` | Playwright `firefox` project only (the specs whose behaviour differs per engine, e.g. server-owned controls, in Firefox) |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -241,6 +242,10 @@ Update it from an event attribute (or handler effect) -- never reaches the serve
 Client JS: `arizona.set(viewId, key, value)` (always 3-arg -- the 2-arg `arizona_js:set/2` is template-only), `arizona.setAll(key, value)`, `arizona.get(key)` / `arizona.get(viewId, key)`. `get` returns DOM strings (no type preservation; absent/bare boolean attrs read back as `false`/`true`), except that a form control's live property is read -- `checked` on an `<input>` and `selected` on an `<option>` as a boolean, `value` on a `<select multiple>` as the list of selected values the local owns (a `set` there takes a list of picks, `false`/`null` none, any other value one pick; in a list value beside static parts each part is a pick of its own, kept by a `set` and left out of a `get`), `value` on a `<textarea>`/`<select>` or a text-like `<input>` (the HTML value mode "value": text, email, number, date, ...) as a string -- what the user sees, which the attribute stops tracking once they interact. An interpolated `?local` on one of those live `value`s (a text-like `<input>`, a `<textarea>`, a single `<select>`) reads the live value too, its static affixes stripped, and `null` once it no longer carries them (the user edited them away, or picked an option they do not compose). On any other element (`<li value>`, `<progress value>`, `<button value>`, a hidden/checkbox/radio/button `<input>`, ...) `value` is a plain attribute string. A write keeps that property in step too: `set(Key, false)`/`set(Key, null)` unchecks/clears a control the user already toggled or typed into. A `null`/`undefined` value renders empty in an interpolated attribute, as in content.
 
 **Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale -- an `OP_TEXT` that replaces a whole slot with a fresh fragment (a conditional branch swap, a plain-list or stream `?each` container render), an `OP_REPLACE` navigate, or an `?each` item re-materialised by `OP_INSERT` -- or on a forced reconnect. Inside `?each`, every item shares the slot **key** -- keys are compile-time literals (no `?local(<<"open_", Id/binary>>, ...)`), so `set`/`set_all` updates **all** items at once; `?local` can't hold per-item independent client state in a list/stream (use server state for that). The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
+
+The opposite, a form control whose value the server renders (`az-bound`), shows the server's value once each event proposing an edit is answered: update the binding synchronously in `handle_event/3`, and opt a control out with a static value or `?local(K, ?get(x))` ("Server-owned form controls" in [docs/architecture.md](docs/architecture.md)).
+
+**A `{value, ?get(x)}` an event proposes is a controlled input** (so is a dynamic `checked`/`selected` and a textarea's dynamic content): one whose own `push_event`, or its form's (an `az_submit`, a form `az_change`), sends it is reconciled to the server's value on the reply; a control with no such event, or under an `az-nodiff` element, is not. That is a breaking change in behaviour: a submit whose handler shows a validation error without storing the submitted params reverts the fields to the old bindings, since its reply changed nothing. Store the params in the bindings the fields render (`{Bindings#{email => Email, error => Msg}, #{}, []}`), or keep a field client-owned with `{value, ?local(~"email", ?get(email))}`.
 
 ## Keyed lists -- `arizona_stream` and `on_limit`
 

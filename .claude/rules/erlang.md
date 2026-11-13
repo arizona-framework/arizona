@@ -87,6 +87,24 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, false}` | `{hidden, false}` | Stripped (`?json` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
 
+A form control whose shown state the server renders gets a static `az-bound` in the `?html`
+target, after its attributes, naming the properties the server owns: `value` / `checked` of an
+`input` with that attribute dynamic (`az-bound="value checked"` for both), `selected` of an
+`option`, `value` of a `textarea` with dynamic content. A static `type` narrows an `input`:
+`value` only in the "value" value mode (not `hidden`, the buttons, `file`, or the checkable
+types, where the property reflects the attribute or refuses a write), `checked` only on a
+`checkbox` or `radio`; a dynamic or absent `type` keeps both. Dynamic means a value the diff can
+rewrite: a `?get`, an expression, an interpolated list with a dynamic part, a `?raw`, a
+conditional, or the `selected` a select's server-rendered `value` gives each option ("A `value`
+on a `select`" below) -- not a literal, a static `true`/`false`, or a `?local` (the client's,
+which also leaves the options of a select whose value is one to the client), and nothing in a
+nodiff unit. The DOM cannot tell these apart (a dynamic `checked` that is `false`
+renders no attribute), and the client needs them to correct a control the user edited when the
+server keeps its value (`arizona_renderer:implied_attrs/3`). The handler's side of that: update
+the bound binding synchronously in `handle_event/3` (a later `?send` can lose a keystroke), and
+keep a control client-owned with a static value or `?local(K, ?get(x))` (see "Server-owned
+form controls" in docs/architecture.md).
+
 A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target
 (appended after its attributes), so a submit made before the client script runs never puts the
 fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
@@ -162,10 +180,13 @@ keeps its meaning as a value: it is escaped exactly as the runtime would escape 
 bare binary literal child, which is spliced as raw markup. Inside raw-text elements
 (`script`/`style`/`textarea`/`title`) it is not folded and keeps the dynamic-slot rules.
 
-Two names are reserved because the transform emits them itself and a duplicate would
-misroute a patch: `az` (the element's diff address) and `az-local` (the `?local`
-descriptor). Either one in a template is a compile error (`reserved_attr`), in any form
-(`{az, V}`, bare `az`, `<<"az">>`, `az_local`). `az-nodiff` is written bare only: its
+The `?html` target reserves three names because it emits them itself: `az` (the element's
+diff address) and `az-local` (the `?local` descriptor), whose duplicate would misroute a
+patch, and `az-bound` (a form control's server-owned properties, below), whose authored
+copy would claim or deny ownership. Any of them in a template is a compile error
+(`reserved_attr`), in any form (`{az, V}`, bare `az`, `<<"az">>`, `az_local`, `az_bound`).
+Each backend names its own set (`reserved_attrs/0`): `?json` reserves only `az`, so an
+`az_bound` prop there is the author's. `az-nodiff` is written bare only: its
 value in the HTML is the compiler's (the az-nodiff element token), so `{'az-nodiff', V}` /
 `{az_nodiff, true}` is a compile error (`nodiff_value`). `az-view` has its own rule -- injected on a
 live root, rejected elsewhere. Everything else `az-*` is the template author's: `az_key`
@@ -302,7 +323,7 @@ matches every entry.
 
 ## az-nodiff
 
-Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time directive and emits `diff => false`. All dynamics in that compile unit get `undefined` Az (pre-scanned via `prescan_directives/1`), and no `az` attribute or `<!--az:...-->` slot marker is emitted. The directive itself stays in the HTML as a compiler-owned attribute on the element that carries it (html target only, `supports_nodiff_keep/0`): `az-nodiff="TOKEN"` on a keepable az-nodiff element root -- the single root element of a template, or of a **keyed** `?each` item -- and a bare `az-nodiff` on one that is client-owned but not keepable -- an unkeyed `?each` item root, or a root of a multi-element fragment. A template that only inherits nodiff, a layout, a mixed text+element fragment, and the `?json`/`?terminal` targets emit nothing. The bare form is the only one an author writes; a value is a compile error (`nodiff_value`).
+Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time directive and emits `diff => false`. All dynamics in that compile unit get `undefined` Az (pre-scanned via `prescan_directives/1`), and no `az` attribute or `<!--az:...-->` slot marker is emitted. The directive itself stays in the HTML as a compiler-owned attribute on **every element root** of the compile unit that carries it, not only the element it is written on (html target only, `supports_nodiff_keep/0`): the client tells what never diffs only by that marker, and a component's control under an unmarked root would look live. It is `az-nodiff="TOKEN"` on a keepable az-nodiff element root -- the single root element of a template, or of a **keyed** `?each` item, or the one element carrying the directive in a mixed text+element fragment (its token after no dynamic, so a runtime branch stamp finds it; its `az_key` names it as on a single root) -- and a bare `az-nodiff` on one that is client-owned but not keepable -- an unkeyed `?each` item root, a root of a multi-element fragment, or any other element root of a mixed fragment. A kept element carries every az-nodiff element nested in it along; a bare one carries none. A root that is not an element carries no marker, which matters only for a server-owned control (`az-bound`) rendered there. So a value at such a root -- a `?stateless`, nested template, `?each`, conditional, helper or variable -- is checked once it has rendered, on the path that renders it anyway (SSR, the live mount and a wholesale re-render alike), and raises `nodiff_root_markup` only when it shows such a control outside a child view (which diffs its own template) and outside an az-nodiff unit of its own (whose element roots carry the marker). Both are structural facts the parse transform stamps on each compiled template it applies to (`bound` when an element of it names server-owned properties, `nodiff_marked` when its element roots carry the marker; absent means false), and a snapshot carries them, so an `?each` is decided once from its item template and its items are looked into only when that template has neither; text or an attribute value that merely mentions either attribute decides nothing. Everything else renders as it would anywhere; a `?stateful` at the root is its own view and is not checked. Put a component with a form control inside an element of the fragment. A template that only inherits nodiff, a layout, and the `?json`/`?terminal` targets emit nothing. The bare form is the only one an author writes; a value is a compile error (`nodiff_value`).
 
 **It inherits downward.** Every template nested in a nodiff one renders once with it, so the directive reaches all of them at compile time: conditional-branch templates, nested `?html`/`?json`/`?terminal`, `?each` item templates at any depth, hoisted constructors and inlined local helpers all compile nodiff and emit no markers. `az_nodiff` on an `?each` item's root element, or on a bare element in a conditional branch, reaches the templates nested in it the same way, and a layout (auto-nodiff via `?inner_content`) inherits too. It stops where what is built can land in a live view's diffed slot, where a nodiff value never updates in place: a `?stateful` child's props, and any fun, anonymous or named, other than an `?each` callback (a fun prop is called later, by whichever view receives it). A `?stateless` callback is a separate compile unit that may also be used live, so it keeps its own markers. A `?local` under a nodiff template still works: only the element holding a content local gets an `az` and that slot's marker (an attribute-only local needs neither). Outside any view -- a layout -- the client reaches it with `set_all`.
 

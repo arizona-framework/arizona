@@ -53,7 +53,8 @@ the wire value. On the wire itself a value stays raw
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([keyed_item_ops/0]).
--export([implied_attrs/2]).
+-export([implied_attrs/3]).
+-export([reserved_attrs/0]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -185,8 +186,14 @@ supports_nodiff_keep() -> false.
 
 keyed_item_ops() -> true.
 
--spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [].
-implied_attrs(_Tag, _Names) -> [].
+-spec implied_attrs(
+    arizona_renderer:tag(), [{binary(), arizona_renderer:attr_kind()}], boolean()
+) ->
+    {[], false}.
+implied_attrs(_Tag, _Attrs, _DynamicContent) -> {[], false}.
+
+-spec reserved_attrs() -> [binary()].
+reserved_attrs() -> [~"az"].
 
 boolean_attrs() -> value.
 

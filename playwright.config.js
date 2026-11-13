@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
 const PORT = process.env.PORT || '4041';
 const BASE_URL = `http://localhost:${PORT}`;
@@ -38,7 +38,17 @@ export default defineConfig({
             testDir: './e2e/sequential',
             fullyParallel: false,
             workers: 1,
-            dependencies: ['parallel', 'json'],
+            dependencies: ['parallel', 'json', 'firefox'],
+        },
+        {
+            // Behaviour that differs per engine (form restoration on reload, undo,
+            // caret, date and number editing): the server-owned control spec runs in
+            // Firefox too. Scoped to that spec, so the rest of the suite stays
+            // Chromium-only.
+            name: 'firefox',
+            testDir: './e2e/parallel',
+            testMatch: 'arizona_bound_controls.spec.js',
+            use: { ...devices['Desktop Firefox'] },
         },
         {
             // Native (JSON) wire e2e: a real WebSocket client (no browser),

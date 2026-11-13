@@ -37,11 +37,14 @@ function decodeRawAttr(raw) {
  * always means true (false diffs to REM_ATTR). A command value arrives as its
  * JSON array, not attribute text, so it is written back as JSON. A `?raw` value
  * arrives tagged `{raw}`: it is attribute markup, decoded the way SSR's parse did.
+ * `prop` false writes the attribute only: the diff path's write to a bound control
+ * a proposal still waits on.
  * @param {Element} el
  * @param {string} name
  * @param {string | unknown[] | {raw: string}} val
+ * @param {boolean} [prop]
  */
-export function applySetAttrOp(el, name, val) {
+export function applySetAttrOp(el, name, val, prop = true) {
     if (Array.isArray(val)) val = JSON.stringify(val);
     else if (typeof val !== 'string') val = decodeRawAttr(val.raw);
     // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name no
@@ -55,8 +58,9 @@ export function applySetAttrOp(el, name, val) {
     const held = name === 'multiple' ? heldLocal(el) : null;
     el.setAttribute(name, val);
     if (held) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), held);
-    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
-    else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
+    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), prop);
+    else if (prop && syncsProp(el, name))
+        /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
 
@@ -69,13 +73,15 @@ export function applySetAttrOp(el, name, val) {
  * to that empty default (the dirty flags would otherwise keep the stale state).
  * @param {Element} el
  * @param {string} name
+ * @param {boolean} [prop]
  */
-export function applyRemAttrOp(el, name) {
+export function applyRemAttrOp(el, name, prop = true) {
     const held = name === 'multiple' ? heldLocal(el) : null;
     el.removeAttribute(name);
     if (held) carryChooserLocal(/** @type {HTMLSelectElement} */ (el), held);
-    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), true);
-    else if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
+    else if (isChooserValue(el, name)) applyChooser(/** @type {HTMLSelectElement} */ (el), prop);
+    else if (prop && syncsProp(el, name))
+        /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
 }
 

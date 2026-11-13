@@ -326,6 +326,8 @@ wrap_val({arizona_raw, V}, Mode) ->
     {arizona_raw, wrap_val(V, Mode)};
 wrap_val({arizona_markup, V}, Mode) ->
     {arizona_markup, wrap_val(V, Mode)};
+wrap_val({arizona_nodiff_root, V}, Mode) ->
+    {arizona_nodiff_root, wrap_val(V, Mode)};
 wrap_val(#{t := ?EACH, template := #{d := DFun} = ItemTmpl} = Each, Mode) when
     is_function(DFun, 1)
 ->

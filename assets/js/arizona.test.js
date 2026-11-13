@@ -2302,6 +2302,28 @@ describe('applyOps -- OP.TEXT edge cases', () => {
         applyOps([[OP.TEXT, 'v:0', '']]);
         expect(resolveEl('v:0').textContent).toBe('');
     });
+
+    // A textarea's content is only its default value: once the user types, the
+    // shown value detaches from it, so a content write alone changes nothing on
+    // screen.
+    it('shows the new content of a textarea the user typed in', () => {
+        setupView('v', '<textarea az="0">old</textarea>');
+        const ta = /** @type {HTMLTextAreaElement} */ (resolveEl('v:0'));
+        ta.value = 'typed';
+        applyOps([[OP.TEXT, 'v:0', 'new &amp; <b>', true]]);
+        expect(ta.defaultValue).toBe('new & <b>');
+        expect(ta.value).toBe('new & <b>');
+        applyOps([[OP.TEXT, 'v:0', 'plain']]);
+        expect(ta.value).toBe('plain');
+    });
+
+    it('shows the new content of a typed-in textarea inside a stream item', () => {
+        setupView('v', '<ul az="0"><li az-key="k"><textarea az="1">old</textarea></li></ul>');
+        const ta = /** @type {HTMLTextAreaElement} */ (document.querySelector('textarea'));
+        ta.value = 'typed';
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k', [[OP.TEXT, '1', 'new', true]]]]);
+        expect(ta.value).toBe('new');
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -4606,6 +4628,55 @@ describe('saveFormState / restoreFormState edge cases', () => {
         expect(t.value).toBe('typed');
     });
 
+    // An email or url input trims what it is given, so text with whitespace around it
+    // keeps the resync's value there; what an email input already trimmed restores.
+    it('keeps the resync value of an email or url input the saved text would be trimmed in', () => {
+        document.body.innerHTML =
+            '<form id="f"><input name="e"><input name="u"><input type="email" name="e2"></form>';
+        const set = (/** @type {string} */ n, /** @type {string} */ v) => {
+            /** @type {any} */ (document.querySelector(`[name=${n}]`)).value = v;
+        };
+        set('e', '  a@b.c ');
+        set('u', ' http://x ');
+        set('e2', ' z@b.c ');
+        saveFormState();
+        document.body.innerHTML =
+            '<form id="f"><input type="email" name="e" value="srv">' +
+            '<input type="url" name="u" value="srv"><input type="email" name="e2"></form>';
+        restoreFormState();
+        const vs = [...document.querySelectorAll('input')].map((e) => /** @type {any} */ (e).value);
+        expect(vs).toEqual(['srv', 'srv', 'z@b.c']);
+    });
+
+    // Boxes pair by value, so a text field's position on its name counts the name's
+    // other fields only: a radio added to an "Other" choice keeps the typed text.
+    it('keeps a text field sharing a radio group name in place when the resync adds a radio', () => {
+        const radio = (/** @type {string} */ v) => `<input type="radio" name="c" value="${v}">`;
+        document.body.innerHTML = `<form id="f">${radio('r')}<input name="c"></form>`;
+        /** @type {any} */ (document.querySelector('input:not([type])')).value = 'purple';
+        saveFormState();
+        document.body.innerHTML = `<form id="f">${radio('r')}${radio('g')}<input name="c"></form>`;
+        restoreFormState();
+        expect(/** @type {any} */ (document.querySelector('input:not([type])')).value).toBe(
+            'purple',
+        );
+    });
+
+    it('keeps each text field its edit when the resync removes a box of their name ahead of them', () => {
+        document.body.innerHTML =
+            '<form id="f"><input type="checkbox" name="n" value="x">' +
+            '<input name="n" id="a"><input name="n"></form>';
+        const [a, b] = document.querySelectorAll('input:not([type])');
+        /** @type {any} */ (a).value = '';
+        /** @type {any} */ (b).value = 'mine';
+        saveFormState();
+        document.body.innerHTML =
+            '<form id="f"><input name="n" id="a2" value="s1"><input name="n" value="s2"></form>';
+        restoreFormState();
+        const vs = [...document.querySelectorAll('input')].map((e) => /** @type {any} */ (e).value);
+        expect(vs).toEqual(['', 'mine']);
+    });
+
     it('saves and restores checkboxes', () => {
         document.body.innerHTML =
             '<form id="f"><input type="checkbox" name="agree" checked></form>';
@@ -5329,6 +5400,118 @@ describe('crash and mount-failure recovery', () => {
         expect(changeSends(m)).toBe(1);
     });
 
+    // A replayed command list that parses but crashes the interpreter must not end the
+    // restore: the other forms keep what was typed and the saved state is spent.
+    it('a replay that throws still restores the other forms', async () => {
+        const v =
+            '<div id="page" az-view>' +
+            '<form id="f" az-change=\'[[1,"#["],[0,"changed"]]\'><input name="q" value=""></form>' +
+            '<form id="g"><input name="r" value=""></form></div>';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const m = await start();
+        document.body.innerHTML = v;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        field('q').value = 'a';
+        field('r').value = 'b';
+        m.simulateClose(1006);
+        m.simulateOpen(true);
+        expect(() => m.simulateMessage([[8, 'page', v]], null, true)).not.toThrow();
+        expect(field('q').value).toBe('a');
+        expect(field('r').value).toBe('b');
+        // Spent: the next resync shows the server's values.
+        m.simulateClose(1006);
+        field('r').value = '';
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', v]], null, true);
+        expect(field('r').value).toBe('');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('replayed'));
+        warn.mockRestore();
+    });
+
+    // One warning per replay that fails, not one per page: a second form's broken
+    // command list is a different failure and must not be swallowed by the first's.
+    it('warns for each replay that throws', async () => {
+        const bad = '[[1,"#["],[0,"changed"]]';
+        const v =
+            '<div id="page" az-view>' +
+            `<form id="w1" az-change='${bad}'><input name="q" value=""></form>` +
+            `<form id="w2" az-change='${bad}'><input name="r" value=""></form></div>`;
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const m = await start();
+        document.body.innerHTML = v;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        field('q').value = 'a';
+        field('r').value = 'b';
+        m.simulateClose(1006);
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', v]], null, true);
+        const replayWarns = warn.mock.calls.filter(([msg]) => String(msg).includes('replayed'));
+        expect(replayWarns).toHaveLength(2);
+        warn.mockRestore();
+    });
+
+    // A form's replay and a field's are told apart however their ids and names
+    // read when joined: form `k1 x` and field `x` of form `k1` are two failures.
+    it('warns apart for a form and a field whose keys read alike', async () => {
+        const bad = '[[1,"#["],[0,"changed"]]';
+        const v =
+            '<div id="page" az-view>' +
+            `<form id="k1 x" az-change='${bad}'><input name="q" value=""></form>` +
+            `<form id="k1"><input name="x" value="" az-bound="value" az-change='${bad}'></form></div>`;
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const m = await start();
+        document.body.innerHTML = v;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        field('q').value = 'a';
+        field('x').value = 'b';
+        field('x').dispatchEvent(new Event('input', { bubbles: true }));
+        m.simulateClose(1006);
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', v]], null, true);
+        const replayWarns = warn.mock.calls.filter(([msg]) => String(msg).includes('replayed'));
+        expect(replayWarns).toHaveLength(2);
+        warn.mockRestore();
+    });
+
+    // Two controls whose replays fail are two failures, each warned, also where no
+    // name tells them apart: two nameless formless controls by id, two controls of
+    // one form sharing a name by position.
+    it.each([
+        [
+            'ids',
+            (/** @type {string} */ c) =>
+                c.replace('<select', '<select id="n1a"') + c.replace('<select', '<select id="n1b"'),
+        ],
+        [
+            'positions',
+            (/** @type {string} */ c) =>
+                `<form id="n2">${c.replace('<select', '<select name="s"').repeat(2)}</form>`,
+        ],
+    ])('warns apart for owned controls told apart by %s', async (_label, wrap) => {
+        const bad = '[[1,"#["],[0,"changed"]]';
+        const opt = (n) => `<option az-bound="selected" value="${n}">${n}</option>`;
+        const ctl = `<select az-change='${bad}'>${opt(1)}${opt(2)}</select>`;
+        const v = `<div id="page" az-view>${wrap(ctl)}</div>`;
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const m = await start();
+        document.body.innerHTML = v;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        for (const s of document.querySelectorAll('select')) {
+            s.value = '2';
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        m.simulateClose(1006);
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', v]], null, true);
+        const replayWarns = warn.mock.calls.filter(([msg]) => String(msg).includes('replayed'));
+        expect(replayWarns).toHaveLength(2);
+        warn.mockRestore();
+    });
+
     it('keeps what was typed while disconnected', async () => {
         const m = await startWithForms();
         field('q').value = 'before';
@@ -5336,6 +5519,74 @@ describe('crash and mount-failure recovery', () => {
         field('q').value = 'during';
         remount(m);
         expect(field('q').value).toBe('during');
+    });
+
+    // A replay re-sends what was typed; an az-change that sends nothing (a toggle,
+    // a navigate) would only repeat its side effect.
+    it('replays no form az-change that neither pushes nor fetches', async () => {
+        const v =
+            '<div id="page" az-view>' +
+            '<form id="f" az-change=\'[[1,"#x"],[9,"#x","ping",{}]]\'><input name="q" value=""></form>' +
+            '<p id="x"></p></div>';
+        const m = await start();
+        document.body.innerHTML = v;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        const before = m.getSentMessages().length;
+        field('q').value = 'typed';
+        m.simulateClose(1006);
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', v]], null, true);
+        expect(field('q').value).toBe('typed');
+        expect(/** @type {HTMLElement} */ (document.querySelector('#x')).hidden).toBe(false);
+        expect(m.getSentMessages().slice(before)).toEqual([]);
+    });
+
+    // A static az-* value is app data, not JSON: saving the forms must not throw,
+    // or the close never announces the disconnect and, once another form was
+    // saved, the resync's own save throws before its ops apply.
+    it.each(
+        [
+            ['a formless field', '<input id="q" name="q" value="" az-input="lookup">'],
+            [
+                'a bound field',
+                '<input id="q" name="q" value="" az-bound="value" az-input="lookup">',
+            ],
+            ['a form', '<form id="f" az-change="save"><input name="q" value=""></form>'],
+        ].map(([label, ctl]) => [label, `<form id="a"><input name="a" value=""></form>${ctl}`]),
+    )('applies the resync around %s whose az-* value is not JSON', async (_label, ctl) => {
+        const m = await start();
+        document.body.innerHTML = `<div id="page" az-view>${ctl}<p id="x">old</p></div>`;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {string[]} */
+        const events = [];
+        const record = (/** @type {Event} */ e) => events.push(e.type);
+        /** @type {unknown[]} */
+        const thrown = [];
+        // As a browser does, a throw ends only the handler it escapes from, so
+        // what it leaves undone is what the page shows.
+        const deliver = (/** @type {() => void} */ f) => {
+            try {
+                f();
+            } catch (err) {
+                thrown.push(err);
+            }
+        };
+        document.addEventListener('arizona:disconnected', record);
+        deliver(() => m.simulateClose(1006));
+        deliver(() => m.simulateOpen(true));
+        deliver(() =>
+            m.simulateMessage(
+                [[8, 'page', `<div id="page" az-view>${ctl}<p id="x">new</p></div>`]],
+                null,
+                true,
+            ),
+        );
+        document.removeEventListener('arizona:disconnected', record);
+        expect(events).toEqual(['arizona:disconnected']);
+        expect(/** @type {HTMLElement} */ (document.querySelector('#x')).textContent).toBe('new');
+        expect(thrown).toEqual([]);
     });
 
     it('a crash before any user interaction after a replay restores without replaying', async () => {
