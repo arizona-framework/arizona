@@ -302,9 +302,9 @@ reloader_status_ok(_Config) ->
 %% A node serving stale code (loaded code differs from the beam on disk -- e.g.
 %% a rebuild outside the watcher's eye) must be reported, not read "ok"; an
 %% agent asking the dev node otherwise debugs against code that isn't running.
-reloader_status_reports_stale_modules(_Config) ->
+reloader_status_reports_stale_modules(Config) ->
     ok = arizona_reloader:clear_error(),
-    Dir = tmp_dir(),
+    Dir = tmp_dir(reloader_status_reports_stale_modules, Config),
     Mod = az_dev_mcp_stale,
     try
         {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
@@ -332,8 +332,8 @@ reload_ok_reports_no_agent(_Config) ->
 
 %% The thing an agent wants after reloader_status reports drift: force the
 %% loaded code back in sync with the beams on disk, and say what was reloaded.
-reload_syncs_stale_module(_Config) ->
-    Dir = tmp_dir(),
+reload_syncs_stale_module(Config) ->
+    Dir = tmp_dir(reload_syncs_stale_module, Config),
     Mod = az_dev_mcp_reload,
     try
         {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
@@ -615,10 +615,12 @@ encode_json(Term) ->
 
 %% --- stale-module fixtures (the arizona_reloader_SUITE consistency pattern) ---
 
-tmp_dir() ->
-    Dir = filename:join(
-        "/tmp", "arizona_dev_mcp_ct_" ++ integer_to_list(erlang:unique_integer([positive]))
-    ),
+%% Under the run's priv_dir: a unique_integer is unique per node only, and two
+%% fresh CT nodes (parallel worktrees) hand out the same ones. One per testcase,
+%% so a case whose `after` never ran (a timetrap kill) leaves nothing the other
+%% case's strict make_dir trips on.
+tmp_dir(TC, Config) ->
+    Dir = filename:join(proplists:get_value(priv_dir, Config), atom_to_list(TC)),
     ok = file:make_dir(Dir),
     Dir.
 
