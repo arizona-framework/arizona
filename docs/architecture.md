@@ -2850,11 +2850,13 @@ never rendered either: it counts as changed, the conservative answer. The snapsh
 advanced to the new values when the re-render is suppressed, so nothing drifts.
 
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
-context (`raw_text_kind/2`, second argument `html | foreign`), threaded through the transform by
-`content_context/2`: `<svg>` opens foreign content and `<foreignObject>` switches back. In foreign
-content an element is ordinary parsed markup -- comments really are comments -- so `title` is
-classified `none` there and its slot keeps markers and stays diffable. It is the only tag that
-differs: `script`/`style` stay `raw` in both, and `textarea` cannot appear in foreign content.
+context (`raw_text_kind/2`, second argument `undefined | foreign`: HTML content or foreign),
+threaded through the transform by `content_context/2`: `<svg>` opens foreign content and its HTML
+integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their
+children. In foreign content an element is ordinary parsed markup -- comments really are comments
+-- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`, `script` or
+`style` keeps its slot markers and stays diffable, and an SVG `textArea` is no RCDATA element (no
+newline after its start tag, no `az-ctl`).
 This matters because an SVG `<title>` is a graphic's accessible name, so a bound one would
 otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -- it would need
 its own integration points to be correct, and leaving it in `html` keeps existing behaviour rather
