@@ -52,6 +52,7 @@
     escape_clean_value_not_rebuilt/1,
     escape_matches_reference/1,
     cr_and_nul_render_as_the_page_holds_them/1,
+    textarea_keeps_a_leading_newline/1,
     raw_text_breakout_neutralized/1,
     raw_text_breakout_neutralized_for_chardata/1,
     raw_text_breakout_neutralized_for_atom/1,
@@ -185,6 +186,7 @@ groups() ->
             escape_clean_value_not_rebuilt,
             escape_matches_reference,
             cr_and_nul_render_as_the_page_holds_them,
+            textarea_keeps_a_leading_newline,
             raw_text_breakout_neutralized,
             raw_text_breakout_neutralized_for_chardata,
             to_bin_rejects_non_chardata_list,
@@ -557,7 +559,7 @@ cr_and_nul_render_as_the_page_holds_them(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(Cr, ~" title=\"a&#13;\nb\""), Cr),
     ?assertNotEqual(nomatch, binary:match(Cr, ~"-->a&#13;\nb<!--"), Cr),
     ?assertNotEqual(nomatch, binary:match(Cr, ~" value=\"a&#13;\nb\""), Cr),
-    ?assertNotEqual(nomatch, binary:match(Cr, ~">a&#13;\nb</textarea>"), Cr),
+    ?assertNotEqual(nomatch, binary:match(Cr, ~">\na&#13;\nb</textarea>"), Cr),
     %% The `?local` initial and its static affix both keep their CR.
     ?assertNotEqual(nomatch, binary:match(Cr, ~" title=\"x&#13;\ny\""), Cr),
     ?assertNotEqual(nomatch, binary:match(Cr, ~" value=\"x&#13;\ny\""), Cr),
@@ -565,7 +567,7 @@ cr_and_nul_render_as_the_page_holds_them(Config) when is_list(Config) ->
     Nul = render_bin(arizona_cr_nul:render(#{t => <<"a", 0, "b">>})),
     ?assertNotEqual(nomatch, binary:match(Nul, <<" title=\"a", Fffd/binary, "b\"">>), Nul),
     ?assertNotEqual(nomatch, binary:match(Nul, <<"-->a", Fffd/binary, "b<!--">>), Nul),
-    ?assertNotEqual(nomatch, binary:match(Nul, <<">a", Fffd/binary, "b</textarea>">>), Nul),
+    ?assertNotEqual(nomatch, binary:match(Nul, <<">\na", Fffd/binary, "b</textarea>">>), Nul),
     ?assertEqual(nomatch, binary:match(Nul, <<0>>), Nul),
     %% The live diff ships the value itself (the client writes it, see
     %% arizona-escape.test.js); a re-rendered textarea's content is markup, escaped
@@ -583,6 +585,19 @@ cr_and_nul_render_as_the_page_holds_them(Config) when is_list(Config) ->
         ],
         Ops
     ).
+
+%% The parser drops a newline right after a `<textarea>` start tag (a reference to one
+%% included), while a live update writes the content through the DOM, keeping it. So
+%% the start tag is followed by a newline of its own, the one the parser drops, and a
+%% value starting with one keeps it on the page as in a live update.
+textarea_keeps_a_leading_newline(Config) when is_list(Config) ->
+    HTML = render_bin(arizona_cr_nul:render(#{t => ~"\nX"})),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~" az-ctl=\"content\">\n\nX</textarea>"), HTML),
+    Empty = render_bin(arizona_cr_nul:render(#{t => <<>>})),
+    ?assertNotEqual(nomatch, binary:match(Empty, ~" az-ctl=\"content\">\n</textarea>"), Empty),
+    {_, Snap0, V0} = arizona_render:render(arizona_cr_nul:render(#{t => ~"i"}), #{}),
+    {Ops, _, _} = arizona_diff:diff(arizona_cr_nul:render(#{t => ~"\nX"}), Snap0, V0, #{t => true}),
+    ?assertMatch([_, _, _, [?OP_TEXT, _, #{~"d" := [~"\nX"], ~"s" := [<<>>, <<>>]}]], Ops).
 
 %% Seeded values over `Alphabet`, the rand state threaded explicitly so the
 %% process-global state is left alone.

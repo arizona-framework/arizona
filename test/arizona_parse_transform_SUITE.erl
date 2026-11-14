@@ -4696,7 +4696,7 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
         {_, _},
         binary:match(
             Render("pt_ctl_textarea", "{textarea, [], [" ++ Get("t") ++ "]}"),
-            <<"-0\" az-ctl=\"content\">hi</textarea>">>
+            <<"-0\" az-ctl=\"content\">\nhi</textarea>">>
         )
     ).
 
@@ -6780,7 +6780,7 @@ nodiff_inherited_raw_text(Config) when is_list(Config) ->
         "    ). "
     ),
     ?assertEqual(
-        <<"<div><textarea>&lt;/script&gt;&amp;</textarea><script><\\/script>&</script></div>">>,
+        <<"<div><textarea>\n&lt;/script&gt;&amp;</textarea><script><\\/script>&</script></div>">>,
         render_markerless(Mod:render(#{f => true, c => ~"</script>&"}))
     ).
 

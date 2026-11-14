@@ -9,21 +9,21 @@ import { resolveHtml } from './arizona-core.js';
 // arizona_render_SUITE asserts them): the page and a live update must agree.
 
 const LOCAL =
-    '<span az="YK753W-3" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;k&quot;},' +
+    '<span az="K57YC-3" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;k&quot;},' +
     '&quot;ap&quot;:{&quot;title&quot;:[&quot;&quot;,&quot;\\ny&quot;]}}" title="x&#13;\ny"></span>' +
-    '<input az="YK753W-4" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;q&quot;},' +
+    '<input az="K57YC-4" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;q&quot;},' +
     '&quot;ap&quot;:{&quot;value&quot;:[&quot;&quot;,&quot;\\r\\ny&quot;]}}" value="x&#13;\ny" />' +
-    '<input az="YK753W-5" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;u&quot;},' +
+    '<input az="K57YC-5" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;u&quot;},' +
     '&quot;ap&quot;:{&quot;value&quot;:[&quot; &quot;,&quot;/ &quot;]}}" type="url" value=" x/ " />' +
-    '<input az="YK753W-6" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;m&quot;},' +
+    '<input az="K57YC-6" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;m&quot;},' +
     '&quot;ap&quot;:{&quot;value&quot;:[&quot; a@b.c ,\\n &quot;,&quot; , g@h.i &quot;]}}" ' +
     'type="email" multiple value=" a@b.c ,\n d@e.f , g@h.i " />';
 
 /** @param {string} v */
 const page = (v) =>
-    `<div><p az="YK753W-0" title="${v}"><!--az:YK753W-0-->${v}<!--/az--></p>` +
-    `<input az="YK753W-1" value="${v}" az-ctl="value" />` +
-    `<textarea az="YK753W-2" az-ctl="content">${v}</textarea>${LOCAL}</div>`;
+    `<div><p az="K57YC-0" title="${v}"><!--az:K57YC-0-->${v}<!--/az--></p>` +
+    `<input az="K57YC-1" value="${v}" az-ctl="value" />` +
+    `<textarea az="K57YC-2" az-ctl="content">\n${v}</textarea>${LOCAL}</div>`;
 
 const FFFD = '�';
 
@@ -60,10 +60,10 @@ describe('CR and NUL in rendered values', () => {
         });
         load(page('i'));
         applyOps([
-            [1, 'v:YK753W-0', 'title', 'a\r\nb'],
-            [0, 'v:YK753W-0', 'a\r\nb'],
-            [1, 'v:YK753W-1', 'value', 'a\r\nb'],
-            [0, 'v:YK753W-2', resolveHtml({ d: ['a&#13;\nb'], f: 'x', s: ['', ''] }), true],
+            [1, 'v:K57YC-0', 'title', 'a\r\nb'],
+            [0, 'v:K57YC-0', 'a\r\nb'],
+            [1, 'v:K57YC-1', 'value', 'a\r\nb'],
+            [0, 'v:K57YC-2', resolveHtml({ d: ['a&#13;\nb'], f: 'x', s: ['', ''] }), true],
         ]);
         expect(read()).toEqual(ssr);
     });
@@ -74,10 +74,10 @@ describe('CR and NUL in rendered values', () => {
         expect(ssr.text).toBe(`a${FFFD}b`);
         load(page('i'));
         applyOps([
-            [1, 'v:YK753W-0', 'title', 'a\0b'],
-            [0, 'v:YK753W-0', 'a\0b'],
-            [1, 'v:YK753W-1', 'value', 'a\0b'],
-            [0, 'v:YK753W-2', resolveHtml({ d: [`a${FFFD}b`], f: 'x', s: ['', ''] }), true],
+            [1, 'v:K57YC-0', 'title', 'a\0b'],
+            [0, 'v:K57YC-0', 'a\0b'],
+            [1, 'v:K57YC-1', 'value', 'a\0b'],
+            [0, 'v:K57YC-2', resolveHtml({ d: [`a${FFFD}b`], f: 'x', s: ['', ''] }), true],
         ]);
         expect(read()).toEqual(ssr);
     });
@@ -113,7 +113,7 @@ describe('CR and NUL in rendered values', () => {
         load(page('i'));
         const value = (/** @type {string} */ az) =>
             /** @type {HTMLInputElement} */ (document.querySelector(`[az="${az}"]`)).value;
-        expect([value('YK753W-4'), value('YK753W-5'), value('YK753W-6')]).toEqual([
+        expect([value('K57YC-4'), value('K57YC-5'), value('K57YC-6')]).toEqual([
             'xy',
             'x/',
             'a@b.c,d@e.f,g@h.i',
@@ -129,5 +129,16 @@ describe('CR and NUL in rendered values', () => {
         expect(get('m')).toBe('p@q.r,s@t.u');
         set('v', 'm', '');
         expect(get('m')).toBe('');
+    });
+
+    // The parser drops the newline the server writes after `<textarea>`, so a value
+    // starting with one keeps it, as a live write of the content does.
+    it('keeps a newline starting a textarea value', () => {
+        load(page('\nX'));
+        const ssr = read();
+        expect(ssr.textarea).toBe('\nX');
+        load(page('i'));
+        applyOps([[0, 'v:K57YC-2', resolveHtml({ d: ['\nX'], f: 'x', s: ['', ''] }), true]]);
+        expect(read().textarea).toBe(ssr.textarea);
     });
 });

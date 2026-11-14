@@ -12,7 +12,7 @@ identical to the previous inlined emission.
 -export([name/1]).
 -export([element_open/1]).
 -export([az_attr/1]).
--export([element_open_end/0]).
+-export([element_open_end/1]).
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
@@ -135,9 +135,15 @@ element_open(TagName) ->
 az_attr(Az) ->
     <<" az=\"", Az/binary, "\"">>.
 
--spec element_open_end() -> binary().
-element_open_end() ->
-    ~">".
+-spec element_open_end(binary()) -> binary().
+%% The parser drops a newline right after a `textarea` start tag (a reference to one
+%% too), and a live update writes the content through the DOM, keeping one. So the tag
+%% is followed by the newline the parser drops, and the content keeps its own.
+element_open_end(Tag) ->
+    case ascii_lowercase(Tag) of
+        ~"textarea" -> ~">\n";
+        _Other -> ~">"
+    end.
 
 -spec element_void_close() -> binary().
 element_void_close() ->
@@ -1295,8 +1301,8 @@ boolean_attrs() -> presence.
 -spec attr_names() -> case_insensitive.
 attr_names() -> case_insensitive.
 
-%% HTML-escape the five metacharacters; safe for element content and
-%% double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is
+%% HTML-escape the five metacharacters, plus CR and NUL (below); safe for element
+%% content and double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is
 %% safe (continuation bytes are all > 127, never a metacharacter).
 %%
 %% The parser rewrites two more bytes before anything reads the page: a CR (alone or

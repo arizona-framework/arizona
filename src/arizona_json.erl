@@ -27,7 +27,7 @@ the wire value. On the wire itself a value stays raw
 -export([name/1]).
 -export([element_open/1]).
 -export([az_attr/1]).
--export([element_open_end/0]).
+-export([element_open_end/1]).
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
@@ -77,8 +77,8 @@ element_open(TagName) ->
 az_attr(Az) ->
     <<",\"az\":", (json_str(Az))/binary>>.
 
--spec element_open_end() -> binary().
-element_open_end() ->
+-spec element_open_end(binary()) -> binary().
+element_open_end(_Tag) ->
     <<",\"children\":[">>.
 
 -spec element_void_close() -> binary().

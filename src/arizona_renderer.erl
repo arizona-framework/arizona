@@ -19,8 +19,12 @@ other formats while reusing the same walker, diff engine, and transport.
 -doc "The framework-injected `az` diff-target marker for an element.".
 -callback az_attr(Az :: binary()) -> binary().
 
--doc "End of an element's open tag (after attributes), before children.".
--callback element_open_end() -> binary().
+-doc """
+End of an element's open tag (after attributes), before children, for the given wire
+tag name. HTML follows a `textarea` start tag with the newline its parser drops there,
+so content starting with one keeps it on the page, as a live update writes it.
+""".
+-callback element_open_end(TagName :: binary()) -> binary().
 
 -doc "Self-close for a void (childless) element.".
 -callback element_void_close() -> binary().

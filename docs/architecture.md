@@ -161,7 +161,9 @@ page holds what a live update writes through the DOM: a CR (alone or before a LF
 the parser turns into a LF) is written `&#13;`, which decodes to the CR itself, and a
 NUL, which no HTML can hold (the parser drops it in text and replaces it elsewhere), is
 written U+FFFD, which the web client also writes for a NUL in a live text or attribute
-value.
+value. Likewise the parser drops a newline right after a `<textarea>` start tag, so the
+start tag is followed by one (`element_open_end/1`) and content starting with a newline
+keeps it.
 
 The usual source of a non-UTF-8 binary is a bare `<<"café">>` literal: with no type
 spec, each character is stored as one byte, which is Latin-1. Fix it at the source:
