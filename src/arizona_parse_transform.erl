@@ -5735,8 +5735,8 @@ is_value_constructor(_Expr) ->
 %% exactly where an inline `<script>` lives -- skip the opt-out guard and
 %% HTML-escape inside raw text, so a marked value was spliced with no
 %% neutralization and an unmarked one drew no compile error. The `escapable`
-%% clause stays below nodiff because the two agree there: both HTML-escape the
-%% scalar through make_nodiff_dynamic_ast/5.
+%% clause precedes nodiff too, so an `az-nodiff` textarea/title still gets the
+%% element's escaping policy through emit_escapable_raw_text/3.
 emit_child_dynamic(
     Child,
     _ElemAz,
