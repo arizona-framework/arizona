@@ -1130,7 +1130,8 @@ value beside it could complete an open reference in it (`&amp` before `1` reads 
 or a `"` could end the attribute, and the page would stop holding the affix the client
 composes with on `set` and strips on `get`. A raw of a computed value is still
 `local_attr_mixed`: the affixes ride on the static descriptor and the slot never diffs, so
-a server-side change could never reach the attribute the client owns. Interpolation is for **string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
+a server-side change could never reach the attribute the client owns. Interpolation is for
+**string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
 attribute must use a **whole-value** `?local` (`{disabled, ?local(~"d", false)}`, which
 renders `false` → absent / `true` → bare) -- an interpolated value always renders
 `name="value"`, so an interpolated boolean would be `disabled="false"`, i.e. still present.
