@@ -35,6 +35,7 @@
 -export([compile_computed_binary_tag/1]).
 -export([compile_constant_binary_tag/1]).
 -export([compile_binary_tag_not_text/1]).
+-export([compile_empty_tag/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -69,7 +70,8 @@ groups() ->
             compile_improper_template_list,
             compile_computed_binary_tag,
             compile_constant_binary_tag,
-            compile_binary_tag_not_text
+            compile_binary_tag_not_text,
+            compile_empty_tag
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -369,6 +371,26 @@ compile_binary_tag_not_text(Config) when is_list(Config) ->
     ),
     ?assertEqual(binary_tag_unbuildable, Unbuildable),
     ?assert(contains(Formatter:format_error(Unbuildable), ~"cannot be built")).
+
+%% An element needs a name: an empty one renders `<>`/`</>` in HTML and an empty
+%% type in JSON, which no client reads as an element.
+compile_empty_tag(Config) when is_list(Config) ->
+    Cases = [{"be_empty_bin", "<<>>"}, {"be_empty_sigil", "~\"\""}, {"be_empty_atom", "''"}],
+    [
+        begin
+            {Formatter, Reason} = compile_error(
+                Name ++ "_html", html("{'div', [], [{" ++ Tag ++ ", [], [~\"x\"]}]}")
+            ),
+            ?assertEqual({arizona_parse_transform, tag_empty}, {Formatter, Reason}, Name),
+            ?assert(contains(Formatter:format_error(Reason), ~"empty")),
+            ?assertEqual(
+                {arizona_parse_transform, tag_empty},
+                compile_error(Name ++ "_json", json("{'Column', [], [{" ++ Tag ++ ", [], []}]}")),
+                Name
+            )
+        end
+     || {Name, Tag} <- Cases
+    ].
 
 compile_improper_template_list(Config) when is_list(Config) ->
     Improper = fun(Outer, Inner) ->

@@ -1294,6 +1294,10 @@ format_error({tag_not_text, Bytes}) ->
             [Bytes]
         )
     );
+format_error(tag_empty) ->
+    "this element's tag is empty, so it renders an element with no name, which no "
+    "client reads as an element. Write the tag as text: an atom, ~\"...\" or "
+    "<<\"...\">>";
 format_error(binary_tag_unbuildable) ->
     "this binary tag cannot be built: its segments fail to construct, as they would at "
     "runtime (a string typed /binary, a value that does not fit its size). Write the "
@@ -4794,6 +4798,12 @@ element_attrs(_Malformed) ->
 %% author is choosing the element at runtime -- so it gets advice instead.
 %% Shared by both tag forms: the attrs must still be a literal list, and a void
 %% element's `{Tag, Attrs}` shorthand is the same as an empty child list.
+%% An element with no name renders one no client reads (`<>` in HTML, an empty JSON
+%% type).
+extract_element_parts(Tag, _AttrsAST, _ChildrenAST, Node, _Backend) when
+    Tag =:= ''; Tag =:= <<>>
+->
+    parse_error(tag_empty, anno(Node));
 extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend) ->
     case is_list_ast(AttrsAST) of
         true ->
