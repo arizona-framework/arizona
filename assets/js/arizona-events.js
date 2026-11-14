@@ -37,7 +37,7 @@ export function mountHooksPublic(root) {
  * default one) is followed in that task by the form's submit, a separate event of
  * the same gesture: the submit adopts it, so a fetch the click started does not
  * make the submit look like a repeat.
- * @type {{target: Node, g: import('./arizona-commands.js').Gesture}|null}
+ * @type {{target: Node, g: import('./arizona-commands.js').Gesture, used?: boolean}|null}
  */
 let _clickGesture = null;
 
@@ -49,6 +49,7 @@ function submitGesture(e) {
     const c = _clickGesture;
     if (!c || !e.submitter?.contains(c.target)) return newGesture();
     // One click submits once: a later submit in the same task is not its gesture.
+    c.used = true;
     _clickGesture = null;
     return c.g;
 }
@@ -105,6 +106,7 @@ function runDelegated(e, attr, sel, capture) {
     try {
         const cmds = JSON.parse(raw);
         const g = newGesture();
+        /** @type {{target: Node, g: import('./arizona-commands.js').Gesture, used?: boolean}|null} */
         const click = e.type === 'click' ? { target: t, g } : null;
         if (click) {
             _clickGesture = click;
@@ -117,8 +119,8 @@ function runDelegated(e, attr, sel, capture) {
             inGesture(g, () => executeJS(el, e, withTransitionAttr(el, cmds)));
         } finally {
             // A click this click's own commands dispatched cleared it; this click's
-            // submit has yet to follow.
-            if (click) _clickGesture = click;
+            // submit has yet to follow -- unless one already used it.
+            if (click && !click.used) _clickGesture = click;
         }
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);

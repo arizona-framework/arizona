@@ -8240,6 +8240,25 @@ describe('fetch in flight', () => {
         expect(dropped).not.toHaveBeenCalled();
     });
 
+    it('does not put back a click gesture a submit already used', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/save",{}]'>
+                <input id="i" name="a" />
+                <button id="b" type="submit" az-click='[[11,"#i"]]'>Save</button>
+            </form>`,
+        );
+        const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+        const b = /** @type {HTMLButtonElement} */ (document.getElementById('b'));
+        // The click's own command leads the app to submit the form itself; the
+        // click's native submit then follows as a repeat of the same press.
+        document.getElementById('i').addEventListener('focus', () => form.requestSubmit(b));
+        const dropped = vi.fn();
+        form.addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+        b.click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/save']);
+        expect(dropped).toHaveBeenCalledWith({ reason: 'in_flight' });
+    });
+
     it('does not adopt a click that submitted nothing', async () => {
         await page(
             `<form id="f" method="post" az-submit='[22,"/save",{}]'>
