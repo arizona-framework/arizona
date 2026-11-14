@@ -121,7 +121,10 @@ uses `foreign` for the HTML parser's foreign-content mode (inside `<svg>`), wher
 element is ordinary parsed content -- comments are comments, so a slot keeps its
 markers and stays diffable. The distinction only matters for a tag classified
 differently in each: an HTML `<title>` makes comment markers literal text, an SVG
-`<title>` does not. Backends with no such mode return `Parent` unchanged.
+`<title>` does not. HTML returns to HTML content for the children of an SVG
+`foreignObject`, `desc` or `title`, the parser's HTML integration points; MathML is
+not tracked (its own integration points would be needed), so it stays HTML content.
+Backends with no such mode return `Parent` unchanged.
 """.
 -callback content_context(Tag :: tag(), Parent :: content_context()) -> content_context().
 
@@ -318,12 +321,19 @@ the client then carries the control's state with an event it raises and, once th
 server has answered that event, shows what the server rendered unless the user changed
 it since -- for the parts the server renders only.
 
+`Context` is the content context the element sits in (`content_context/2` of its
+parent): HTML marks only an element in HTML content, since one in foreign content (an
+SVG `textArea`) is no form control.
+
 Optional. A backend without it marks nothing.
 """.
--callback controlled(Tag :: tag(), Part :: {attr, binary()} | content) -> boolean().
+-callback controlled(
+    Tag :: tag(), Part :: {attr, binary()} | content, Context :: content_context()
+) ->
+    boolean().
 
 %% `markup_text/2` is required of a backend supporting `?local` (`supports_local/0`).
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/2]).
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/3]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for

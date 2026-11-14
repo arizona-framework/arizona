@@ -1096,7 +1096,7 @@ refuses an edit (`qty` stays `5` when the user types `999`) or normalises it (`"
 as `"abc"`) leaves the binding unchanged, so the diff sends no op and the field would keep
 the user's text forever.
 
-**Compile time.** The optional `c:arizona_renderer:controlled/2` callback names the parts that
+**Compile time.** The optional `c:arizona_renderer:controlled/3` callback names the parts that
 are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`,
 `checked` on `input`, `selected` on `option` (the one the transform derives from a select's
 `value` included) and `textarea` content. An element holding a **diffable** dynamic for one

@@ -240,7 +240,7 @@ render(Bindings) ->
     choices = none :: none | {erl_parse:abstract_expr(), erl_parse:abstract_expr()},
     %% The names of the diffable dynamic attributes the element being compiled has
     %% emitted so far, newest first (compile_element_attrs/6 asks the backend whether
-    %% one is a control's default, `arizona_renderer:controlled/2`).
+    %% one is a control's default, `arizona_renderer:controlled/3`).
     dyn_attrs = [] :: [binary()],
     %% The target's renderer. No default: every template is compiled for the target
     %% it sits in, so each construction names it.
@@ -5008,7 +5008,7 @@ compile_static_false(NameAST, State0, ElemLine) ->
 
 %% The author's attributes, then the static ones the backend implies from them
 %% (`arizona_renderer:implied_attrs/2`), then `az-ctl` on a control whose default
-%% the diff renders (controlled/4).
+%% the diff renders (controlled/5).
 compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
     DiffsContent = diffs_content(Children, RawKind, ElemAz, State0),
     Backend = State0#state.backend,
@@ -5024,7 +5024,8 @@ compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
                  || {N, V} <:- Implied
                 >>)
         end,
-    case controlled(Backend, Tag, DiffsContent, lists:reverse(State1#state.dyn_attrs)) of
+    Ctx = State0#state.content_ctx,
+    case controlled(Backend, Tag, Ctx, DiffsContent, lists:reverse(State1#state.dyn_attrs)) of
         [] ->
             State2#state{dyn_attrs = []};
         Parts ->
@@ -5036,19 +5037,21 @@ compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
     end.
 
 %% The parts of a control whose default the diff renders (`arizona_renderer:
-%% controlled/2`), lowercased: the user edits the live state apart from them, so
+%% controlled/3`), lowercased: the user edits the live state apart from them, so
 %% after an edit a render no longer shows unless the client syncs it, which
 %% `az-ctl` asks of it, part by part (a checkbox's rendered `value` is no part it
 %% shows). A `?local` is the client's own and a nodiff dynamic never updates, so
 %% neither counts.
-controlled(Backend, Tag, DiffsContent, DynAttrs) ->
-    case erlang:function_exported(Backend, controlled, 2) of
+controlled(Backend, Tag, Ctx, DiffsContent, DynAttrs) ->
+    case erlang:function_exported(Backend, controlled, 3) of
         true ->
             Attrs = [
                 ascii_lowercase(Name)
-             || Name <- DynAttrs, Backend:controlled(Tag, {attr, Name})
+             || Name <- DynAttrs, Backend:controlled(Tag, {attr, Name}, Ctx)
             ],
-            lists:uniq(Attrs ++ [~"content" || DiffsContent, Backend:controlled(Tag, content)]);
+            lists:uniq(
+                Attrs ++ [~"content" || DiffsContent, Backend:controlled(Tag, content, Ctx)]
+            );
         false ->
             []
     end.

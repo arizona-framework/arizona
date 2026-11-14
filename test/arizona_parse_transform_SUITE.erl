@@ -4702,7 +4702,7 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
 
 %% No mark where nothing diffs a control's default: a static default, another
 %% attribute, a `?local` (the client's own), an az-nodiff subtree, a non-control,
-%% and a target with no `controlled/2`.
+%% and a target with no `controlled/3`.
 az_ctl_skips_unrendered_controls(Config) when is_list(Config) ->
     Render = fun(Mod, Elem) ->
         M = compile_module(

@@ -600,7 +600,21 @@ textarea_keeps_a_leading_newline(Config) when is_list(Config) ->
     ?assertMatch([_, _, _, [?OP_TEXT, _, #{~"d" := [~"\nX"], ~"s" := [<<>>, <<>>]}]], Ops),
     %% An SVG `textArea` is foreign content: the parser drops no newline after it.
     Svg = render_bin(arizona_cr_nul:svg(#{t => ~"\nX"})),
-    ?assertMatch({match, _}, re:run(Svg, ~"<textArea[^>]*><!--az:[^>]*-->\nX<"), Svg).
+    ?assertMatch({match, _}, re:run(Svg, ~"<textArea[^>]*><!--az:[^>]*-->\nX<"), Svg),
+    %% It is no HTML form control either: no `az-ctl`.
+    ?assertEqual(nomatch, binary:match(Svg, ~"az-ctl"), Svg),
+    %% An SVG `desc` or `title` parses its content as HTML again: a textarea there is an
+    %% HTML one, RCDATA (no markers inside), and gets the newline and its `az-ctl`.
+    Desc = render_bin(arizona_cr_nul:svg_desc(#{t => ~"\nX"})),
+    ?assertEqual(
+        {match, [[~"desc"], [~"title"]]},
+        re:run(
+            Desc,
+            ~"<(desc|title)><textarea az=\"[^\"]*\" az-ctl=\"content\">\n\nX</textarea>",
+            [global, {capture, all_but_first, binary}]
+        ),
+        Desc
+    ).
 
 %% Seeded values over `Alphabet`, the rand state threaded explicitly so the
 %% process-global state is left alone.

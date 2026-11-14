@@ -39,7 +39,7 @@ identical to the previous inlined emission.
 -export([supports_keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([selection_role/1]).
--export([controlled/2]).
+-export([controlled/3]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
 -export([boolean_attrs/0]).
@@ -334,14 +334,19 @@ rawtext_names() ->
 content_context(Tag, Parent) ->
     content_context_name(tag_name(Tag), Parent).
 
-%% `<svg>` switches the parser into foreign content; `<foreignObject>` switches
-%% back for its children. MathML is deliberately not tracked: it would need its
-%% own integration points (`mtext` and friends) to be correct, and leaving it in
-%% HTML content keeps today's behaviour rather than half-handling it. HTML content
-%% is the root context, `undefined`, so `<foreignObject>` returns to it.
+%% `<svg>` switches the parser into foreign content; `<foreignObject>`, `<desc>` and
+%% `<title>` (its HTML integration points) switch back for their children. MathML is
+%% deliberately not tracked: it would need its own integration points (`mtext` and
+%% friends) to be correct, and leaving it in HTML content keeps today's behaviour
+%% rather than half-handling it. HTML content is the root context, `undefined`, so an
+%% integration point returns to it.
 content_context_name(~"svg", _Parent) ->
     foreign;
 content_context_name(~"foreignobject", foreign) ->
+    undefined;
+content_context_name(~"desc", foreign) ->
+    undefined;
+content_context_name(~"title", foreign) ->
     undefined;
 content_context_name(_Other, Parent) ->
     Parent.
@@ -666,12 +671,15 @@ selection_role(Tag) ->
             none
     end.
 
--spec controlled(arizona_renderer:tag(), {attr, binary()} | content) -> boolean().
+-spec controlled(arizona_renderer:tag(), {attr, binary()} | content, atom()) -> boolean().
 %% The user edits a control's live value/checkedness/selectedness apart from the
 %% attribute (or textarea content) that is only its default, so a render of the default
-%% stops showing once the user has edited it.
-controlled(Tag, Part) ->
-    controlled_part(tag_name(Tag), Part).
+%% stops showing once the user has edited it. Only an HTML element is a form control:
+%% in foreign content (an SVG `textArea`) nothing is.
+controlled(Tag, Part, undefined) ->
+    controlled_part(tag_name(Tag), Part);
+controlled(_Tag, _Part, _Foreign) ->
+    false.
 
 controlled_part(Tag, {attr, Name}) ->
     case {Tag, ascii_lowercase(Name)} of
