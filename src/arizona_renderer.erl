@@ -472,3 +472,32 @@ as rendered.
 -callback embed_attrs(Doc :: iodata(), AttrNames :: [binary()]) -> iodata().
 
 -optional_callbacks([embed_attrs/2]).
+
+-doc """
+This target's wording of an error the core raises while compiling or rendering one
+of its templates.
+
+The core names these errors with neutral reasons and leaves the explanation to the
+target, since it lives in the target's vocabulary: HTML names `<script>` and the
+`az-local` attribute, JSON its `on_tap` props and widget nodes. The parse transform
+reports such a compile error under the backend module, so the compiler's
+`format_error/1` call lands here; a runtime one is raised with the backend in its
+`error_info`, and the core module formatting it asks this callback.
+
+A backend words every reason that can reach it, given its other capability answers:
+
+- Always, at compile time: `computed_element_tag`, `element_in_comprehension`,
+  `each_body_not_element`, `each_stream_body_not_element`,
+  `each_stream_body_control_flow`, `each_named_fun_multi_clause`,
+  `each_named_fun_undefined`, `each_remote_fun_ref`, `improper_template_list`,
+  `local_orphaned`, `nodiff_value`,
+  `nested_nodiff`, `effect_in_content`; at render time: `stream_each_multi_root` and
+  `{stateful_in_layout, Layout, Function, Handler}`.
+- `supports_local/0` false: `local_unsupported`.
+- `supports_keyed_item_ops/0` true: `stream_each_keyless` (render time).
+- A `raw_text_kind/2` other than `none`: `dynamic_in_raw_text`, `local_in_raw_text`,
+  `markup_in_raw_text` (compile time) and `{markup_in_raw_text, Element, Value}`
+  (render time, raised by the backend's own `neutralize_raw_text/4`).
+- `selection_role/1`: `{select_value, {option_selected, Tag, Name, Chooser}}`.
+""".
+-callback format_error(Reason :: term()) -> unicode:chardata().

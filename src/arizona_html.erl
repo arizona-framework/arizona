@@ -51,6 +51,7 @@ identical to the previous inlined emission.
 -export([wire_escape/1]).
 -export([wire_attr/2]).
 -export([embed_attrs/2]).
+-export([format_error/1]).
 
 %% This module implements the whole renderer contract, one export per callback, so it
 %% legitimately exceeds the god-module function count.
@@ -83,10 +84,34 @@ identical to the previous inlined emission.
 %% contain an underscore -- `~"my-widget_v2"` would otherwise come out
 %% `my-widget-v2`, a different element, silently. Same two forms, same rule, for a
 %% tag as for an attribute.
+%%
+%% Asked at compile time only, so it also refuses a name HTML markup cannot carry:
+%% whitespace, `/` and `>` end a tag or attribute name, `=` ends an attribute name, and
+%% `"`, `'` and `<` are parse errors in one. One set serves both kinds of name, as no
+%% element name holds those either. The parse transform reports the rejection at the
+%% element's line.
 name(Bin) when is_binary(Bin) ->
-    Bin;
+    markup_name(Bin);
 name(Atom) ->
-    binary:replace(atom_to_binary(Atom), ~"_", ~"-", [global]).
+    markup_name(binary:replace(atom_to_binary(Atom), ~"_", ~"-", [global])).
+
+markup_name(Name) ->
+    case binary:match(Name, [~"/", ~">", ~"=", ~"\"", ~"'", ~"<"]) of
+        nomatch ->
+            Name;
+        {Pos, 1} ->
+            erlang:error(
+                {arizona_render_reject,
+                    iolist_to_binary(
+                        io_lib:format(
+                            "the name ~ts holds ~ts, which HTML markup cannot carry in a "
+                            "name: / and > end a tag or attribute name, = ends an attribute "
+                            "name, and \" ' < break one. Write the name without / > = \" ' <",
+                            [Name, binary:part(Name, Pos, 1)]
+                        )
+                    )}
+            )
+    end.
 
 -spec element_open(binary()) -> binary().
 element_open(TagName) ->
@@ -312,6 +337,178 @@ content_context_name(~"foreignobject", foreign) ->
     undefined;
 content_context_name(_Other, Parent) ->
     Parent.
+
+-doc """
+The HTML wording of the errors the core raises for an `?html` template
+(`c:arizona_renderer:format_error/1`), in HTML's own terms: its raw-text elements
+(`<script>`, `<title>`), its parser, the attributes the transform writes into the page
+(`az-local`, `az-nodiff`, `az-view`), the `az_*` event attributes and the `li`/`table`
+vocabulary of its examples. `local_unsupported` cannot reach it: HTML supports `?local`.
+""".
+-spec format_error(term()) -> string().
+format_error(computed_element_tag) ->
+    "an element's tag must be a literal atom or binary. The tag is baked into the "
+    "template's statics at compile time, which is what lets a later change ship only "
+    "the values, "
+    "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
+    "inside a stable element instead of choosing the element: {'div', [], [case Kind "
+    "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "
+    "content slot may return bare element tuples, so the branches can differ "
+    "completely. Inside an ?each the stable element is the item itself and carries "
+    "az_key, which is also what keeps its identity across a change: "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end";
+format_error(element_in_comprehension) ->
+    "a comprehension in a content slot builds its list at render time, so the slot "
+    "holds one plain value and an element (or template) per item fails at render. "
+    "Render a runtime list of elements with ?each, which compiles the item once and "
+    "diffs it per item: ?each(fun(X) -> {'li', [], [X]} end, ?get(items)). A "
+    "comprehension of plain values is fine";
+format_error(each_body_not_element) ->
+    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
+    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
+    "single-value body defeats its purpose (and a template or descriptor value crashes on "
+    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
+    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
+    "text/value child: {li, [], [case ... of ... end]}";
+format_error(each_stream_body_not_element) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
+    "Attrs, Children}); a map source may also take a list of elements or a static/mixed "
+    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
+    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
+    "has no stream/keyed semantics): wrap the value in an element, e.g. "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
+format_error(each_named_fun_multi_clause) ->
+    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
+    "single clause -- ?each inlines the function's body into one shared per-item template, so "
+    "multiple clauses (which would select different per-item structures) can't be compiled to "
+    "a single template. Collapse them into one clause with a case inside the returned element: "
+    "name(I) -> {li, [], [case I of ... end]}";
+format_error(each_named_fun_undefined) ->
+    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
+    "in this module. Define it as a single-clause function returning an element, or inline the "
+    "callback (fun(I) -> {li, [], [...]} end)";
+format_error(each_remote_fun_ref) ->
+    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
+    "the callback body to build a per-item template, which is impossible across a module "
+    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
+    "local function and pass fun name/1";
+format_error(improper_template_list) ->
+    "a template's attribute, child and body lists must be proper list literals: "
+    "their items are laid out one slot each at compile time, so a list ending in "
+    "an expression ([A, B | Rest]) has no length to lay out. Write every item in "
+    "the list; render a runtime list of children with ?each, as one item of it: "
+    "{'ul', [], [{'li', [], [~\"first\"]}, ?each(fun(I) -> {'li', [], [I]} end, Rest)]}";
+format_error(dynamic_in_raw_text) ->
+    "a dynamic content slot inside <script>/<style> (or another raw-text element: <xmp>, "
+    "<iframe>, <noembed>, <noframes>) is spliced verbatim -- the browser "
+    "decodes no character references in raw text, so HTML-escaping cannot apply there and "
+    "the value can close the JavaScript string it sits in, or the element itself (XSS). "
+    "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
+    "the script/CSS context, and only then -- serialize data first, e.g. "
+    "{script, [], [?raw(json:encode(Data))]}. The ?raw has to sit at the slot itself: a "
+    "variable holding one reaches the slot only when its expression reads a binding, so "
+    "compute the value into a variable and wrap it here (Json = json:encode(Data), then "
+    "{script, [], [?raw(Json)]}), not the other way round. Literal script/CSS text is "
+    "static, not a slot, and needs no wrapper";
+format_error(local_in_raw_text) ->
+    "a content ?local cannot be used inside a raw-text element "
+    "(script/style/textarea/title/xmp/iframe/noembed/noframes) -- raw-text content "
+    "carries no slot markers "
+    "for the client to address, so the value would never update";
+format_error(markup_in_raw_text) ->
+    "a <title> or <textarea> holds text only (escapable raw text): the browser shows "
+    "an element, an ?each, a ?stateless/?stateful component or a template holding an "
+    "element there as literal markup. Render text instead: a value, or a text-only "
+    "template (text and values, no element), which renders its text";
+format_error(local_orphaned) ->
+    "?local must sit inside an element -- as a content child or an attribute "
+    "value. At a fragment top level, as a whole template body, or as a bare "
+    "conditional-branch value there is no enclosing element to carry the "
+    "az-local descriptor, so the client could never bind the key and "
+    "set/set_all would be silent no-ops";
+format_error(nodiff_value) ->
+    "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
+    "az_nodiff / <<\"az-nodiff\">>) alone in the attribute list. The value it carries "
+    "in the rendered HTML belongs to the compiler: it names the az-nodiff element so the client "
+    "can keep it across a re-render, and an authored one would be read as that name";
+format_error(nested_nodiff) ->
+    "az-nodiff is only honored on a template's top-level (root) element -- it is a "
+    "whole-template directive, not a per-element one, so on a nested element it cannot "
+    "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
+    "element, or split the subtree into its own ?html/?stateless template whose root "
+    "carries az-nodiff";
+format_error(effect_in_content) ->
+    "an effect command (a command builder call, e.g. arizona_js:hide(~\"#x\")) is not "
+    "content: a content slot renders it as text, and no client runs a command there. Put "
+    "the command in an event attribute's value, e.g. {button, [{az_click, Cmd}], "
+    "[~\"Hide\"]}, or return it from a handler. To show a command as text, encode it "
+    "explicitly: arizona_effect:encode_json(Cmd)";
+format_error(each_stream_body_control_flow) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
+    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
+    "compiled per-item template (statics once, dynamics per item), so an item's outer tag "
+    "is fixed at compile time. The branches can still be entirely different elements -- "
+    "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
+    "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
+    "return bare element tuples (<em> vs <strong> vs a whole subtree all work), and a div "
+    "with display: contents keeps the wrapper out of layout. NOT inside table/tr or "
+    "select: the parser foster-parents a wrapper out of a table and Firefox drops one "
+    "inside a select, so the keyed element lands where the client cannot address it. A "
+    "varying sibling tag is legitimate in exactly those two (th/td, option/optgroup) and "
+    "has no workaround today";
+format_error({select_value, {option_selected, Tag, Name, Chooser}}) ->
+    lists:flatten(
+        io_lib:format(
+            "the ~ts attribute on an <~ts> under a <~ts> with a value: the value already "
+            "decides which option is selected. Drop one of the two",
+            [Name, Tag, Chooser]
+        )
+    );
+format_error({markup_in_raw_text, Element, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "~0tp cannot render inside <~ts>: its content is raw text, where markup ~ts. "
+            "~ts",
+            [V, Element, raw_text_effect(Element), raw_text_remedy(Element)]
+        )
+    );
+format_error(stream_each_multi_root) ->
+    "an ?each over a stream must return ONE element per item, not a list of elements, a "
+    "fragment mixing text and elements, or bare text: a keyed op (insert, remove, move, "
+    "item patch) addresses an item by the single element carrying its az_key, so any other "
+    "root would be left behind on a remove and out of order on a move. Put the parts "
+    "inside one item element, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
+    "The same callback over a map may return several roots";
+format_error(stream_each_keyless) ->
+    "an ?each over a stream must put az_key on each item's root element: a keyed op "
+    "(remove, move, item patch) finds the item by it, so without one every such op is "
+    "skipped and the page drifts from the stream. Key the root with the callback's "
+    "second argument, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
+    "The same callback over a map needs no key";
+format_error({stateful_in_layout, Mod, Fun, Handler}) ->
+    lists:flatten(
+        io_lib:format(
+            "layout ~s:~s/1 embeds ?stateful(~s, ...), but a layout renders once "
+            "at SSR and never joins the live view tree, so the component would "
+            "emit an az-view marker for a view the server never registers and "
+            "every event under it would be dropped. Use ?stateless for layout "
+            "chrome; chrome that must stay live across navigation belongs in a "
+            "view the routes share, linked with az_patch.",
+            [Mod, Fun, Handler]
+        )
+    ).
+
+raw_text_effect(~"script") -> "would run as code";
+raw_text_effect(~"style") -> "would be read as CSS";
+raw_text_effect(_TextElement) -> "would show as text".
+
+raw_text_remedy(~"script") ->
+    "Render the data the script needs as text, e.g. ?raw(json:encode(Data))";
+raw_text_remedy(~"style") ->
+    "Render the CSS as text";
+raw_text_remedy(_TextElement) ->
+    "Pass text: a binary, or a text-only template (text and values, no element), "
+    "which renders its text there".
 
 -spec embed_attrs(iodata(), [binary()]) -> iodata().
 embed_attrs(Doc, Names) ->
@@ -1260,12 +1457,12 @@ raw_text_1(Ctx, Value) ->
 raw_text_markup({{rcdata, Name}, _, _} = Ctx, Tmpl) ->
     case arizona_template:text_markup(?MODULE, Tmpl) of
         {ok, Bin} -> neutralize(Ctx, Bin);
-        markup -> arizona_template:markup_in_raw_text(Name, Tmpl)
+        markup -> arizona_template:markup_in_raw_text(?MODULE, Name, Tmpl)
     end;
 raw_text_markup({script, _, _}, Tmpl) ->
-    arizona_template:markup_in_raw_text(~"script", Tmpl);
+    arizona_template:markup_in_raw_text(?MODULE, ~"script", Tmpl);
 raw_text_markup({{rawtext, Name}, _, _}, Tmpl) ->
-    arizona_template:markup_in_raw_text(Name, Tmpl).
+    arizona_template:markup_in_raw_text(?MODULE, Name, Tmpl).
 
 %% How the tokenizer reads this element's content. `<script>` is read in the
 %% **script data** states; every other raw-text element (`<style>`, `<xmp>`,

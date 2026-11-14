@@ -292,7 +292,7 @@ parse_transform(Forms, Options) ->
     catch
         throw:{arizona_parse_error, ErrorFile, Anno, Reason} ->
             _ = erase(?FOLDED_KEY),
-            {error, [{ErrorFile, [{erl_anno:location(Anno), ?MODULE, Reason}]}], []}
+            {error, [{ErrorFile, [error_descriptor(erl_anno:location(Anno), Reason)]}], []}
     after
         ok = erase_module_state()
     end.
@@ -1190,7 +1190,7 @@ template_is_nodiff(Arg) ->
         element_tuple ->
             maps:is_key(diff, prescan_directives([Arg]));
         Class when Class =:= element_list; Class =:= list_ast ->
-            maps:is_key(diff, prescan_directives(ast_list_to_list(Arg)));
+            maps:is_key(diff, prescan_directives(ast_list_prefix(Arg)));
         _ ->
             false
     end.
@@ -1235,16 +1235,6 @@ Called by the compiler when `parse_transform/2` returns an error tuple.
     Reason :: term().
 format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
-format_error(computed_element_tag) ->
-    "an element's tag must be a literal atom. The tag is baked into the template's "
-    "statics at compile time, which is what lets a later change ship only the values, "
-    "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
-    "inside a stable element instead of choosing the element: {'div', [], [case Kind "
-    "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "
-    "content slot may return bare element tuples, so the branches can differ "
-    "completely. Inside an ?each the stable element is the item itself and carries "
-    "az_key, which is also what keeps its identity across a change: "
-    "fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end";
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -1294,48 +1284,67 @@ format_error({markup_var_in_content_list, Var}) ->
             [Var]
         )
     );
+format_error({tag_not_text, Tag}) ->
+    lists:flatten(
+        io_lib:format(
+            "the tag ~ts is not text: every render target writes a tag as UTF-8 text "
+            "without an ASCII space or control character, and this one holds one, or is "
+            "not UTF-8. Write the tag as text without an ASCII space or control "
+            "character: an atom, ~~\"...\" or <<\"...\">>",
+            [quote_name(Tag)]
+        )
+    );
+format_error(tag_not_literal_text) ->
+    "this binary tag is not literal text: its segments lay out bytes (a size, a type, "
+    "an operator, a bitstring, or an expression that is not a literal) instead of "
+    "spelling characters, and a tag is a name. "
+    "Write the tag as text: an atom, ~\"...\" or <<\"...\">>";
+format_error({not_code_point, N}) ->
+    lists:flatten(
+        io_lib:format(
+            "the binary segment ~w is not a Unicode code point (a surrogate, a negative "
+            "number, or past 16#10FFFF). A literal binary written as a tag, an attribute "
+            "name or value, content, or a template body, alone or in a list of literal "
+            "text, folds into the template's text, "
+            "each integer segment read as the character it names, and this one names "
+            "none. Write the character you mean; for raw bytes give the segment a size, "
+            "e.g. <<255:8>>",
+            [N]
+        )
+    );
+format_error(attr_name_not_literal_text) ->
+    "an attribute name must be written as text: an atom, ~\"...\" or <<\"...\">>. A "
+    "name chosen at runtime, or a binary laid out by sizes, types or operators, has no "
+    "name the transform can write";
+format_error(attr_name_empty) ->
+    "this attribute name is empty, so it renders an attribute with no name. Write the "
+    "name as text: an atom, ~\"...\" or <<\"...\">>";
+format_error({attr_name_not_text, Name}) ->
+    lists:flatten(
+        io_lib:format(
+            "the attribute name ~ts is not text: every render target writes it as UTF-8 "
+            "text without an ASCII space or control character, and this one holds one, or "
+            "is not UTF-8. Write the name as text without an ASCII space or control "
+            "character: an atom, ~~\"...\" or <<\"...\">>",
+            [quote_name(Name)]
+        )
+    );
+format_error(tag_empty) ->
+    "this element's tag is empty, so it renders an element with no name, which no "
+    "client reads as an element. Write the tag as text: an atom, ~\"...\" or "
+    "<<\"...\">>";
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
 format_error(nodiff_call_not_compiled) ->
     "internal: a template constructor inside an az-nodiff template was not compiled "
     "-- please report this as an Arizona bug";
-format_error(local_unsupported) ->
-    "?local is not supported by this render target";
-format_error(dynamic_in_raw_text) ->
-    "a dynamic content slot inside <script>/<style> (or another raw-text element: <xmp>, "
-    "<iframe>, <noembed>, <noframes>) is spliced verbatim -- the browser "
-    "decodes no character references in raw text, so HTML-escaping cannot apply there and "
-    "the value can close the JavaScript string it sits in, or the element itself (XSS). "
-    "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
-    "the script/CSS context, and only then -- serialize data first, e.g. "
-    "{script, [], [?raw(json:encode(Data))]}. The ?raw has to sit at the slot itself: a "
-    "variable holding one reaches the slot only when its expression reads a binding, so "
-    "compute the value into a variable and wrap it here (Json = json:encode(Data), then "
-    "{script, [], [?raw(Json)]}), not the other way round. Literal script/CSS text is "
-    "static, not a slot, and needs no wrapper";
-format_error(local_in_raw_text) ->
-    "a content ?local cannot be used inside a raw-text element "
-    "(script/style/textarea/title/xmp/iframe/noembed/noframes) -- raw-text content "
-    "carries no slot markers "
-    "for the client to address, so the value would never update";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
-format_error(local_orphaned) ->
-    "?local must sit inside an element -- as a content child or an attribute "
-    "value. At a fragment top level, as a whole template body, or as a bare "
-    "conditional-branch value there is no enclosing element to carry the "
-    "az-local descriptor, so the client could never bind the key and "
-    "set/set_all would be silent no-ops";
 %% The helper_* rejection reasons and template_impure_expr are the only 3-tuple
 %% reasons; dispatch to format_helper_error/3 to keep format_error/1's clause
 %% complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
-format_error(markup_in_raw_text) ->
-    "a <title> or <textarea> holds text only (escapable raw text): the browser shows "
-    "an element, an ?each, a ?stateless/?stateful component or a template holding an "
-    "element there as literal markup. Render text instead: a value, or a text-only "
-    "template (text and values, no element), which renders its text";
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -1346,34 +1355,16 @@ format_error(local_attr_mixed) ->
     "parts the page carries, and the slot is never diffed, so a computed part would "
     "render once and then disagree with its bindings. Compute it into the ?local's "
     "initial value instead, or render it in another attribute";
-format_error(nodiff_value) ->
-    "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
-    "az_nodiff / <<\"az-nodiff\">>) alone in the attribute list. The value it carries "
-    "in the rendered HTML belongs to the compiler: it names the az-nodiff element so the client "
-    "can keep it across a re-render, and an authored one would be read as that name";
-format_error(nested_nodiff) ->
-    "az-nodiff is only honored on a template's top-level (root) element -- it is a "
-    "whole-template directive, not a per-element one, so on a nested element it cannot "
-    "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
-    "element, or split the subtree into its own ?html/?stateless template whose root "
-    "carries az-nodiff";
 %% Render-target errors: nesting one target in another, and a `target/2` call
 %% declare_target/2 refused (tagged `target`).
 format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
     format_target_error(Reason);
-%% The `?each` callback errors live in their own function: they are a related family
-%% and, together, they carried `format_error/1` past the cyclomatic limit.
-format_error(Reason) when
-    Reason =:= each_body_not_element;
-    Reason =:= each_stream_body_not_element;
-    Reason =:= each_stream_body_control_flow;
-    Reason =:= each_named_fun_multi_clause;
-    Reason =:= each_named_fun_undefined;
-    Reason =:= each_remote_fun_ref;
-    Reason =:= element_in_comprehension;
-    Reason =:= each_outside_target
-->
-    format_each_error(Reason);
+format_error(each_outside_target) ->
+    "this ?each is outside every template (?html, ?json, ...), so it has no render "
+    "target to compile with. An ?each compiles where a template takes it in: write it "
+    "inside the template, bind it to a variable the template uses, or return it from "
+    "a local helper the template calls. A function that returns it on its own (to "
+    "another module, or as a value) must wrap it in its target, e.g. ?html([?each(...)])";
 format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
     lists:flatten(
         io_lib:format(
@@ -1384,30 +1375,16 @@ format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
     );
 format_error(Reason) when
     Reason =:= tracked_get_on_non_bindings_map;
-    Reason =:= latin1_binary_literal;
-    Reason =:= improper_template_list;
-    Reason =:= effect_in_content
+    Reason =:= latin1_binary_literal
 ->
     format_source_error(Reason).
 
 %% Diagnostics about how a value is written in the source rather than the template's
-%% structure. Kept apart for the same reason as format_each_error/1.
+%% structure. Kept apart to keep format_error/1 under the cyclomatic limit.
 format_source_error(latin1_binary_literal) ->
     "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
     "For intended bytes, spell them so they do not warn: integer segments "
     "(<<16#89, \"PNG\">>) or a sized string (<<\"\\351\":8>>)";
-format_source_error(effect_in_content) ->
-    "an effect command (a command builder call, e.g. arizona_js:hide(~\"#x\")) is not "
-    "content: a content slot renders it as text, and no client runs a command there. Put "
-    "the command in an event attribute's value, e.g. {button, [{az_click, Cmd}], "
-    "[~\"Hide\"]}, or return it from a handler. To show a command as text, encode it "
-    "explicitly: arizona_effect:encode_json(Cmd)";
-format_source_error(improper_template_list) ->
-    "a template's attribute, child and body lists must be proper list literals: "
-    "their items are laid out one slot each at compile time, so a list ending in "
-    "an expression ([A, B | Rest]) has no length to lay out. Write every item in "
-    "the list; render a runtime list of children with ?each, as one item of it: "
-    "{'ul', [], [{'li', [], [~\"first\"]}, ?each(fun(I) -> {'li', [], [I]} end, Rest)]}";
 format_source_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings. This local holds a "
@@ -1442,85 +1419,22 @@ format_attr_error(duplicate_attr, Name) ->
 format_attr_error(select_value, Detail) ->
     format_select_error(Detail).
 
-%% A chooser with a value (`value` on a `<select>`) marks the choice it names
-%% `selected` (see choose/4); an option that marks itself contradicts it.
-format_select_error({option_selected, Tag, Name, Chooser}) ->
-    lists:flatten(
-        io_lib:format(
-            "the ~ts attribute on an <~ts> under a <~ts> with a value: the value already "
-            "decides which option is selected. Drop one of the two",
-            [Name, Tag, Chooser]
-        )
-    );
+%% Raised for a backend that lacks a callback, so the core words it: an
+%% `option_selected` is the backend's (parse_error/3).
 format_select_error({no_markup_text, Backend, Tag}) ->
     lists:flatten(
         io_lib:format(
-            "an <~ts> without a value attribute is valued by its text, and a value in "
+            "a ~ts without a value attribute is valued by its text, and a value in "
             "this one's text may render markup, whose text the render target ~ts cannot "
             "read: it names the selection roles (selection_role/1) but does not export "
-            "markup_text/2. Implement it, or give the option a value attribute",
-            [Tag, Backend]
+            "markup_text/2. Implement it, or give the ~ts a value attribute",
+            [Tag, Backend, Tag]
         )
     ).
 
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
 binder_kind(generator) -> "generator pattern variable".
-
-format_each_error(each_outside_target) ->
-    "this ?each is outside every template (?html, ?json, ...), so it has no render "
-    "target to compile with. An ?each compiles where a template takes it in: write it "
-    "inside the template, bind it to a variable the template uses, or return it from "
-    "a local helper the template calls. A function that returns it on its own (to "
-    "another module, or as a value) must wrap it in its target, e.g. ?html([?each(...)])";
-format_each_error(element_in_comprehension) ->
-    "a comprehension in a content slot builds its list at render time, so the slot "
-    "holds one plain value and an element (or template) per item fails at render. "
-    "Render a runtime list of elements with ?each, which compiles the item once and "
-    "diffs it per item: ?each(fun(X) -> {'li', [], [X]} end, ?get(items)). A "
-    "comprehension of plain values is fine";
-format_each_error(each_body_not_element) ->
-    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
-    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
-    "single-value body defeats its purpose (and a template or descriptor value crashes on "
-    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
-    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
-    "text/value child: {li, [], [case ... of ... end]}";
-format_each_error(each_stream_body_not_element) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}); a map source may also take a list of elements or a static/mixed "
-    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
-    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
-    "has no stream/keyed semantics): wrap the value in an element, e.g. "
-    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
-format_each_error(each_stream_body_control_flow) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
-    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
-    "compiled per-item template (statics once, dynamics per item), so an item's outer tag "
-    "is fixed at compile time. The branches can still be entirely different elements -- "
-    "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
-    "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
-    "return bare element tuples (<em> vs <strong> vs a whole subtree all work), and a div "
-    "with display: contents keeps the wrapper out of layout. NOT inside table/tr or "
-    "select: the parser foster-parents a wrapper out of a table and Firefox drops one "
-    "inside a select, so the keyed element lands where the client cannot address it. A "
-    "varying sibling tag is legitimate in exactly those two (th/td, option/optgroup) and "
-    "has no workaround today";
-format_each_error(each_named_fun_multi_clause) ->
-    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
-    "single clause -- ?each inlines the function's body into one shared per-item template, so "
-    "multiple clauses (which would select different per-item structures) can't be compiled to "
-    "a single template. Collapse them into one clause with a case inside the returned element: "
-    "name(I) -> {li, [], [case I of ... end]}";
-format_each_error(each_named_fun_undefined) ->
-    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
-    "in this module. Define it as a single-clause function returning an element, or inline the "
-    "callback (fun(I) -> {li, [], [...]} end)";
-format_each_error(each_remote_fun_ref) ->
-    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
-    "the callback body to build a per-item template, which is impossible across a module "
-    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
-    "local function and pass fun name/1".
 
 format_impure_error({hoisted, Var}, What) ->
     lists:flatten(
@@ -1671,6 +1585,19 @@ format_helper_error(helper_param_in_each_guard, Name, Arity) ->
 -spec parse_error(term(), term()) -> no_return().
 parse_error(Reason, Anno) ->
     throw({arizona_parse_error, Anno, Reason}).
+
+%% An error raised while compiling a template of `Backend`, which words it
+%% (arizona_renderer:format_error/1). The compiler formats an error later, calling
+%% `format_error/1` on the module the error names, so it is reported under the
+%% backend.
+-spec parse_error(term(), term(), module()) -> no_return().
+parse_error(Reason, Anno, Backend) ->
+    parse_error({'$arizona_worded', Backend, Reason}, Anno).
+
+error_descriptor(Location, {'$arizona_worded', Backend, Reason}) ->
+    {Location, Backend, Reason};
+error_descriptor(Location, Reason) ->
+    {Location, ?MODULE, Reason}.
 
 %% `arizona_template:get`/`get_lazy`/`with` (and the `az:` aliases) call `track/1`
 %% regardless of which map they read, so reading a sub-map records the inner key
@@ -2143,7 +2070,7 @@ ih(Other, _Ctx, Ch, _Tail) ->
 
 ih_content_lc(L, Body, Quals, {Module, FunDefs, Target, _Stack} = Ctx, Ch) ->
     case is_lc_element_body(Body, {Module, FunDefs, Target}) of
-        true -> parse_error(element_in_comprehension, anno(Body));
+        true -> parse_error(element_in_comprehension, anno(Body), target_backend(Target));
         false -> ok
     end,
     {Body1, Ch1} = ih(Body, Ctx, Ch, lc_body),
@@ -4212,7 +4139,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs, Unit) ->
         %% A remote `fun Mod:Name/Arity` ref to another module: its body isn't visible at
         %% compile time, so it can't be inlined into the per-item template.
         {'fun', L, {function, _Mod, _Name, _Arity}} ->
-            parse_error(each_remote_fun_ref, L);
+            parse_error(each_remote_fun_ref, L, Backend);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
@@ -4260,9 +4187,9 @@ compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs, Un
             %% the enclosing slot's closure, which carries the call site's line.
             compile_each(FunAST, SourceAST, CL, Module, Backend, CCtx, FunDefs, Unit);
         #{{Name, Arity} := [_ | _]} ->
-            parse_error(each_named_fun_multi_clause, L);
+            parse_error(each_named_fun_multi_clause, L, Backend);
         #{} ->
-            parse_error(each_named_fun_undefined, L)
+            parse_error(each_named_fun_undefined, L, Backend)
     end.
 
 %% Compile one inline `?each` callback clause (`Kind` = list | stream, from the arity) into
@@ -4283,7 +4210,7 @@ compile_each_clause(Kind, Vars, Guards, Body0, SourceAST, Line, Module, Backend,
         {element, ElemAST0} ->
             ElemAST = unwrap_one_root_list(Kind, ElemAST0),
             Classification = classify_body(ElemAST),
-            ok = validate_each_body(Kind, Classification, ElemAST),
+            ok = validate_each_body(Backend, Kind, Classification, ElemAST),
             %% The per-item template compiles in the content context its `?each`
             %% sits in, so an element the backend classifies differently there
             %% (an SVG `<title>`) is treated the same as if it were written
@@ -4358,7 +4285,7 @@ maybe_multi_root_opt(_Kind, _Classification, Opts) ->
 maybe_keyless_opt(Backend, stream, element_tuple, ElemAST, Opts) when
     not is_map_key(diff, Opts)
 ->
-    {_Tag, Attrs, _Children, _Line} = extract_element(ElemAST),
+    {_Tag, Attrs, _Children, _Line} = extract_element(ElemAST, Backend),
     case Backend:supports_keyed_item_ops() andalso not has_az_key(Attrs) of
         true -> Opts#{keyless => true};
         false -> Opts
@@ -4445,21 +4372,26 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
 %% fix advice, since a list has a comprehension fallback and a stream does not. Whether a
 %% 2-arg body must be ONE element depends on the runtime source (see maybe_multi_root_opt/3).
-validate_each_body(Kind, text_dynamic, LastExpr) ->
-    parse_error(each_body_error(Kind, LastExpr), anno(LastExpr));
-validate_each_body(Kind, list_ast, LastExpr) ->
+validate_each_body(Backend, Kind, text_dynamic, LastExpr) ->
+    each_body_parse_error(Backend, Kind, LastExpr);
+validate_each_body(Backend, Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?json/?terminal map literal) or a ?stateful/?stateless descriptor: those land
     %% in a per-item value slot and crash on diff exactly like a bare body. (A component as
     %% an ?each item child is a known limitation -- it crashes on the per-item diff for now.)
-    walk_each_list_items(Kind, LastExpr);
-validate_each_body(_Kind, _Classification, _LastExpr) ->
+    walk_each_list_items(Backend, Kind, LastExpr);
+validate_each_body(_Backend, _Kind, _Classification, _LastExpr) ->
     ok.
 
 %% A control-flow body is a different mistake from a bare value, and only the keyed
 %% path needs telling apart: "wrap the value in an element" reads as advice to pick a
 %% tag, which for branches that already return different elements changes the markup
 %% instead of fixing it. The list message names the conditional case already.
+%% Each of these advises in the target's own elements, so the backend words it.
+-spec each_body_parse_error(module(), list | stream, erl_parse:abstract_expr()) -> no_return().
+each_body_parse_error(Backend, Kind, Expr) ->
+    parse_error(each_body_error(Kind, Expr), anno(Expr), Backend).
+
 each_body_error(list, _LastExpr) ->
     each_body_not_element;
 each_body_error(stream, LastExpr) ->
@@ -4468,12 +4400,12 @@ each_body_error(stream, LastExpr) ->
         false -> each_stream_body_not_element
     end.
 
-walk_each_list_items(Kind, {cons, _, Item, Tail}) ->
+walk_each_list_items(Backend, Kind, {cons, _, Item, Tail}) ->
     case is_fragile_each_item(Item) of
-        true -> parse_error(each_body_error(Kind, Item), anno(Item));
-        false -> walk_each_list_items(Kind, Tail)
+        true -> each_body_parse_error(Backend, Kind, Item);
+        false -> walk_each_list_items(Backend, Kind, Tail)
     end;
-walk_each_list_items(_Kind, _Nil) ->
+walk_each_list_items(_Backend, _Kind, _Nil) ->
     ok.
 
 %% A list item that compiles to a fragile per-item value slot (renders at SSR, crashes on
@@ -4528,14 +4460,15 @@ compile_classified_body(
     {Statics, [], generate_fingerprint(Statics), #{}};
 compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx, Inherited) ->
     compile_fragment_parts(
-        ast_list_to_list(ExprAST), Module, LiveRender, Backend, CCtx, {Inherited, template}
+        ast_list_to_list(ExprAST, Backend), Module, LiveRender, Backend, CCtx, {Inherited, template}
     );
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, Inherited) ->
-    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, Inherited);
+    compile_mixed_items(ast_list_to_list(ExprAST, Backend), Module, Backend, CCtx, Inherited);
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, true) ->
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
-    ok = reject_orphaned_local(ExprAST),
+    ok = reject_orphaned_local(ExprAST, Backend),
+    ok = assert_code_points(ExprAST),
     DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend, CCtx)],
     Statics = [[], []],
     {Statics, DynASTs, generate_fingerprint(Statics), #{diff => false}};
@@ -4543,7 +4476,8 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
     %% The slot's own markers anchor it (see below), but a marker is not an
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
-    ok = reject_orphaned_local(ExprAST),
+    ok = reject_orphaned_local(ExprAST, Backend),
+    ok = assert_code_points(ExprAST),
     %% A whole-template bare dynamic (`?html(case ...)`, `?html(?get(x))`, a
     %% root `?stateless`/`?stateful` descriptor) sits inside no element, so no
     %% content slot would otherwise anchor it: wrap the slot in its own
@@ -4563,9 +4497,9 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
 %% maybe_inject_local_descriptor/7). The client binds keys by scanning that
 %% attribute, so the key would be unreachable and set/set_all silent no-ops.
 %% Reject at compile time.
-reject_orphaned_local(ExprAST) ->
+reject_orphaned_local(ExprAST, Backend) ->
     case is_local_marker(ExprAST) of
-        true -> parse_error(local_orphaned, anno(ExprAST));
+        true -> parse_error(local_orphaned, anno(ExprAST), Backend);
         false -> ok
     end.
 
@@ -4585,7 +4519,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
     },
     State1 = fold_fragment_items(
         fun(Elem, State) ->
-            {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Elem, Backend),
             {Attrs, ElemOpts} = extract_directives(Attrs0),
             Mark = nodiff_mark(ElemOpts, Marked, Keepable),
             compile_element(Tag, Attrs, Children, ElemLine, State#state{nodiff_mark = Mark})
@@ -4626,7 +4560,7 @@ nodiff_mark(_ElemOpts, _Marked, _Keepable) -> none.
 is_keepable_nodiff([Elem], false, Unit, Backend) ->
     case is_element_tuple(Elem) of
         true ->
-            {_Tag, Attrs, _Children, _Line} = extract_element(Elem),
+            {_Tag, Attrs, _Children, _Line} = extract_element(Elem, Backend),
             {_Rest, ElemOpts} = extract_directives(Attrs),
             maps:is_key(diff, ElemOpts) andalso not contains_inner_content(Elem) andalso
                 (Unit =:= template orelse has_az_key(Attrs)) andalso
@@ -4775,11 +4709,12 @@ compile_mixed_item(Item, Module, State) ->
 compile_mixed_non_static(Item, Module, State) ->
     case is_element_tuple(Item) of
         true ->
-            {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Item, State#state.backend),
             {Attrs, _ElemOpts} = extract_directives(Attrs0),
             compile_element(Tag, Attrs, Children, ElemLine, State);
         false ->
-            ok = reject_orphaned_local(Item),
+            ok = reject_orphaned_local(Item, State#state.backend),
+            ok = assert_code_points(Item),
             compile_mixed_dynamic(Item, Module, State)
     end.
 
@@ -4809,22 +4744,65 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
 %% does contain an underscore unwritable -- `{'my-widget_v2', ...}` silently emitted
 %% `<my-widget-v2>`. The two forms are the same pair, and mean the same thing, for a
 %% tag as for an attribute name.
-extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node) ->
-    extract_element_parts(extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node);
-extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node) ->
-    extract_element_parts(extract_binary_value(TagAST), AttrsAST, {nil, 0}, Node);
-extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
-    extract_element_parts(Tag, AttrsAST, ChildrenAST, Node);
-extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
-    extract_element_parts(Tag, AttrsAST, {nil, 0}, Node);
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node, Backend) ->
+    extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend);
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node, Backend) ->
+    extract_binary_tag_element(TagAST, AttrsAST, {nil, 0}, Node, Backend);
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node, Backend) ->
+    extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node, Backend) ->
+    extract_element_parts(Tag, AttrsAST, {nil, 0}, Node, Backend);
 %% Shaped like an element but with a tag that is neither a literal atom nor a
 %% literal binary.
-extract_element({tuple, _, [TagAST, _Attrs]} = Node) ->
-    parse_error(element_tag_reason(TagAST), anno(Node));
-extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
-    parse_error(element_tag_reason(TagAST), anno(Node));
-extract_element(Node) ->
+extract_element({tuple, _, [TagAST, _Attrs]} = Node, Backend) ->
+    element_tag_error(TagAST, Node, Backend);
+extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node, Backend) ->
+    element_tag_error(TagAST, Node, Backend);
+extract_element(Node, _Backend) ->
     parse_error(invalid_element, anno(Node)).
+
+%% A binary literal is a tag only when it folds as text: one built from a value
+%% (`<<"x-", K/binary>>`) chooses the element at runtime, and any other spelling
+%% (sizes, types, operators) lays out bytes, which a tag is not.
+extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend) ->
+    case binary_tag(TagAST) of
+        {ok, Tag} -> extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
+        not_literal_text -> parse_error(tag_not_literal_text, anno(Node));
+        computed -> element_tag_error(TagAST, Node, Backend)
+    end.
+
+%% Nothing here is evaluated: the forms a person writes a name in all fold.
+binary_tag(TagAST) ->
+    ok = assert_code_points(TagAST),
+    case is_static_binary(TagAST) of
+        true -> {ok, extract_binary_value(TagAST)};
+        false -> binary_not_text(TagAST)
+    end.
+
+binary_not_text(BinAST) ->
+    case reads_value(BinAST) of
+        true -> computed;
+        false -> not_literal_text
+    end.
+
+reads_value({var, _, _}) -> true;
+reads_value({call, _, _, _}) -> true;
+reads_value(Node) when is_tuple(Node) -> reads_value(tuple_to_list(Node));
+reads_value(Nodes) when is_list(Nodes) -> lists:any(fun reads_value/1, Nodes);
+reads_value(_Leaf) -> false.
+
+%% The attrs of an element tuple, for a pass that only reads directives ahead of the
+%% compile (prescan_directives/1). A malformed element reads as having none: the
+%% compile that follows extracts it with the backend in hand and refuses it there.
+element_attrs({tuple, _, [TagAST, AttrsAST | _]}) when
+    element(1, TagAST) =:= atom; element(1, TagAST) =:= bin
+->
+    case is_list_ast(AttrsAST) of
+        true -> ast_list_prefix(AttrsAST);
+        false -> []
+    end;
+element_attrs(_Malformed) ->
+    [].
 
 %% A tag written as a literal of a type that is not a name (a string, a number) is a
 %% malformed element form, and the form error says exactly what the accepted shapes
@@ -4832,18 +4810,40 @@ extract_element(Node) ->
 %% author is choosing the element at runtime -- so it gets advice instead.
 %% Shared by both tag forms: the attrs must still be a literal list, and a void
 %% element's `{Tag, Attrs}` shorthand is the same as an empty child list.
-extract_element_parts(Tag, AttrsAST, ChildrenAST, Node) ->
+%% An element with no name renders one no client reads (`<>` in HTML, an empty JSON
+%% type).
+extract_element_parts(Tag, _AttrsAST, _ChildrenAST, Node, _Backend) when
+    Tag =:= ''; Tag =:= <<>>
+->
+    parse_error(tag_empty, anno(Node));
+extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend) ->
+    ok = assert_tag_text(Tag, Node),
     case is_list_ast(AttrsAST) of
         true ->
-            {Tag, ast_list_to_list(AttrsAST), normalize_children(ChildrenAST), anno(Node)};
+            {Tag, ast_list_to_list(AttrsAST, Backend), normalize_children(ChildrenAST, Backend),
+                anno(Node)};
         false ->
             parse_error(invalid_element, anno(Node))
     end.
 
-element_tag_reason(TagAST) ->
+%% A tag is written as UTF-8 text with no C0 control or DEL, however it is spelled: a
+%% NUL-laden utf16/utf32 layout is valid UTF-8 byte by byte, but names no element.
+assert_tag_text(Tag, Node) ->
+    case is_name_text(tag_bytes(Tag)) of
+        true -> ok;
+        false -> parse_error({tag_not_text, Tag}, anno(Node))
+    end.
+
+tag_bytes(Tag) when is_atom(Tag) -> atom_to_binary(Tag);
+tag_bytes(Tag) -> Tag.
+
+%% A computed tag is advised in the target's own elements, so the backend words it.
+-spec element_tag_error(erl_parse:abstract_expr(), erl_parse:abstract_expr(), module()) ->
+    no_return().
+element_tag_error(TagAST, Node, Backend) ->
     case is_literal_tag(TagAST) of
-        true -> invalid_element;
-        false -> computed_element_tag
+        true -> parse_error(invalid_element, anno(Node));
+        false -> parse_error(computed_element_tag, anno(Node), Backend)
     end.
 
 is_literal_tag({atom, _, _}) -> true;
@@ -4875,7 +4875,8 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
             false -> {none, State1}
         end,
-    TagBin = Backend:name(Tag),
+    %% The backend may refuse a name its markup cannot carry (arizona_render_reject).
+    TagBin = emit_backend(fun() -> Backend:name(Tag) end, Line),
     State3 = buf_append(State2, emit_backend(fun() -> Backend:element_open(TagBin) end, Line)),
     State4 =
         case ElemAz of
@@ -5057,10 +5058,10 @@ implied_attr_name(Backend, {tuple, _, [{atom, _, _} = NameAST, _Value]}) ->
     extract_attr_name(Backend, NameAST);
 implied_attr_name(Backend, {tuple, _, [{bin, _, _} = NameAST, _Value]}) ->
     extract_attr_name(Backend, NameAST);
-implied_attr_name(_Backend, {bin, _, _} = Bin) ->
-    extract_binary_value(Bin);
-implied_attr_name(Backend, {atom, _, Name}) ->
-    Backend:name(Name);
+implied_attr_name(Backend, {bin, _, _} = NameAST) ->
+    extract_attr_name(Backend, NameAST);
+implied_attr_name(Backend, {atom, _, _} = NameAST) ->
+    extract_attr_name(Backend, NameAST);
 implied_attr_name(_Backend, _Other) ->
     undefined.
 
@@ -5072,7 +5073,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = record_directive_attr(extract_binary_value(Bin)),
+    NameBin = record_directive_attr(extract_attr_name(Backend, Bin)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -5089,6 +5090,7 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
+    ok = assert_code_points(ValueAST),
     case fold_literal_text(ValueAST) of
         {ok, ValBin} ->
             %% A literal value (a binary, or a list of literals, folded by
@@ -5122,9 +5124,9 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
                 end,
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
-compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
+compile_attr({atom, _, _} = NameAST, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = record_directive_attr(Backend:name(Name)),
+    NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrAnno =
@@ -5434,7 +5436,7 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
         false ->
             Attrs;
         true ->
-            assert_content_local_not_raw_text(ContentLocals, RawKind, Line),
+            assert_content_local_not_raw_text(Backend, ContentLocals, RawKind, Line),
             assert_local_supported(Backend, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             %% After the support check: the affixes are read through callbacks only a
@@ -5450,16 +5452,16 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
 %% slot markers -- so the client's az-local scan can never resolve the slot and
 %% the value silently never updates. Reject it at compile time. An *attribute*
 %% ?local on the same element is unaffected (the attribute is not raw-text content).
-assert_content_local_not_raw_text(ContentLocals, RawKind, Line) ->
+assert_content_local_not_raw_text(Backend, ContentLocals, RawKind, Line) ->
     case map_size(ContentLocals) > 0 andalso RawKind =/= none of
-        true -> parse_error(local_in_raw_text, Line);
+        true -> parse_error(local_in_raw_text, Line, Backend);
         false -> ok
     end.
 
 assert_local_supported(Backend, Line) ->
     case Backend:supports_local() of
         true -> ok;
-        false -> parse_error(local_unsupported, Line)
+        false -> parse_error(local_unsupported, Line, Backend)
     end.
 
 %% A key must not bind both content and an attribute on one element: a single
@@ -5659,10 +5661,10 @@ static_child_bytes(Child, #state{backend = Backend, raw_text_kind = RawKind}) ->
 compile_non_static_child(Child, ElemAz, State0, Slot) ->
     case is_element_tuple(Child) of
         true ->
-            {Tag, Attrs, Children, ElemLine} = extract_element(Child),
+            {Tag, Attrs, Children, ElemLine} = extract_element(Child, State0#state.backend),
             %% A literal element in title/textarea content shows as literal text.
             case State0#state.raw_text_kind of
-                escapable -> parse_error(markup_in_raw_text, ElemLine);
+                escapable -> parse_error(markup_in_raw_text, ElemLine, State0#state.backend);
                 _ -> ok
             end,
             {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
@@ -5693,7 +5695,8 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             ok = reject_markup_in_raw_text(
                 Child, State0#state.raw_text_kind, State0#state.backend
             ),
-            ok = reject_command_in_content(Child),
+            ok = reject_command_in_content(Child, State0#state.backend),
+            ok = assert_code_points(Child),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
@@ -5701,38 +5704,39 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
 %% A builder call with literal arguments folds to a command here, as it does in an
 %% attribute (try_fold_command/1), which proves the slot would hold one; any other
 %% command is refused when it renders (`effect_in_content`).
-reject_command_in_content(Child) ->
-    _Walked = map_tail_exprs(Child, fun reject_command_leaf/1, fun(E) -> E end),
+reject_command_in_content(Child, Backend) ->
+    Reject = fun(Leaf) -> reject_command_leaf(Leaf, Backend) end,
+    _Walked = map_tail_exprs(Child, Reject, fun(E) -> E end),
     ok.
 
-reject_command_leaf({nil, _} = Leaf) ->
+reject_command_leaf({nil, _} = Leaf, _Backend) ->
     Leaf;
-reject_command_leaf({cons, _, Head, Tail} = Leaf) ->
-    ok = reject_command_in_content(Head),
-    _Tail = reject_command_leaf(Tail),
+reject_command_leaf({cons, _, Head, Tail} = Leaf, Backend) ->
+    ok = reject_command_in_content(Head, Backend),
+    _Tail = reject_command_leaf(Tail, Backend),
     Leaf;
-reject_command_leaf({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, Args} = Leaf) when
+reject_command_leaf({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, Args} = Leaf, Backend) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= raw orelse F =:= local)
 ->
     %% The value a ?raw splices or a content ?local starts with is content too.
-    ok = reject_command_in_content(lists:last(Args)),
+    ok = reject_command_in_content(lists:last(Args), Backend),
     Leaf;
-reject_command_leaf(Leaf) ->
+reject_command_leaf(Leaf, Backend) ->
     case try_fold_command(Leaf) of
-        {ok, _Cmd} -> parse_error(effect_in_content, anno(Leaf));
+        {ok, _Cmd} -> parse_error(effect_in_content, anno(Leaf), Backend);
         error -> Leaf
     end.
 
 %% Escapable raw text (title/textarea) decodes character references but parses no
 %% tags, so markup there -- in the value itself or in any tail it can take -- would
 %% show as literal text (comment markers included). A script/style slot is
-%% already refused unless it is a literal ?raw (assert_raw_text_opt_out/1).
+%% already refused unless it is a literal ?raw (assert_raw_text_opt_out/2).
 reject_markup_in_raw_text(Child, escapable, Backend) ->
     _Walked = map_tail_exprs(
         Child,
         fun(Leaf) ->
             case is_markup_leaf(Leaf, Backend) of
-                true -> parse_error(markup_in_raw_text, anno(Leaf));
+                true -> parse_error(markup_in_raw_text, anno(Leaf), Backend);
                 false -> Leaf
             end
         end,
@@ -5770,7 +5774,7 @@ list_has_markup_value(_) ->
 %% The compile-time half of arizona_template:text_markup/2: no tag in the statics once
 %% the slot markers are gone, and no attribute dynamic.
 is_text_only_template(Fields, Backend) ->
-    Statics = [extract_binary_value(B) || B <- ast_list_to_list(template_map_field(s, Fields))],
+    Statics = [extract_binary_value(B) || B <- proper_ast_list(template_map_field(s, Fields))],
     case dynamic_azs(template_map_field(d, Fields)) of
         {ok, Azs} ->
             not lists:any(
@@ -5783,7 +5787,7 @@ is_text_only_template(Fields, Backend) ->
 
 dynamic_azs(DAST) ->
     try
-        {ok, [text_dynamic_az(D) || D <- ast_list_to_list(DAST)]}
+        {ok, [text_dynamic_az(D) || D <- proper_ast_list(DAST)]}
     catch
         error:_NotTextDynamic -> error
     end.
@@ -5831,7 +5835,7 @@ emit_child_dynamic(
     %% script/CSS (and a module script's HTML-comment tokens are a SyntaxError).
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
-    ok = assert_raw_text_opt_out(Child),
+    ok = assert_raw_text_opt_out(Child, Backend),
     Neighbours = {static_run_before(Buf), After},
     DynAST = make_raw_text_dynamic_ast(
         Child, Tag, Neighbours, Module, line(Child), Backend, State0#state.content_ctx
@@ -5945,10 +5949,10 @@ choices_fun({'fun', L, {clauses, [{clause, CL, [], [], Body}]}}, Picks, Esc) ->
 %% `?raw(...)` at the slot -- the same "literal at the template site" rule the
 %% escape opt-out already follows everywhere else. Static text children never reach
 %% here (compile_child/4 splices them from the template's own bytes).
-assert_raw_text_opt_out(Child) ->
+assert_raw_text_opt_out(Child, Backend) ->
     case is_raw_call(Child) of
         true -> ok;
-        false -> parse_error(dynamic_in_raw_text, anno(Child))
+        false -> parse_error(dynamic_in_raw_text, anno(Child), Backend)
     end.
 
 %% A literal `?raw` part is spliced; any other part is marked for escaping
@@ -6242,9 +6246,9 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff, CCtx) ->
 %% that contains markup, see is_markup_item/1) into a nested template, as a literal ?html
 %% there would; leave plain values (and pure value lists) untouched. A ?local
 %% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
-%% (see reject_orphaned_local/1).
+%% (see reject_orphaned_local/2).
 expand_element_leaf(Expr, Module, Backend, Nodiff, CCtx) ->
-    ok = reject_orphaned_local(Expr),
+    ok = reject_orphaned_local(Expr, Backend),
     case classify_body(Expr) of
         Class when Class =:= element_tuple; Class =:= element_list ->
             compile_template(Expr, line(Expr), Module, false, Backend, Nodiff, CCtx);
@@ -6649,7 +6653,7 @@ reuse_field(Line, [ItemPat, KeyPat], Prefix, DynamicsAST) ->
     KeyVars = ordsets:from_list(collect_var_names(KeyPat)),
     HeadVars = collect_var_names(ItemPat) ++ collect_var_names(KeyPat),
     Local = (HeadVars ++ prefix_bound(Prefix, HeadVars)) -- item_vars(ItemPat),
-    Flags = [reusable_dynamic(D, KeyVars, Local) || D <- ast_list_to_list(DynamicsAST)],
+    Flags = [reusable_dynamic(D, KeyVars, Local) || D <- proper_ast_list(DynamicsAST)],
     case lists:member(true, Flags) of
         true ->
             [
@@ -6762,9 +6766,21 @@ ast_list([H | T]) ->
 %% A template list (children, attrs, a body) is laid out at compile time, one slot
 %% per item, so its length must be known: a variable or other non-list tail has no
 %% items to lay out.
-ast_list_to_list({nil, _}) -> [];
-ast_list_to_list({cons, _, Head, Tail}) -> [Head | ast_list_to_list(Tail)];
-ast_list_to_list(Tail) -> parse_error(improper_template_list, anno(Tail)).
+%% The advice names the target's own elements, so the backend words the error.
+ast_list_to_list({nil, _}, _Backend) -> [];
+ast_list_to_list({cons, _, Head, Tail}, Backend) -> [Head | ast_list_to_list(Tail, Backend)];
+ast_list_to_list(Tail, Backend) -> parse_error(improper_template_list, anno(Tail), Backend).
+
+%% The items before an improper tail, for a pass that only reads ahead of the compile
+%% (directives): the compile that follows lays the list out with the backend in hand
+%% and refuses the tail there.
+ast_list_prefix({cons, _, Head, Tail}) -> [Head | ast_list_prefix(Tail)];
+ast_list_prefix(_NilOrTail) -> [].
+
+%% A list the transform built itself (a compiled template's statics or dynamics),
+%% always proper.
+proper_ast_list({nil, _}) -> [];
+proper_ast_list({cons, _, Head, Tail}) -> [Head | proper_ast_list(Tail)].
 
 %% An attribute value list is text, where an improper tail is one more part of the
 %% chardata (`[~"/u/" | Id]` means `[~"/u/", Id]`), so it is kept as a part instead.
@@ -6772,14 +6788,37 @@ attr_value_parts({nil, _}) -> [];
 attr_value_parts({cons, _, Head, Tail}) -> [Head | attr_value_parts(Tail)];
 attr_value_parts(Tail) -> [Tail].
 
-normalize_children(AST) ->
+normalize_children(AST, Backend) ->
     case is_list_ast(AST) of
-        true -> ast_list_to_list(AST);
+        true -> ast_list_to_list(AST, Backend);
         false -> [AST]
     end.
 
-extract_attr_name(Backend, {atom, _, Name}) -> Backend:name(Name);
-extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
+%% A name is written as text, as a tag is: an atom, or a binary that folds.
+%% Both forms go through the backend's name/1, which may refuse a name its markup
+%% cannot carry (arizona_render_reject); a binary comes back as written.
+extract_attr_name(Backend, {atom, _, Name} = NameAST) ->
+    checked_attr_name(Name, backend_name(Backend, Name, NameAST), NameAST);
+extract_attr_name(Backend, BinAST) ->
+    ok = assert_code_points(BinAST),
+    case is_static_binary(BinAST) of
+        true ->
+            Name = extract_binary_value(BinAST),
+            checked_attr_name(Name, backend_name(Backend, Name, BinAST), BinAST);
+        false ->
+            parse_error(attr_name_not_literal_text, anno(BinAST))
+    end.
+
+backend_name(Backend, Name, NameAST) ->
+    emit_backend(fun() -> Backend:name(Name) end, anno(NameAST)).
+
+checked_attr_name(_Written, <<>>, NameAST) ->
+    parse_error(attr_name_empty, anno(NameAST));
+checked_attr_name(Written, Name, NameAST) ->
+    case is_name_text(Name) of
+        true -> Name;
+        false -> parse_error({attr_name_not_text, Written}, anno(NameAST))
+    end.
 
 extract_binary_value({bin, _, _} = Bin) ->
     ok = note_folded(Bin),
@@ -6799,6 +6838,8 @@ binary_text({bin, _, Elements}) ->
 extract_bin_element({bin_element, _, {string, _, Chars}, default, _Type}) ->
     unicode:characters_to_binary(Chars);
 extract_bin_element({bin_element, _, {integer, _, N}, default, _Type}) ->
+    <<N/utf8>>;
+extract_bin_element({bin_element, _, {char, _, N}, default, _Type}) ->
     <<N/utf8>>.
 
 %% Records a binary literal folded as UTF-8 text, so latin1_warnings/2 does not
@@ -6833,12 +6874,116 @@ is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, default})
     true;
 is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, [utf8]}) ->
     true;
-is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, default}) ->
-    true;
-is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, [utf8]}) ->
-    true;
+%% An integer or `$x` segment folds as the code point it names. A literal binary
+%% holding one that names none (a surrogate, past U+10FFFF) is refused where it is a
+%% tag, an attribute name or value, or content (assert_code_points/1); anywhere else
+%% (a `?local` init) it does not fold, and Erlang builds its bytes at runtime.
+is_foldable_bin_element({bin_element, _, {Kind, _, N}, default, Type}) when
+    (Kind =:= integer orelse Kind =:= char) andalso (Type =:= default orelse Type =:= [utf8])
+->
+    is_code_point(N);
 is_foldable_bin_element(_) ->
     false.
+
+is_code_point(N) -> N >= 0 andalso N =< 16#10FFFF andalso not (N >= 16#D800 andalso N =< 16#DFFF).
+
+%% A template folds a literal binary written as a tag, an attribute name or value,
+%% content or a template body into its text, reading an integer or `$x` segment as the
+%% character it names, so one that names none (a surrogate, a negative number, past
+%% U+10FFFF) there is a mistake, not a byte to render. Only the literal written at the
+%% position itself (or in a list of literal text there) folds: one with any other segment (a
+%% size, a type, a value read at runtime), one a conditional returns and one a `?raw`
+%% wraps are runtime values whose bytes Erlang builds, an integer segment a byte.
+assert_code_points({bin, _, Elements}) ->
+    case lists:all(fun is_fold_shaped/1, Elements) of
+        true -> lists:foreach(fun assert_code_point/1, Elements);
+        false -> ok
+    end;
+assert_code_points({cons, _, _, _} = List) ->
+    case is_literal_text_list(List) of
+        true -> assert_list_code_points(List);
+        false -> ok
+    end;
+assert_code_points(_NotALiteral) ->
+    ok.
+
+assert_code_point({bin_element, Line, Value, default, Type}) when
+    Type =:= default; Type =:= [utf8]
+->
+    case code_point_literal(Value) of
+        {ok, N} ->
+            case is_code_point(N) of
+                true -> ok;
+                false -> parse_error({not_code_point, N}, Line)
+            end;
+        error ->
+            ok
+    end;
+assert_code_point(_Sized) ->
+    ok.
+
+%% A segment written as a binary that folds is: text or a code point literal, with no
+%% size and a default or /utf8 type.
+is_fold_shaped({bin_element, _, Value, default, Type}) when Type =:= default; Type =:= [utf8] ->
+    element(1, Value) =:= string orelse code_point_literal(Value) =/= error;
+is_fold_shaped(_Element) ->
+    false.
+
+%% A list folds only when every item is literal text; one holding a value read at
+%% runtime is one runtime value, its binaries Erlang bytes. (A list holding a block is
+%% compiled item by item, each checked where it compiles.)
+is_literal_text_list({nil, _}) ->
+    true;
+is_literal_text_list({cons, _, Head, Tail}) ->
+    is_literal_text_item(Head) andalso is_literal_text_list(Tail);
+is_literal_text_list(_Tail) ->
+    false.
+
+is_literal_text_item({bin, _, Elements}) ->
+    lists:all(fun is_fold_shaped/1, Elements);
+is_literal_text_item({Literal, _, _}) when
+    Literal =:= string; Literal =:= char; Literal =:= integer
+->
+    true;
+is_literal_text_item({nil, _}) ->
+    true;
+is_literal_text_item({cons, _, _, _} = List) ->
+    is_literal_text_list(List);
+is_literal_text_item(_Value) ->
+    false.
+
+assert_list_code_points({cons, _, Head, Tail}) ->
+    ok = assert_code_points(Head),
+    assert_list_code_points(Tail);
+assert_list_code_points({nil, _}) ->
+    ok.
+
+code_point_literal({integer, _, N}) -> {ok, N};
+code_point_literal({char, _, N}) -> {ok, N};
+code_point_literal({op, _, '-', {integer, _, N}}) -> {ok, -N};
+code_point_literal({op, _, '-', {char, _, N}}) -> {ok, -N};
+code_point_literal(_Other) -> error.
+
+%% A name as written: an atom as an atom, UTF-8 as text, anything else as its bytes,
+%% so `<<255>>` does not read as a `ÿ`. Cut short either way.
+quote_name(Name) when is_atom(Name) ->
+    io_lib:format("~0tP", [Name, 20]);
+quote_name(Name) ->
+    case unicode:characters_to_binary(Name) of
+        Name -> io_lib:format("~0tP", [Name, 20]);
+        _NotUtf8 -> io_lib:format("~W", [Name, 20])
+    end.
+
+%% UTF-8 text without a C0 control, an ASCII space or DEL: no target has a name with
+%% ASCII whitespace in it (the other ASCII whitespace is C0). C1 controls and U+00A0
+%% are allowed: they break no target's markup.
+is_name_text(Bytes) ->
+    case unicode:characters_to_list(Bytes) of
+        Chars when is_list(Chars) ->
+            not lists:any(fun(C) -> C =< 32 orelse C =:= 127 end, Chars);
+        _NotUtf8 ->
+            false
+    end.
 
 %% The text a literal attribute value folds to: a binary literal, or a (possibly
 %% nested) list of literals, which renders at runtime as the chardata it is. A pure
@@ -7017,8 +7162,7 @@ prescan_directives(Items) ->
         fun(Item, Acc) ->
             case is_element_tuple(Item) of
                 true ->
-                    {_Tag, Attrs0, _Children, _Line} = extract_element(Item),
-                    {_Attrs, ElemOpts} = extract_directives(Attrs0),
+                    {_Attrs, ElemOpts} = extract_directives(element_attrs(Item)),
                     maps:merge(Acc, ElemOpts);
                 false ->
                     Acc
@@ -7054,17 +7198,17 @@ directive_opts_1(_Other) -> false.
 %% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
 %% never mistaken for an authored one.
 reject_framework_attrs(Backend, Attrs, Line) ->
-    ok = reject_nested_directives(Attrs, Line),
-    ok = reject_nodiff_value(Attrs, Line),
+    ok = reject_nested_directives(Backend, Attrs, Line),
+    ok = reject_nodiff_value(Backend, Attrs, Line),
     ok = reject_reserved_attrs(Attrs, Line),
     reject_duplicate_attrs(Backend, Attrs, Line).
 
 %% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
 %% token the client keeps the element by), so an authored one -- any value,
 %% `true` included -- is rejected rather than emitted or ignored.
-reject_nodiff_value(Attrs, Line) ->
+reject_nodiff_value(Backend, Attrs, Line) ->
     case lists:any(fun is_nodiff_value_attr/1, Attrs) of
-        true -> parse_error(nodiff_value, Line);
+        true -> parse_error(nodiff_value, Line, Backend);
         false -> ok
     end.
 
@@ -7081,9 +7225,9 @@ is_nodiff_value_attr(_Attr) ->
 %% There is no per-element nodiff scope, and left as an ordinary boolean attribute it
 %% would silently leak the reserved `az-nodiff` into the DOM while keeping the element
 %% diffable. Reject it with a clear error rather than mis-compiling it.
-reject_nested_directives(Attrs, Line) ->
+reject_nested_directives(Backend, Attrs, Line) ->
     case lists:any(fun is_directive_attr/1, Attrs) of
-        true -> parse_error(nested_nodiff, Line);
+        true -> parse_error(nested_nodiff, Line, Backend);
         false -> ok
     end.
 
@@ -7102,8 +7246,9 @@ bare_attr_name(Attr) ->
     bare_attr_name(fun directive_attr_name/1, Attr).
 
 %% `AtomName` spells an atom name: the directive normalization, or a backend's `name/1`.
-bare_attr_name(AtomName, {atom, _, Name}) ->
-    {ok, AtomName(Name)};
+bare_attr_name(AtomName, {atom, Anno, Name}) ->
+    %% A backend's name/1 may refuse a name its markup cannot carry.
+    {ok, emit_backend(fun() -> AtomName(Name) end, Anno)};
 bare_attr_name(_AtomName, {bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
         true -> {ok, extract_binary_value(Bin)};
@@ -7446,7 +7591,7 @@ push_choices(Leaf, _Backend) ->
 push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend) ->
     case is_element_tuple(Node) andalso element_tag(TagAST) of
         {ok, Tag} ->
-            case chooser_sel(Backend, Tag, ast_list_to_list(AttrsAST)) of
+            case chooser_sel(Backend, Tag, ast_list_to_list(AttrsAST, Backend)) of
                 {Sel, _Rest} ->
                     {tuple, L, [TagAST, AttrsAST, choice_children(Children, Sel, push)]};
                 none ->
@@ -7468,9 +7613,9 @@ push_each_choices(Sel, FunArg, Backend) ->
 element_tag({atom, _, Tag}) ->
     {ok, Tag};
 element_tag({bin, _, _} = Bin) ->
-    case is_static_binary(Bin) of
-        true -> {ok, binary_text(Bin)};
-        false -> error
+    case binary_tag(Bin) of
+        {ok, Tag} -> {ok, Tag};
+        _NotATag -> error
     end;
 element_tag(_TagAST) ->
     error.
@@ -7821,11 +7966,13 @@ choose_each_item(Sel, Body) ->
 rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
     #{value := ValueName, selected := Flag} = Info,
     #{backend := Backend, tag := Chooser} = Sel,
-    Attrs = ast_list_to_list(AttrsAST),
+    Attrs = ast_list_to_list(AttrsAST, Backend),
     case take_attr(Backend, Flag, Attrs) of
         {ok, Authored, _Rest} ->
             Name = attr_name(fun Backend:name/1, Authored),
-            parse_error({select_value, {option_selected, Backend:name(Tag), Name, Chooser}}, L);
+            parse_error(
+                {select_value, {option_selected, Backend:name(Tag), Name, Chooser}}, L, Backend
+            );
         error ->
             ok
     end,
@@ -7859,7 +8006,7 @@ choice_text(_Backend, []) ->
 choice_text(Backend, [Children]) ->
     Items =
         case is_list_ast(Children) of
-            true -> ast_list_to_list(Children);
+            true -> ast_list_to_list(Children, Backend);
             false -> [Children]
         end,
     Parts = [text_part(Backend, I) || I <- Items],
@@ -8027,14 +8174,29 @@ count_chosen(_Leaf) ->
 %% template nested in it, opening the choice's tag.
 count_choices({call, _, {remote, _, {atom, _, arizona_template}, {atom, _, choices}}, _}, _Sel) ->
     0;
-count_choices({map_field_assoc, _, {atom, _, s}, Statics}, Sel) ->
-    lists:sum([count_choices_in(binary_text(B), Sel) || B <- ast_list_to_list(Statics)]);
+%% Only a compiled template's `s` is statics: a map of the user's in a slot may hold an
+%% `s` key too, and that is data.
+count_choices({map, _, Fields}, Sel) ->
+    case is_compiled_template_map(Fields) of
+        true -> lists:sum([count_template_field(F, Sel) || F <- Fields]);
+        false -> count_choices(Fields, Sel)
+    end;
 count_choices(Node, Sel) when is_tuple(Node) ->
     count_choices(tuple_to_list(Node), Sel);
 count_choices(Nodes, Sel) when is_list(Nodes) ->
     lists:sum([count_choices(N, Sel) || N <- Nodes]);
 count_choices(_Leaf, _Sel) ->
     0.
+
+%% A user map can spell every key a compiled template has, so its `s` is statics only
+%% when it is what the transform writes there: a list of static binaries.
+count_template_field({map_field_assoc, _, {atom, _, s}, Statics}, Sel) ->
+    case is_static_binary_list(Statics) of
+        true -> lists:sum([count_choices_in(binary_text(B), Sel) || B <- proper_ast_list(Statics)]);
+        false -> count_choices(Statics, Sel)
+    end;
+count_template_field(Field, Sel) ->
+    count_choices(Field, Sel).
 
 %% Markup opening the choice's tag (`<option`, in any case), followed by what ends a
 %% tag name or by the end of the static (an attribute dynamic comes next).
@@ -8046,6 +8208,13 @@ count_choices_in(Text, #{backend := Backend, choice := Choice}) ->
      || {P, Len} <- binary:matches(Lower, Open),
         ends_tag_name(binary:part(Lower, P + Len, byte_size(Lower) - P - Len))
     ]).
+
+is_static_binary_list({nil, _}) ->
+    true;
+is_static_binary_list({cons, _, Head, Tail}) ->
+    is_static_binary(Head) andalso is_static_binary_list(Tail);
+is_static_binary_list(_NotAList) ->
+    false.
 
 ends_tag_name(<<>>) -> true;
 ends_tag_name(<<C, _/binary>>) -> lists:member(C, [$\s, $\t, $\n, $\f, $\r, $/, $>]).

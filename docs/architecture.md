@@ -258,7 +258,33 @@ view marker. `supports_keyed_item_ops/0` false lets a stream `?each` body skip `
 nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
 error. Mentions of `?terminal` elsewhere in this document describe that package's target.
 
-One callback is optional, `c:arizona_renderer:selection_role/1`, for a target whose output has no
+The backend also words the errors whose explanation lives in its vocabulary,
+`c:arizona_renderer:format_error/1`. The core raises them with neutral reasons and never
+words them itself: HTML's message for `dynamic_in_raw_text` names `<script>` and the XSS it
+prevents, JSON's for `effect_in_content` an `on_tap` prop, and a third target says it in its
+own terms. At compile time the parse transform reports such an error under the backend
+module (`{Location, arizona_html, dynamic_in_raw_text}`), so the compiler's `format_error/1`
+call reaches the backend; at render time the error is raised with the backend in its
+`error_info` (`#{module => arizona_template, backend => Backend}`), and the core module's
+`format_error/2` asks it. The callback is required, and a backend words every reason its
+other capability answers let reach it: always the `?each` and element-shape advice
+(`computed_element_tag`, `element_in_comprehension`, `each_body_not_element`,
+`each_stream_body_not_element`, `each_stream_body_control_flow`,
+`each_named_fun_multi_clause`, `each_named_fun_undefined`, `each_remote_fun_ref`,
+`improper_template_list`, whose examples are the target's own elements), `local_orphaned`,
+`nodiff_value`, `nested_nodiff`, `effect_in_content`, `stream_each_multi_root` and
+`{stateful_in_layout, Layout, Function, Handler}`; `local_unsupported` when
+`supports_local/0` is `false`; `stream_each_keyless` when
+`supports_keyed_item_ops/0` is `true`; the raw-text family (`dynamic_in_raw_text`,
+`local_in_raw_text`, `markup_in_raw_text`, `{markup_in_raw_text, Element, Value}`) when a
+tag's `raw_text_kind/2` is not `none`; and `{select_value, {option_selected, Tag, Name,
+Chooser}}` with `selection_role/1`. Errors whose advice needs no element of the target
+(`duplicate_attr`, `invalid_element`, ...) stay the core's, as does the runtime
+`effect_in_content` a value raises where no backend is known.
+
+A few callbacks are optional, each a capability some targets lack by nature
+(`selection_role/1`, `mark_choices/2`, `markup_text/2`, `attr_markup/1`, `controlled/2`,
+`embed_attrs/2`). `c:arizona_renderer:selection_role/1` is for a target whose output has no
 attribute for an element's chosen value. HTML is that target: `value` on a `<select>` is ignored by
 the parser, which loads on the first option (or the one marked `selected`), while a diff writes the
 `.value` property, so the page and every later update would disagree. The backend names the roles --

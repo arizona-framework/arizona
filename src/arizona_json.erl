@@ -61,6 +61,7 @@ the wire value. On the wire itself a value stays raw
 -export([wire_escape/1]).
 -export([wire_attr/2]).
 -export([embed_attrs/2]).
+-export([format_error/1]).
 
 -spec name(arizona_renderer:tag()) -> binary().
 name(Bin) when is_binary(Bin) ->
@@ -230,6 +231,127 @@ wire_attr(_Name, Value) ->
         {raw, V} when is_map(V) -> arizona_template:raw_not_text(V);
         _NotACommand -> arizona_template:to_bin(Value)
     end.
+
+-doc """
+The JSON wording of the errors the core raises for a `?json` template
+(`c:arizona_renderer:format_error/1`), in the terms of its native clients: widget
+nodes (`'Row'`, `'Text'`) in the examples, an `on_tap` prop rather than an event
+attribute, no client-owned `?local` state, and no directive kept in the document.
+JSON has no raw-text elements and no selection roles, so those reasons never reach it.
+""".
+-spec format_error(term()) -> string().
+format_error(computed_element_tag) ->
+    "a node's type must be a literal atom or binary. The type is baked into the "
+    "template's statics at compile time, which is what lets a later change ship only "
+    "the values, "
+    "so a type chosen at runtime has no single set of statics to bake. Put the CHOICE "
+    "inside a stable node instead of choosing the node: {'Column', [], [case Kind of "
+    "note -> {'Text', [], [X]}; _ -> {'Button', [], [X]} end]} -- a conditional in a "
+    "content slot may return bare node tuples, so the branches can differ completely. "
+    "Inside an ?each the stable node is the item itself and carries az_key, which is "
+    "also what keeps its identity across a change: "
+    "fun(Item, Key) -> {'Row', [{az_key, Key}], [case Item of ... end]} end";
+format_error(element_in_comprehension) ->
+    "a comprehension in a content slot builds its list at render time, so the slot "
+    "holds one plain value and a node (or template) per item fails at render. Render a "
+    "runtime list of nodes with ?each, which compiles the item once and diffs it per "
+    "item: ?each(fun(X) -> {'Text', [], [X]} end, ?get(items)). A comprehension of "
+    "plain values is fine";
+format_error(each_body_not_element) ->
+    "an ?each callback over a list must return a node ({Type, Props, Children}) or a "
+    "list of nodes -- ?each builds a per-item template for fine-grained diffing, so a "
+    "single-value body defeats its purpose (and a template or descriptor value crashes on "
+    "the first diff). For a list of plain values use a list comprehension or "
+    "lists:map/2. For a conditional, put it inside a node as a text/value child: "
+    "{'Text', [], [case ... of ... end]}";
+format_error(each_stream_body_not_element) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return a node ({Type, "
+    "Props, Children}); a map source may also take a list of nodes or a static/mixed "
+    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
+    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
+    "has no stream/keyed semantics): wrap the value in a node, e.g. "
+    "fun(Item, Key) -> {'Text', [{az_key, Key}], [Item]} end";
+format_error(each_named_fun_multi_clause) ->
+    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have "
+    "a single clause -- ?each inlines the function's body into one shared per-item "
+    "template, so multiple clauses (which would select different per-item structures) "
+    "can't be compiled to a single template. Collapse them into one clause with a case "
+    "inside the returned node: name(I) -> {'Row', [], [case I of ... end]}";
+format_error(each_named_fun_undefined) ->
+    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not "
+    "defined in this module. Define it as a single-clause function returning a node, or "
+    "inline the callback (fun(I) -> {'Text', [], [I]} end)";
+format_error(each_remote_fun_ref) ->
+    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each "
+    "inlines the callback body to build a per-item template, which is impossible across "
+    "a module boundary. Inline it (fun(I) -> {'Text', [], [I]} end), or move the body "
+    "into a single-clause local function and pass fun name/1";
+format_error(improper_template_list) ->
+    "a template's prop, child and body lists must be proper list literals: their items "
+    "are laid out one slot each at compile time, so a list ending in an expression "
+    "([A, B | Rest]) has no length to lay out. Write every item in the list; render a "
+    "runtime list of children with ?each, as one item of it: {'Column', [], "
+    "[{'Text', [], [~\"first\"]}, ?each(fun(I) -> {'Text', [], [I]} end, Rest)]}";
+format_error(local_unsupported) ->
+    "?local is client-owned state that the browser keeps, and a ?json view's native "
+    "client keeps none: it has no local slot to bind the key to. Keep the value in the "
+    "view's bindings and change it from handle_event/3, which diffs it to the client";
+format_error(local_orphaned) ->
+    "?local must sit inside a node, as a content child or a prop value, and a ?json "
+    "view's native client keeps no ?local state at all: keep the value in the view's "
+    "bindings and change it from handle_event/3";
+format_error(nodiff_value) ->
+    "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
+    "az_nodiff / <<\"az-nodiff\">>) alone in the prop list. The JSON document does not "
+    "carry it: the node renders once and is never patched";
+format_error(nested_nodiff) ->
+    "az-nodiff is only honored on a template's top-level (root) node -- it is a "
+    "whole-template directive, not a per-node one, so on a nested node it cannot be "
+    "scoped and would reach the native client as an ordinary prop. Move it to the root "
+    "node, or split the subtree into its own ?json/?stateless template whose root "
+    "carries az-nodiff";
+format_error(effect_in_content) ->
+    "an effect command (a command builder call, e.g. arizona_android:push_event(~\"inc\")) "
+    "is not content: a content slot renders it as text, and no native client runs a "
+    "command there. Put the command in an event prop's value, e.g. {'Button', "
+    "[{on_tap, Cmd}], [~\"+\"]}, or return it from a handler. To show a command as text, "
+    "encode it explicitly: arizona_effect:encode_json(Cmd)";
+format_error(each_stream_body_control_flow) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return a node, and a "
+    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
+    "compiled per-item template (statics once, dynamics per item), so an item's outer "
+    "widget type is fixed at compile time. The branches can still be entirely different "
+    "widgets -- put them inside one stable item node carrying az_key, e.g. "
+    "fun(Item, Key) -> {'Row', [{az_key, Key}], [case Item of ... end]} end, where a "
+    "conditional child may return bare node tuples ('Text' vs 'Button' vs a whole "
+    "'Column' subtree all work)";
+format_error(stream_each_multi_root) ->
+    "an ?each over a stream must return ONE node per item, not a list of nodes, a "
+    "fragment mixing text and nodes, or bare text: a keyed op (insert, remove, move, "
+    "item patch) addresses an item by the single node carrying its az_key, so any other "
+    "root would be left behind on a remove and out of order on a move. Put the parts "
+    "inside one item node, e.g. fun(Item, Key) -> {'Row', [{az_key, Key}], "
+    "[{'Text', [], [Item]}]} end. The same callback over a map may return several roots";
+format_error(stream_each_keyless) ->
+    "an ?each over a stream must put az_key on each item's root node: a keyed op "
+    "(remove, move, item patch) finds the item by it, so without one every such op is "
+    "skipped and the native client's widget tree drifts from the stream. Key the root "
+    "with the callback's second argument, e.g. fun(Item, Key) -> {'Text', "
+    "[{az_key, Key}], [Item]} end. The same callback over a map needs no key";
+format_error({stateful_in_layout, Mod, Fun, Handler}) ->
+    lists:flatten(
+        io_lib:format(
+            "layout ~s:~s/1 embeds ?stateful(~s, ...), but a layout renders once "
+            "at SSR and never joins the live view tree, so the component would "
+            "claim a view node the server never registers, and every event its "
+            "native client sends from it would be dropped. Use ?stateless for layout "
+            "chrome. A ?json client has no navigation that keeps a view live (a navigate "
+            "unmounts the page and mounts the next), so chrome that must stay live "
+            "belongs in one view that changes its content through its state and events "
+            "instead of navigating.",
+            [Mod, Fun, Handler]
+        )
+    ).
 
 %% --------------------------------------------------------------------
 %% Internal functions

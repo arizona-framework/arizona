@@ -6,6 +6,7 @@
 -export([all/0, groups/0]).
 -export([
     literal_list_attr_folds/1,
+    char_segment_literal_folds/1,
     literal_list_attr_matches_runtime/1,
     literal_list_attr_json_matches_runtime/1,
     literal_list_attr_empty/1,
@@ -661,6 +662,7 @@ groups() ->
     [
         {literal_fold, [parallel], [
             literal_list_attr_folds,
+            char_segment_literal_folds,
             literal_list_attr_matches_runtime,
             literal_list_attr_json_matches_runtime,
             literal_list_attr_empty,
@@ -1413,11 +1415,18 @@ assert_parse_error(Source, MatchFun) ->
      || Toks <- Forms
     ],
     case arizona_parse_transform:parse_transform(ParsedForms, []) of
-        {error, [{_File, [{_Line, arizona_parse_transform, Reason}]}], []} ->
+        {error, [{_File, [{_Line, Formatter, Reason}]}], []} ->
+            %% A reason the render target words is reported under its backend.
+            ?assert(is_formatted(Formatter, Reason)),
             ?assert(MatchFun(Reason));
         _ ->
             error(expected_parse_error)
     end.
+
+is_formatted(Formatter, Reason) ->
+    (Formatter =:= arizona_parse_transform orelse Formatter =:= arizona_html orelse
+        Formatter =:= arizona_json) andalso
+        is_binary(unicode:characters_to_binary(Formatter:format_error(Reason))).
 
 %% Extract and JSON-decode the (HTML-attribute-escaped) `az-local` descriptor
 %% baked onto the element in rendered HTML.
@@ -2860,7 +2869,7 @@ raw_text_az_alias_raw_accepted(Config) when is_list(Config) ->
 %% The rejection reason renders through format_error/1 (what the compiler prints),
 %% and names the ?raw opt-out that unblocks the author.
 raw_text_reject_message_renders(Config) when is_list(Config) ->
-    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    Msg = arizona_html:format_error(dynamic_in_raw_text),
     ?assert(is_list(Msg)),
     ?assertNotEqual(nomatch, string:find(Msg, "?raw")),
     ?assertNotEqual(nomatch, string:find(Msg, "script")).
@@ -2980,7 +2989,7 @@ raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
         fun(R) -> R =:= dynamic_in_raw_text end
     ),
     %% The message must point at the fix that always works: wrap AT the slot.
-    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    Msg = arizona_html:format_error(dynamic_in_raw_text),
     ?assertNotEqual(nomatch, string:find(Msg, "at the slot")),
     ?assertNotEqual(nomatch, string:find(Msg, "variable")).
 
@@ -7843,8 +7852,9 @@ each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
     S2 = arizona_stream:delete(S1, ~"a"),
     {Ops, _, _} = arizona_diff:diff(Fix:render(#{items => S2}), Snap, #{}, #{items => true}),
     ?assertMatch([[?OP_REMOVE, _, ~"a"]], Ops),
-    #{general := Msg} = arizona_template:format_error(stream_each_keyless, []),
-    ?assertNotEqual(nomatch, string:find(Msg, "{az_key, Key}")).
+    ?assertNotEqual(
+        nomatch, string:find(arizona_html:format_error(stream_each_keyless), "{az_key, Key}")
+    ).
 
 assert_stream_each_keyless(Mod, Bindings) ->
     ?assertError(
@@ -8708,7 +8718,7 @@ error_keeps_column(Config) when is_list(Config) ->
 %% body names the file the helper is defined in: an included header here.
 error_in_included_helper_names_its_file(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{"pt_inc.hrl", [{{7, 22}, arizona_parse_transform, dynamic_in_raw_text}]}], []},
+        {error, [{"pt_inc.hrl", [{{7, 22}, arizona_html, dynamic_in_raw_text}]}], []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_helper_inc).\n"
@@ -8766,8 +8776,7 @@ element_error_keeps_file_and_column(Config) when is_list(Config) ->
 %% when the list sits in a helper inlined from a header.
 improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{"pt_main.erl", [{{5, 65}, arizona_parse_transform, improper_template_list}]}],
-            []},
+        {error, [{"pt_main.erl", [{{5, 65}, arizona_html, improper_template_list}]}], []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_improper_main).\n"
@@ -8779,7 +8788,7 @@ improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
         )
     ),
     ?assertMatch(
-        {error, [{"pt_inc.hrl", [{{7, 28}, arizona_parse_transform, improper_template_list}]}], []},
+        {error, [{"pt_inc.hrl", [{{7, 28}, arizona_html, improper_template_list}]}], []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_improper_inc).\n"
@@ -11708,11 +11717,11 @@ element_in_comprehension_rejected(Config) when is_list(Config) ->
         "    arizona_template:target(arizona_html, {'ul', [], [L]}). ",
         fun(R) -> R =:= element_in_comprehension end
     ),
-    ?assertMatch([_ | _], arizona_parse_transform:format_error(element_in_comprehension)).
+    ?assertMatch([_ | _], arizona_html:format_error(element_in_comprehension)).
 
 element_in_comprehension_names_line(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{_File, [{5, arizona_parse_transform, element_in_comprehension}]}], []},
+        {error, [{_File, [{5, arizona_html, element_in_comprehension}]}], []},
         arizona_parse_transform:parse_transform(
             parse_forms(
                 "-module(pt_lc_line).\n"
@@ -11780,7 +11789,7 @@ effect_in_content_rejected(Config) when is_list(Config) ->
 
 effect_in_content_names_line(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{_File, [{5, arizona_parse_transform, effect_in_content}]}], []},
+        {error, [{_File, [{5, arizona_html, effect_in_content}]}], []},
         arizona_parse_transform:parse_transform(
             parse_forms(
                 "-module(pt_cmd_line).\n"
@@ -11795,7 +11804,7 @@ effect_in_content_names_line(Config) when is_list(Config) ->
     ).
 
 effect_in_content_message_names_fix(Config) when is_list(Config) ->
-    Msg = unicode:characters_to_binary(arizona_parse_transform:format_error(effect_in_content)),
+    Msg = unicode:characters_to_binary(arizona_html:format_error(effect_in_content)),
     [
         ?assertNotEqual(nomatch, binary:match(Msg, Part), Part)
      || Part <- [
@@ -14225,6 +14234,21 @@ literal_list_attr_folds(Config) when is_list(Config) ->
     ?assertEqual([<<"<p class=\"foobar\" id=\"str\">bazqux</p>">>], maps:get(s, T)),
     ?assertEqual([], maps:get(d, T)).
 
+%% A `$x` segment is a code point as an integer one is, so a binary of them folds
+%% into the statics as text, in an attribute value and in content alike.
+char_segment_literal_folds(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_char). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'p', [{class, <<$x, \"y\">>}], [<<$a, $b>>]}"
+        "    ). "
+    ),
+    T = Mod:render(#{}),
+    ?assertEqual([<<"<p class=\"xy\">ab</p>">>], maps:get(s, T)),
+    ?assertEqual([], maps:get(d, T)).
+
 %% The folded value is byte-identical to what the runtime renders for the same
 %% list held in a binding -- nested lists, strings, char codes, UTF-8, and the
 %% attribute escaping of every HTML-significant character.
@@ -14471,7 +14495,7 @@ improper_template_list_rejected(Config) when is_list(Config) ->
                     "    arizona_template:target(arizona_html, \n" ++ Template ++
                     "    ).\n",
             ?assertMatch(
-                {error, [{_File, [{6, arizona_parse_transform, improper_template_list}]}], []},
+                {error, [{_File, [{6, arizona_html, improper_template_list}]}], []},
                 arizona_parse_transform:parse_transform(parse_forms(Source), []),
                 Name
             )
@@ -14488,7 +14512,7 @@ improper_template_list_rejected(Config) when is_list(Config) ->
         ]
     ),
     ?assertMatch(
-        [_ | _], arizona_parse_transform:format_error(improper_template_list)
+        [_ | _], arizona_html:format_error(improper_template_list)
     ).
 
 %% An attribute value list is text, so an improper tail is one more part of the
