@@ -12,7 +12,7 @@
 -export([render_refuses_a_cross_target_layout/1]).
 -export([renderers_name_their_content_type/1]).
 -export([render_embeds_the_proven_attrs/1]).
--export([render_without_static_document_embeds_nothing/1]).
+-export([render_without_embed_attrs_embeds_nothing/1]).
 -export([render_leaves_the_collector_disarmed/1]).
 -export([render_puts_the_names_in_the_body/1]).
 -export([dev_render_puts_the_names_in_the_body/1]).
@@ -44,7 +44,7 @@ groups() ->
             render_refuses_a_cross_target_layout,
             renderers_name_their_content_type,
             render_embeds_the_proven_attrs,
-            render_without_static_document_embeds_nothing,
+            render_without_embed_attrs_embeds_nothing,
             render_leaves_the_collector_disarmed,
             render_puts_the_names_in_the_body,
             format_error_names_a_unicode_page
@@ -137,9 +137,9 @@ render_embeds_the_proven_attrs(Config) when is_list(Config) ->
     %% embed, and without one that is an element the page content holds.
     ?assertEqual([], embedded_attrs(render_in_layout(arizona_static_page))).
 
-%% A target without the optional `static_document/2` has no client script to read
+%% A target without the optional `embed_attrs/2` has no client script to read
 %% the names, so its page is served exactly as rendered.
-render_without_static_document_embeds_nothing(Config) when is_list(Config) ->
+render_without_embed_attrs_embeds_nothing(Config) when is_list(Config) ->
     Mod = arizona_text_page:load(),
     Req = arizona_req_test_adapter:new(#{}),
     {ok, 200, _Type, Body, _Req} = arizona_http:render(Mod, Req, #{}),

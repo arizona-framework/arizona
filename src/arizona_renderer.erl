@@ -434,6 +434,6 @@ connect frame, or `start({attrs})` on a static page). Optional: a target with no
 client script to read them (a terminal) leaves it out, and its document is used
 as rendered.
 """.
--callback static_document(Doc :: iodata(), EventNames :: [binary()]) -> iodata().
+-callback embed_attrs(Doc :: iodata(), EventNames :: [binary()]) -> iodata().
 
--optional_callbacks([static_document/2]).
+-optional_callbacks([embed_attrs/2]).

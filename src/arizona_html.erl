@@ -49,7 +49,7 @@ identical to the previous inlined emission.
 -export([render_attr/2]).
 -export([wire_escape/1]).
 -export([wire_attr/2]).
--export([static_document/2]).
+-export([embed_attrs/2]).
 
 %% This module implements the whole renderer contract, one export per callback, so it
 %% legitimately exceeds the god-module function count.
@@ -73,7 +73,7 @@ identical to the previous inlined emission.
 %% Past the first metacharacter, a tail shorter than this has no run long enough
 %% for slicing to pay off, so the plain append loop takes it.
 -define(SHORT_TAIL, 16).
-%% How many of a document's last bytes static_document/2 reads for its `</body>`.
+%% How many of a document's last bytes embed_attrs/2 reads for its `</body>`.
 -define(DOC_END_MAX, 64).
 
 -spec name(arizona_renderer:tag()) -> binary().
@@ -312,8 +312,8 @@ content_context_name(~"foreignobject", foreign) ->
 content_context_name(_Other, Parent) ->
     Parent.
 
--spec static_document(iodata(), [binary()]) -> iodata().
-static_document(Doc, Names) ->
+-spec embed_attrs(iodata(), [binary()]) -> iodata().
+embed_attrs(Doc, Names) ->
     %% The body's last child when the document ends with `</body>` (then optional
     %% whitespace and `</html>`): inserted before that close tag, so the document
     %% stays valid HTML. Only the document's last bytes are read, from the right of
