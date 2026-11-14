@@ -33,6 +33,8 @@
 -export([compile_each_remote_fun_ref/1]).
 -export([compile_improper_template_list/1]).
 -export([compile_computed_binary_tag/1]).
+-export([compile_constant_binary_tag/1]).
+-export([compile_binary_tag_not_text/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -65,7 +67,9 @@ groups() ->
             compile_each_named_fun_undefined,
             compile_each_remote_fun_ref,
             compile_improper_template_list,
-            compile_computed_binary_tag
+            compile_computed_binary_tag,
+            compile_constant_binary_tag,
+            compile_binary_tag_not_text
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -330,6 +334,41 @@ compile_computed_binary_tag(Config) when is_list(Config) ->
         {arizona_json, computed_element_tag},
         compile_error("be_bin_tag_json", json(Computed("'Column'")))
     ).
+
+%% A binary tag that reads no value is a constant, whatever its segments: char
+%% segments, or sizes that lay out the same text, render as the tag they spell.
+compile_constant_binary_tag(Config) when is_list(Config) ->
+    Cases = [
+        {"be_tag_char", "<<$a, $b>>", ~"ab"},
+        {"be_tag_sized_int", "<<97:8, 98:8>>", ~"ab"},
+        {"be_tag_sized_str", "<<\"ab\":8>>", ~"ab"}
+    ],
+    [
+        begin
+            Html = compile(Name ++ "_html", html("{'div', [], [{" ++ Tag ++ ", [], [~\"x\"]}]}")),
+            HtmlOut = iolist_to_binary(arizona_render:render_to_iolist(Html:render(#{}))),
+            ?assert(contains(HtmlOut, <<"<", Text/binary, ">x</", Text/binary, ">">>), HtmlOut),
+            Json = compile(Name ++ "_json", json("{'Column', [], [{" ++ Tag ++ ", [], []}]}")),
+            JsonOut = iolist_to_binary(arizona_render:render_to_iolist(Json:render(#{}))),
+            ?assert(contains(JsonOut, <<"\"type\":\"", Text/binary, "\"">>), JsonOut)
+        end
+     || {Name, Tag, Text} <- Cases
+    ].
+
+%% A constant binary whose bytes are not text (a utf16 layout puts a NUL before each
+%% letter) is no tag any target can write: refused as such, not as a computed tag.
+compile_binary_tag_not_text(Config) when is_list(Config) ->
+    {Formatter, Reason} = compile_error(
+        "be_tag_utf16", html("{'div', [], [{<<\"ab\"/utf16>>, [], [~\"x\"]}]}")
+    ),
+    ?assertEqual({arizona_parse_transform, {tag_not_text, <<0, $a, 0, $b>>}}, {Formatter, Reason}),
+    ?assert(contains(Formatter:format_error(Reason), ~"not text")),
+    %% Segments that cannot be built at all name that instead.
+    {Formatter, Unbuildable} = compile_error(
+        "be_tag_unbuildable", html("{'div', [], [{<<\"ab\"/binary>>, [], [~\"x\"]}]}")
+    ),
+    ?assertEqual(binary_tag_unbuildable, Unbuildable),
+    ?assert(contains(Formatter:format_error(Unbuildable), ~"cannot be built")).
 
 compile_improper_template_list(Config) when is_list(Config) ->
     Improper = fun(Outer, Inner) ->

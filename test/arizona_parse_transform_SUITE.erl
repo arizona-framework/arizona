@@ -6,6 +6,7 @@
 -export([all/0, groups/0]).
 -export([
     literal_list_attr_folds/1,
+    char_segment_literal_folds/1,
     literal_list_attr_matches_runtime/1,
     literal_list_attr_json_matches_runtime/1,
     literal_list_attr_empty/1,
@@ -661,6 +662,7 @@ groups() ->
     [
         {literal_fold, [parallel], [
             literal_list_attr_folds,
+            char_segment_literal_folds,
             literal_list_attr_matches_runtime,
             literal_list_attr_json_matches_runtime,
             literal_list_attr_empty,
@@ -14230,6 +14232,21 @@ literal_list_attr_folds(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<p class=\"foobar\" id=\"str\">bazqux</p>">>], maps:get(s, T)),
+    ?assertEqual([], maps:get(d, T)).
+
+%% A `$x` segment is a code point as an integer one is, so a binary of them folds
+%% into the statics as text, in an attribute value and in content alike.
+char_segment_literal_folds(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_char). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'p', [{class, <<$x, \"y\">>}], [<<$a, $b>>]}"
+        "    ). "
+    ),
+    T = Mod:render(#{}),
+    ?assertEqual([<<"<p class=\"xy\">ab</p>">>], maps:get(s, T)),
     ?assertEqual([], maps:get(d, T)).
 
 %% The folded value is byte-identical to what the runtime renders for the same

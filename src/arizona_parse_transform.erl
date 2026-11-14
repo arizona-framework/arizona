@@ -1284,6 +1284,20 @@ format_error({markup_var_in_content_list, Var}) ->
             [Var]
         )
     );
+format_error({tag_not_text, Bytes}) ->
+    lists:flatten(
+        io_lib:format(
+            "this binary tag lays out the bytes ~w, which are not text: every render "
+            "target writes a tag as UTF-8 text, and a utf16/utf32 type, a size that "
+            "splits a character or a control character makes bytes no target can name "
+            "an element with. Write the tag as text: an atom, ~~\"...\" or <<\"...\">>",
+            [Bytes]
+        )
+    );
+format_error(binary_tag_unbuildable) ->
+    "this binary tag cannot be built: its segments fail to construct, as they would at "
+    "runtime (a string typed /binary, a value that does not fit its size). Write the "
+    "tag as text: an atom, ~\"...\" or <<\"...\">>";
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
 format_error(nodiff_call_not_compiled) ->
@@ -4712,14 +4726,54 @@ extract_element(Node, _Backend) ->
 %% A binary literal is a tag only when static: one built from a value
 %% (`<<"x-", K/binary>>`) chooses the element at runtime.
 extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend) ->
+    case binary_tag(TagAST) of
+        {ok, Tag} -> extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
+        {not_text, Bytes} -> parse_error({tag_not_text, Bytes}, anno(Node));
+        unbuildable -> parse_error(binary_tag_unbuildable, anno(Node));
+        computed -> element_tag_error(TagAST, Node, Backend)
+    end.
+
+%% A binary tag that reads no value is a constant, whatever spells it: text that
+%% folds (binary_text/1, which also notes it folded), or segments with sizes or
+%% types, evaluated here to the bytes they lay out. Those bytes must be text, or no
+%% target can write the tag. One that reads a value is chosen at runtime.
+binary_tag(TagAST) ->
     case is_static_binary(TagAST) of
         true ->
-            extract_element_parts(
-                extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node, Backend
-            );
+            {ok, extract_binary_value(TagAST)};
         false ->
-            element_tag_error(TagAST, Node, Backend)
+            case reads_value(TagAST) of
+                true -> computed;
+                false -> constant_binary_tag(TagAST)
+            end
     end.
+
+%% Segments the runtime could not build either (a string typed `/binary`) build
+%% no tag.
+constant_binary_tag(TagAST) ->
+    try erl_eval:expr(TagAST, erl_eval:new_bindings()) of
+        {value, Bytes, _} ->
+            case is_text(Bytes) of
+                true -> {ok, Bytes};
+                false -> {not_text, Bytes}
+            end
+    catch
+        error:_Unbuildable -> unbuildable
+    end.
+
+%% UTF-8 with no C0 control or DEL: a NUL-laden utf16/utf32 layout is valid UTF-8
+%% byte by byte, but not a name.
+is_text(Bytes) ->
+    case unicode:characters_to_list(Bytes) of
+        Chars when is_list(Chars) -> not lists:any(fun(C) -> C < 32 orelse C =:= 127 end, Chars);
+        _NotUtf8 -> false
+    end.
+
+reads_value({var, _, _}) -> true;
+reads_value({call, _, _, _}) -> true;
+reads_value(Node) when is_tuple(Node) -> reads_value(tuple_to_list(Node));
+reads_value(Nodes) when is_list(Nodes) -> lists:any(fun reads_value/1, Nodes);
+reads_value(_Leaf) -> false.
 
 %% The attrs of an element tuple, for a pass that only reads directives ahead of the
 %% compile (prescan_directives/1). A malformed element reads as having none: the
@@ -6724,6 +6778,8 @@ binary_text({bin, _, Elements}) ->
 extract_bin_element({bin_element, _, {string, _, Chars}, default, _Type}) ->
     unicode:characters_to_binary(Chars);
 extract_bin_element({bin_element, _, {integer, _, N}, default, _Type}) ->
+    <<N/utf8>>;
+extract_bin_element({bin_element, _, {char, _, N}, default, _Type}) ->
     <<N/utf8>>.
 
 %% Records a binary literal folded as UTF-8 text, so latin1_warnings/2 does not
@@ -6761,6 +6817,11 @@ is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, [utf8]}) 
 is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, default}) ->
     true;
 is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, [utf8]}) ->
+    true;
+%% A `$x` segment is a code point, as an integer one is.
+is_foldable_bin_element({bin_element, _, {char, _, _C}, default, default}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {char, _, _C}, default, [utf8]}) ->
     true;
 is_foldable_bin_element(_) ->
     false.
@@ -7392,9 +7453,9 @@ push_each_choices(Sel, FunArg, Backend) ->
 element_tag({atom, _, Tag}) ->
     {ok, Tag};
 element_tag({bin, _, _} = Bin) ->
-    case is_static_binary(Bin) of
-        true -> {ok, binary_text(Bin)};
-        false -> error
+    case binary_tag(Bin) of
+        {ok, Tag} -> {ok, Tag};
+        _NotATag -> error
     end;
 element_tag(_TagAST) ->
     error.
