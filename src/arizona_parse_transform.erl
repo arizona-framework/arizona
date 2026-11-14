@@ -1340,8 +1340,12 @@ format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
 format_error(local_attr_mixed) ->
-    "a ?local in an attribute value can only be combined with static text, not "
-    "another dynamic expression";
+    "a ?local in an attribute value can only be combined with fixed parts -- static "
+    "text, or a ?raw of literal text -- not a value the server computes (a dynamic, "
+    "or a ?raw of one): the client owns the attribute and recomposes it from the fixed "
+    "parts the page carries, and the slot is never diffed, so a computed part would "
+    "render once and then disagree with its bindings. Compute it into the ?local's "
+    "initial value instead, or render it in another attribute";
 format_error(nodiff_value) ->
     "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
     "az_nodiff / <<\"az-nodiff\">>) alone in the attribute list. The value it carries "
@@ -5175,9 +5179,9 @@ compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     case attr_local_spec(ValueAST, anno(ValueAST)) of
         {whole, _LocalCall} ->
             compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0);
-        {interp, LocalCall, Prefix, Suffix} ->
+        {interp, LocalCall, Before, After} ->
             compile_interp_local_attr(
-                Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0
+                Backend, NameBin, LocalCall, Before, After, ElemAz, State0
             );
         none ->
             compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0)
@@ -5268,24 +5272,39 @@ local_attr_expr_ast(NameBin, LocalCallAST) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
     {map, 0, LocalCallAST, [{map_field_assoc, 0, {atom, 0, target}, TargetAST}]}.
 
-%% Emit a client-owned attribute slot interpolated with static text, e.g.
+%% Emit a client-owned attribute slot interpolated with fixed parts, e.g.
 %% `{class, [~"foo ", ?local(K, Init)]}`. Same bind-map shape as compile_local_attr,
 %% but `v` is the composed value so SSR renders the full attribute; the client
 %% stores the affixes (descriptor `ap`) to recompose on set / strip on read.
-compile_interp_local_attr(Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0) ->
+compile_interp_local_attr(Backend, NameBin, LocalCall, Before, After, ElemAz, State0) ->
     Module = State0#state.module,
     State1 = buf_dyn_attr(State0, Backend, NameBin, anno(LocalCall)),
-    Expr = local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix),
+    Expr = local_attr_interp_expr_ast(Backend, NameBin, LocalCall, Before, After),
     DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(LocalCall)),
     flush(State1, DynAST).
 
 %% AST for `(arizona_template:local(Key, Init))#{target => {attr, Name},
 %% v => [Prefix, arizona_template:to_bin(Init), Suffix]}`. to_bin wraps Init so a
 %% non-binary init (number/atom) composes as its text -- a bare integer in an
-%% iolist would otherwise be emitted as a byte, not its decimal digits.
-local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix) ->
+%% iolist would otherwise be emitted as a byte, not its decimal digits. A literal
+%% `?raw` part makes `v` the attribute markup `arizona_template:raw_attr/2`
+%% assembles: that part spliced, the static parts and the init escaped.
+local_attr_interp_expr_ast(Backend, NameBin, LocalCall, Before, After) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
-    VAST = ast_list([ast_binary(Prefix), to_bin_ast(local_init(LocalCall)), ast_binary(Suffix)]),
+    Init = to_bin_ast(local_init(LocalCall)),
+    VAST =
+        case lists:any(fun is_raw_call/1, Before ++ After) of
+            false ->
+                ast_list([ast_binary(static_affix(Before)), Init, ast_binary(static_affix(After))]);
+            true ->
+                {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, raw_attr}}, [
+                    {atom, 0, Backend},
+                    ast_list(
+                        [affix_part_ast(P) || P <- Before] ++ [Init] ++
+                            [affix_part_ast(P) || P <- After]
+                    )
+                ]}
+        end,
     {map, 0, LocalCall, [
         {map_field_assoc, 0, {atom, 0, target}, TargetAST},
         {map_field_assoc, 0, {atom, 0, v}, VAST}
@@ -5306,10 +5325,12 @@ is_local_marker(_) ->
     false.
 
 %% Classify an attribute value for `?local`: a bare local call is whole-value;
-%% a list mixing static binaries and exactly one local call is interpolated (the
-%% statics before/after the local become the prefix/suffix). A list with multiple
-%% locals, or a local mixed with a non-static (server-owned dynamic or nested
-%% element), is a compile error.
+%% a list mixing fixed parts and exactly one local call is interpolated (the parts
+%% before/after the local become the prefix/suffix, kept as written:
+%% `{interp, LocalCall, Before, After}`). A fixed part is static text or a literal
+%% `?raw` of literal text. A list with multiple locals, or a local mixed with
+%% anything the server computes (a dynamic, a raw of one, a nested element), is a
+%% compile error.
 attr_local_spec(ValueAST, Line) ->
     case is_local_marker(ValueAST) of
         true ->
@@ -5332,15 +5353,77 @@ attr_interp_spec(Elems, Line) ->
     {Before, [LocalCall | After]} = lists:splitwith(
         fun(E) -> not is_local_marker(E) end, Elems
     ),
-    assert_all_static(Before ++ After, Line),
-    Prefix = iolist_to_binary([extract_binary_value(E) || E <- Before]),
-    Suffix = iolist_to_binary([extract_binary_value(E) || E <- After]),
-    {interp, LocalCall, Prefix, Suffix}.
+    assert_all_fixed(Before ++ After, Line),
+    {interp, LocalCall, Before, After}.
 
-assert_all_static(Elems, Line) ->
-    case lists:all(fun is_static_binary/1, Elems) of
+%% The client owns the attribute and recomposes it from affixes the page fixes at
+%% compile time (the static `az-local` descriptor), and the slot is never diffed: a
+%% part the server computes has no channel to reach the client's copy, so it would
+%% render once and then silently disagree with the binding it reads.
+assert_all_fixed(Elems, Line) ->
+    case lists:all(fun is_fixed_affix_part/1, Elems) of
         true -> ok;
         false -> parse_error(local_attr_mixed, Line)
+    end.
+
+is_fixed_affix_part(Part) ->
+    is_static_binary(Part) orelse raw_affix_markup(Part) =/= error.
+
+%% The markup a literal `?raw` of literal text splices: `{ok, Bin}`, else `error`.
+raw_affix_markup({call, _, _, [Arg]} = Part) ->
+    case is_raw_call(Part) of
+        true -> literal_text(Arg);
+        false -> error
+    end;
+raw_affix_markup(_Part) ->
+    error.
+
+%% The text of affix parts holding no raw, as written.
+static_affix(Parts) ->
+    iolist_to_binary([extract_binary_value(P) || P <- Parts]).
+
+%% An affix part as `arizona_template:raw_attr/2` takes it: a raw spliced, text escaped.
+affix_part_ast(Part) ->
+    case is_raw_call(Part) of
+        true -> Part;
+        false -> ast_binary(extract_binary_value(Part))
+    end.
+
+%% An affix part as a chooser compares it at runtime: a raw as the markup it renders
+%% (`{arizona_markup, Bin}`, read by `arizona_template:attr_text/2`), text as written.
+choice_affix_ast(Backend, Part) ->
+    case is_raw_call(Part) of
+        true -> markup_ast(Backend, Part);
+        false -> ast_binary(extract_binary_value(Part))
+    end.
+
+%% The text affix parts hold in the page, the client's affix: as written without a
+%% raw, else the markup they render together (raws verbatim, text escaped) read as the
+%% backend's parser reads an attribute value.
+affix_text(_Backend, Parts, false, _Line) ->
+    static_affix(Parts);
+affix_text(Backend, Parts, true, Line) ->
+    attr_markup_text(Backend, affix_markup(Backend, Parts), Line).
+
+affix_text(Backend, Parts, Line) ->
+    affix_text(Backend, Parts, lists:any(fun is_raw_call/1, Parts), Line).
+
+affix_markup(Backend, Parts) ->
+    [
+        case raw_affix_markup(P) of
+            {ok, Markup} -> Markup;
+            error -> Backend:escape(extract_binary_value(P))
+        end
+     || P <- Parts
+    ].
+
+attr_markup_text(Backend, Markup, Line) ->
+    case erlang:function_exported(Backend, markup_text, 2) of
+        true ->
+            {text, Text} = Backend:markup_text(Markup, attribute),
+            Text;
+        false ->
+            parse_error(local_unsupported, Line)
     end.
 
 local_key({call, _, _, [{atom, _, Atom}, _Init]}, _Line) ->
@@ -5439,20 +5522,26 @@ collect_attr_affixes(Backend, Tag, Attrs, Line) ->
             _None -> none
         end,
     maps:from_list([
-        {Name, local_affixes(attr_key(Backend, Name) =:= ChooserValue, ValueAST, Prefix, Suffix)}
+        {Name,
+            local_affixes(
+                Backend, attr_key(Backend, Name) =:= ChooserValue, Before, After, Line
+            )}
      || {tuple, _, [NameAST, ValueAST]} <- Attrs,
-        {interp, _LC, Prefix, Suffix} <- [attr_local_spec(ValueAST, Line)],
+        {interp, _LC, Before, After} <- [attr_local_spec(ValueAST, Line)],
         Name <- [extract_attr_name(Backend, NameAST)]
     ]).
 
-local_affixes(false, _ValueAST, Prefix, Suffix) ->
-    [Prefix, Suffix];
-local_affixes(true, ValueAST, _Prefix, _Suffix) ->
-    {Before, After} = local_parts(ValueAST),
-    [Before, After].
+%% A chooser's parts are one pick each, so each is read alone.
+local_affixes(Backend, false, Before, After, Line) ->
+    [affix_text(Backend, Before, Line), affix_text(Backend, After, Line)];
+local_affixes(Backend, true, Before, After, Line) ->
+    [
+        [affix_text(Backend, [P], Line) || P <- Before],
+        [affix_text(Backend, [P], Line) || P <- After]
+    ].
 
 local_call({whole, LocalCall}) -> LocalCall;
-local_call({interp, LocalCall, _Prefix, _Suffix}) -> LocalCall.
+local_call({interp, LocalCall, _Before, _After}) -> LocalCall.
 
 %% Collect each content `?local` keyed by its dynamic-text slot index -- the
 %% suffix the client needs to reconstruct the slot's comment-marker az (see
@@ -7288,40 +7377,43 @@ local_inits(Backend, Value, Multiple) ->
             Value;
         {{whole, LocalCall}, _Multiple} ->
             local_init(LocalCall);
-        {{interp, LocalCall, Prefix, Suffix}, {atom, _, false}} ->
-            local_text_ast(Backend, LocalCall, Prefix, Suffix);
-        {{interp, LocalCall, _Prefix, _Suffix}, _Multiple} ->
+        {{interp, LocalCall, Before, After}, {atom, _, false}} ->
+            local_text_ast(Backend, LocalCall, Before, After);
+        {{interp, LocalCall, Before, After}, _Multiple} ->
             L = anno(LocalCall),
-            {Before, After} = local_parts(Value),
             {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, local_choice}}, [
                 {atom, L, Backend},
-                ast_list([ast_binary(P) || P <- Before]),
+                ast_list([choice_affix_ast(Backend, P) || P <- Before]),
                 local_init(LocalCall),
-                ast_list([ast_binary(P) || P <- After]),
+                ast_list([choice_affix_ast(Backend, P) || P <- After]),
                 Multiple
             ]}
     end.
 
-%% The static parts before and after the one `?local` of a list value, each as written.
-local_parts(Value) ->
-    {Before, [_Local | After]} = lists:splitwith(
-        fun(E) -> not is_local_marker(E) end, attr_value_parts(Value)
-    ),
-    {[extract_binary_value(E) || E <- Before], [extract_binary_value(E) || E <- After]}.
-
-%% The text an interpolated local's attribute holds (local_attr_interp_expr_ast/4):
+%% The text an interpolated local's attribute holds (local_attr_interp_expr_ast/5):
 %% folded for a literal init, so the choices still fold at compile time, else
-%% `arizona_template:attr_text(Backend, [Prefix, arizona_template:to_bin(Init), Suffix])`.
-local_text_ast(Backend, LocalCall, Prefix, Suffix) ->
+%% `arizona_template:attr_text(Backend, [Before..., arizona_template:to_bin(Init),
+%% After...])`. With a raw part the folded text is the markup the attribute renders,
+%% read as the parser reads it.
+local_text_ast(Backend, LocalCall, Before, After) ->
     L = anno(LocalCall),
     Init = local_init(LocalCall),
-    case literal_text(Init) of
-        {ok, Text} ->
-            ast_binary(<<Prefix/binary, Text/binary, Suffix/binary>>);
-        error ->
+    Raw = lists:any(fun is_raw_call/1, Before ++ After),
+    case {literal_text(Init), Raw} of
+        {{ok, Text}, false} ->
+            ast_binary(iolist_to_binary([static_affix(Before), Text, static_affix(After)]));
+        {{ok, Text}, true} ->
+            Markup = [
+                affix_markup(Backend, Before), Backend:escape(Text), affix_markup(Backend, After)
+            ],
+            ast_binary(attr_markup_text(Backend, Markup, L));
+        {error, _Raw} ->
             {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, attr_text}}, [
                 {atom, L, Backend},
-                ast_list([ast_binary(Prefix), to_bin_ast(Init), ast_binary(Suffix)])
+                ast_list(
+                    [choice_affix_ast(Backend, P) || P <- Before] ++ [to_bin_ast(Init)] ++
+                        [choice_affix_ast(Backend, P) || P <- After]
+                )
             ]}
     end.
 

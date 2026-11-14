@@ -4129,6 +4129,20 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'id')).toBe('42');
     });
 
+    // A literal `?raw` affix is spliced verbatim, so the page holds its markup while the
+    // descriptor holds the text that markup reads as: the two agree once parsed.
+    it('composes and strips an affix the page holds as raw markup', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;href&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;href&quot;:[&quot;/u/&quot;,&quot;?a=1&amp;b=2&quot;]}}" href="&#47;u&#47;1&amp;2?a=1&amp;b=2">e</a>`,
+        );
+        expect(get('v', 'id')).toBe('1&2');
+        set('v', 'id', '<4>');
+        const a = document.querySelector('[az="0"]');
+        expect(a.getAttribute('href')).toBe('/u/<4>?a=1&b=2');
+        expect(get('v', 'id')).toBe('<4>');
+    });
+
     it('coerces a non-string value via String() and reads it back', () => {
         setupView(
             'v',

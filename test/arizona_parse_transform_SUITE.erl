@@ -478,6 +478,10 @@
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
     local_attr_interp_multi_static/1,
+    local_attr_raw_affix/1,
+    local_attr_raw_affix_beside_static/1,
+    local_attr_raw_affix_live_diff_static/1,
+    local_attr_dynamic_raw_error/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -752,6 +756,10 @@ groups() ->
             local_attr_interp_boolean,
             local_attr_interp_numeric,
             local_attr_interp_multi_static,
+            local_attr_raw_affix,
+            local_attr_raw_affix_beside_static,
+            local_attr_raw_affix_live_diff_static,
+            local_attr_dynamic_raw_error,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -1412,7 +1420,7 @@ assert_parse_error(Source, MatchFun) ->
 decode_local_descriptor(HTML) ->
     [_, Rest] = binary:split(HTML, <<"az-local=\"">>),
     [DescEsc | _] = binary:split(Rest, <<"\"">>),
-    Desc = binary:replace(DescEsc, <<"&quot;">>, <<"\"">>, [global]),
+    {text, Desc} = arizona_html:markup_text(DescEsc, attribute),
     json:decode(Desc).
 
 %% Scope helpers -- account for fingerprint-prefixed az values
@@ -1810,6 +1818,100 @@ local_attr_interp_numeric(Config) when is_list(Config) ->
     ?assertEqual(
         #{~"a" => #{~"style" => ~"w"}, ~"ap" => #{~"style" => [~"width: ", ~"%"]}},
         decode_local_descriptor(HTML)
+    ).
+
+%% A literal `?raw` beside a `?local` is fixed markup: the page splices it verbatim
+%% (every other part escaped, as in any interpolated attribute holding a raw), and the
+%% client's affix is the text it holds there, references decoded, which is what the
+%% browser recomposes on `set` and strips on `get`.
+local_attr_raw_affix(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_affix). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{href, [arizona_template:raw(<<\"&#47;u&#47;\">>), "
+        "            arizona_template:local(<<\"id\">>, <<\"1&2\">>), "
+        "            arizona_template:raw(<<\"?a=1&amp;b=2\">>)]}], [<<\"e\">>]}"
+        "    ). "
+    ),
+    Attr = ~"href=\"&#47;u&#47;1&amp;2?a=1&amp;b=2\"",
+    {Live0, _Snap} = arizona_render:render(Mod:render(#{})),
+    Live = iolist_to_binary(Live0),
+    ?assertNotEqual(nomatch, binary:match(Live, Attr), Live),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertNotEqual(nomatch, binary:match(SSR, Attr), SSR),
+    ?assertEqual(
+        #{~"a" => #{~"href" => ~"id"}, ~"ap" => #{~"href" => [~"/u/", ~"?a=1&b=2"]}},
+        decode_local_descriptor(Live)
+    ).
+
+%% Static text and a raw on one side of the local are one affix: the text escaped,
+%% the raw verbatim, and the affix the text the two hold together.
+local_attr_raw_affix_beside_static(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_static). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'p', [{title, [<<\"a<\">>, arizona_template:raw(<<\"&lt;b\">>), "
+        "            arizona_template:local(k, <<\"c\">>), <<\"&\">>]}], [<<\"x\">>]}"
+        "    ). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertNotEqual(nomatch, binary:match(SSR, ~"title=\"a&lt;&lt;bc&amp;\""), SSR),
+    ?assertEqual(
+        #{~"a" => #{~"title" => ~"k"}, ~"ap" => #{~"title" => [~"a<<b", ~"&"]}},
+        decode_local_descriptor(SSR)
+    ).
+
+%% The attribute stays the client's: a change to the binding its init reads ships
+%% nothing, the raw affix included, and static generation renders the page as SSR
+%% does.
+local_attr_raw_affix_live_diff_static(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_page). "
+        "-export([mount/1, render/1]). "
+        "mount(Bindings) -> "
+        "    {#{id => <<\"p\">>, n => maps:get(n, Bindings, <<\"1\">>)}, #{}}. "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'div', [{id, arizona_template:get(id, Bindings)}], ["
+        "            {'a', [{href, [arizona_template:raw(<<\"&#47;u&#47;\">>), "
+        "                arizona_template:local(n, arizona_template:get(n, Bindings))]}], "
+        "                [<<\"e\">>]}]}"
+        "    ). "
+    ),
+    B0 = #{id => ~"p", n => ~"1"},
+    {HTML0, Snap0} = arizona_render:render(Mod:render(B0)),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML0), ~"href=\"&#47;u&#47;1\"")),
+    {_Ops0, DepsSnap, _V0} = arizona_diff:diff(Mod:render(B0), Snap0, #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        Mod:render(B0#{n => ~"2"}), DepsSnap, #{}, #{n => true}
+    ),
+    ?assertEqual([], Ops),
+    Dir = filename:join(proplists:get_value(priv_dir, Config), "raw_affix"),
+    {[Out], []} = arizona_static:generate(Dir, [{Mod, ~"index.html"}]),
+    {ok, Page} = file:read_file(Out),
+    ?assertNotEqual(nomatch, binary:match(Page, ~"href=\"&#47;u&#47;1\""), Page),
+    ?assertEqual(
+        #{~"a" => #{~"href" => ~"n"}, ~"ap" => #{~"href" => [~"/u/", ~""]}},
+        decode_local_descriptor(Page)
+    ).
+
+%% A raw the server computes beside a `?local` has no meaning the client can keep:
+%% the client recomposes the attribute from affixes fixed in the page, so a part that
+%% changes on the server is refused like any other dynamic there.
+local_attr_dynamic_raw_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_attr_dyn_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{href, [arizona_template:raw(arizona_template:get(p, Bindings)), "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>)]}], [<<\"e\">>]}"
+        "    ). ",
+        fun(R) -> R =:= local_attr_mixed end
     ).
 
 %% Several static segments around the local concatenate into one prefix/suffix.
