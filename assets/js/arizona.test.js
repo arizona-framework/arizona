@@ -8123,6 +8123,118 @@ describe('fetch in flight', () => {
         expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
 
+    it.each([
+        ['a click', (_id) => document.getElementById('t').click()],
+        ['a submit', (id) => submit(id)],
+    ])('sends every fetch one gesture raises (%s)', async (_label, fire) => {
+        await page(
+            `<form id="t" method="post" az-click='[[22,"/a",{}],[22,"/b",{}]]'
+                az-submit='[[22,"/a",{}],[22,"/b",{}]]'></form>`,
+        );
+        fire('t');
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/a', '/b']);
+        // Released only once both settle.
+        pending[0].resolve(response(200, ''));
+        await vi.waitFor(() => expect(pending).toHaveLength(2));
+        fire('t');
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        pending[1].resolve(response(200, ''));
+        await vi.waitFor(() => {
+            fire('t');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+        });
+    });
+
+    it('does not hold the form for a fetch that posts its own body', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/save",{}]'>
+                <button id="b" type="submit" az-click='[22,"/track",{"body":{"k":1}}]'>Save</button>
+            </form>`,
+        );
+        const dropped = vi.fn();
+        document
+            .getElementById('f')
+            .addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+        // A submit button's click fires the click, then the form's submit.
+        document.getElementById('b').click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/track', '/save']);
+        expect(dropped).not.toHaveBeenCalled();
+        // The click held the button: its own repeat is still dropped.
+        document.getElementById('b').click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/track', '/save']);
+    });
+
+    describe('under a deferred view transition', () => {
+        /** @type {Function[]} */
+        let updates;
+
+        beforeEach(() => {
+            updates = [];
+            document.startViewTransition = (fn) => {
+                updates.push(typeof fn === 'function' ? fn : fn.update);
+                return { ready: Promise.resolve() };
+            };
+        });
+
+        afterEach(() => {
+            delete document.startViewTransition;
+        });
+
+        it('drops a repeat submit whole before the first one ran', async () => {
+            await page(
+                `<form id="f" method="post" az-transition
+                    az-submit='[[22,"/save",{}],[9,"ran",{}]]'></form>`,
+            );
+            const ran = vi.fn();
+            document.addEventListener('ran', ran);
+            const dropped = vi.fn();
+            document
+                .getElementById('f')
+                .addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+            submit('f');
+            submit('f');
+            for (const update of updates) update();
+            document.removeEventListener('ran', ran);
+            expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+            expect(ran).toHaveBeenCalledTimes(1);
+            expect(dropped).toHaveBeenCalledWith({ reason: 'in_flight' });
+            // Released when the request settles.
+            pending[0].resolve(response(200, ''));
+            await vi.waitFor(() => {
+                submit('f');
+                expect(updates).toHaveLength(2);
+            });
+            updates[1]();
+            expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        });
+
+        it('releases the reserved form when its deferred commands never reach the fetch', async () => {
+            await page(
+                `<form id="f" method="post" az-transition
+                    az-submit='[[7,"[[[bad","x","y"],[22,"/save",{}]]'></form>`,
+            );
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            submit('f');
+            updates[0]();
+            warn.mockRestore();
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+            submit('f');
+            expect(updates).toHaveLength(2);
+        });
+    });
+
+    it('releases the hold when fetch() throws synchronously', async () => {
+        await page(`<form id="f" method="post" az-submit='[22,"/save",{}]'></form>`);
+        globalThis.fetch = vi.fn(() => {
+            throw new TypeError('bad init');
+        });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        submit('f');
+        submit('f');
+        warn.mockRestore();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
     it('does not hold a fetch the server issues (no gesture)', async () => {
         await page(`<div id="x"></div>`);
         executeJS(document.documentElement, null, [22, '/ping', {}]);

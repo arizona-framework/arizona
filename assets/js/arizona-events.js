@@ -1,8 +1,8 @@
 import {
     executeJS,
-    fetchInFlight,
     flushTimer,
     maybeResetForm,
+    reserveFetches,
     socketNeeds,
 } from './arizona-commands.js';
 import { mountHooks } from './arizona-hooks.js';
@@ -470,13 +470,6 @@ export function bindDocumentEvents(target, signal, abort) {
             try {
                 const cmds = raw ? JSON.parse(raw) : null;
                 if (cmds) needs = socketNeeds(cmds, {}, false);
-                // The form's previous fetch has not settled: a second click or Enter
-                // would post it twice, so the repeat is dropped whole (none of its
-                // other commands run, nothing resets).
-                if (needs.fetch && fetchInFlight(form, needs.fetch)) {
-                    dropSubmit(form, 'in_flight');
-                    return;
-                }
                 // While the socket is down (the worker drops pre-open sends):
                 // - an SPA navigation alone degrades to a full load of its URL, as a
                 //   disconnected az-navigate click does;
@@ -494,22 +487,35 @@ export function bindDocumentEvents(target, signal, abort) {
                     dropSubmit(form, 'disconnected');
                     return;
                 }
-                // Flush pending debounced inputs so the server sees them before the
-                // submit. Only while connected: a flush now would send them into a
-                // closed socket, while a still-armed timer can deliver them later.
-                // `form.elements` too: a control associated by `form="id"` sits
-                // outside the form element, and a missed flush lands after the submit.
-                if (host.ready()) {
-                    const sel = '[az-debounce],[az-throttle]';
-                    const pending = new Set(form.querySelectorAll(sel));
-                    // The form's own slots too: a form-level az-debounce paces the
-                    // field events it delegates.
-                    if (form.matches(sel)) pending.add(form);
-                    for (const el of /** @type {HTMLFormElement} */ (form).elements)
-                        if (el.matches(sel)) pending.add(el);
-                    for (const el of pending) flushTimer(el);
+                // The form's previous fetch has not settled: a second click or Enter
+                // would post it twice, so the repeat is dropped whole (none of its
+                // other commands run, nothing resets). Held from here, not from the
+                // fetch, so a view transition deferring the commands leaves no gap.
+                const unreserve = needs.fetch ? reserveFetches(form, needs.fetch, e) : () => {};
+                if (!unreserve) {
+                    dropSubmit(form, 'in_flight');
+                    return;
                 }
-                if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+                try {
+                    // Flush pending debounced inputs so the server sees them before the
+                    // submit. Only while connected: a flush now would send them into a
+                    // closed socket, while a still-armed timer can deliver them later.
+                    // `form.elements` too: a control associated by `form="id"` sits
+                    // outside the form element, and a missed flush lands after the submit.
+                    if (host.ready()) {
+                        const sel = '[az-debounce],[az-throttle]';
+                        const pending = new Set(form.querySelectorAll(sel));
+                        // The form's own slots too: a form-level az-debounce paces the
+                        // field events it delegates.
+                        if (form.matches(sel)) pending.add(form);
+                        for (const el of /** @type {HTMLFormElement} */ (form).elements)
+                            if (el.matches(sel)) pending.add(el);
+                        for (const el of pending) flushTimer(el);
+                    }
+                    if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+                } finally {
+                    unreserve();
+                }
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 warnOnce(

@@ -310,19 +310,21 @@ export function socketNeeds(cmds, acc, conditional) {
 
 /**
  * The elements holding a non-GET/HEAD `fetch` a user gesture started that has not
- * settled yet. While one is held, a gesture's fetch on it is dropped: a double click
- * or a second Enter would otherwise post a login or an order twice, and the server
- * cannot tell the repeat from a new request. Dropped rather than queued, since a
- * queued repeat is the duplicate request itself.
- * @type {WeakSet<Element>}
+ * settled yet, each with that gesture's event and how many of its requests are out.
+ * While one is held, another gesture's fetch on it is dropped: a double click or a
+ * second Enter would otherwise post a login or an order twice, and the server cannot
+ * tell the repeat from a new request. Dropped rather than queued, since a queued
+ * repeat is the duplicate request itself. The same gesture's own fetches all go out
+ * (`[fetch(A), fetch(B)]` is two requests the author asked for).
+ * @type {WeakMap<Element, {event: Event, n: number}>}
  */
-const _fetchHeld = new WeakSet();
+const _fetchHeld = new WeakMap();
 
 /**
  * The element a gesture's `fetch` command holds while in flight: the trigger's form
- * (whose fields it posts, from whichever control inside it), else the trigger. None
- * for a GET/HEAD, which changes nothing, so a newer query is never dropped behind an
- * older one.
+ * when the request posts it (no explicit `body`), from whichever control inside it,
+ * else the trigger. None for a GET/HEAD, which changes nothing, so a newer query is
+ * never dropped behind an older one.
  * @param {Element} el
  * @param {Array<*>} cmd
  * @returns {Element|null}
@@ -330,22 +332,70 @@ const _fetchHeld = new WeakSet();
 function fetchHold(el, cmd) {
     const form = el.closest?.('form') ?? null;
     const method = (cmd[2]?.method || form?.getAttribute('method') || 'post').toUpperCase();
-    return method === 'GET' || method === 'HEAD' ? null : (form ?? el);
+    if (method === 'GET' || method === 'HEAD') return null;
+    return cmd[2]?.body === undefined && form ? form : el;
 }
 
 /**
- * Whether any of `fetches`, raised by a gesture on `el`, would be dropped because
- * its element still holds a fetch in flight -- so a submit is dropped whole rather
- * than run in part.
- * @param {Element} el
- * @param {Array<*>[]} fetches
- * @returns {boolean}
+ * Hold `held` for the gesture `event`, unless another gesture holds it.
+ * @param {Element} held
+ * @param {Event} event
+ * @returns {boolean} whether it is now held for `event`
  */
-export function fetchInFlight(el, fetches) {
-    return fetches.some((c) => {
-        const held = fetchHold(el, c);
-        return held !== null && _fetchHeld.has(held);
-    });
+function holdFetch(held, event) {
+    const h = _fetchHeld.get(held);
+    if (!h) _fetchHeld.set(held, { event, n: 1 });
+    else if (h.event === event) h.n++;
+    else return false;
+    return true;
+}
+
+/**
+ * Let go of one hold on `held`; the element is free once none is left.
+ * @param {Element} held
+ */
+function releaseFetch(held) {
+    const h = _fetchHeld.get(held);
+    if (h && --h.n === 0) _fetchHeld.delete(held);
+}
+
+/**
+ * The gestures whose commands a view transition deferred to its update callback,
+ * with the work waiting for them to finish running.
+ * @type {WeakMap<Event, {n: number, done: Array<() => void>}>}
+ */
+const _deferredRuns = new WeakMap();
+
+/**
+ * Hold, for the submit `event`, every element the form's `fetches` will hold, so a
+ * repeat submit is dropped whole even while the first one's commands wait in a view
+ * transition. Returns null when one is held by another gesture (nothing is held
+ * then), else the release, which waits for the gesture's deferred commands: by then
+ * every fetch they raised holds on its own.
+ * @param {Element} form
+ * @param {Array<*>[]} fetches
+ * @param {Event} event
+ * @returns {(() => void)|null}
+ */
+export function reserveFetches(form, fetches, event) {
+    const held = new Set();
+    for (const c of fetches) {
+        const h = fetchHold(form, c);
+        if (h) held.add(h);
+    }
+    for (const h of held) {
+        const cur = _fetchHeld.get(h);
+        if (cur && cur.event !== event) return null;
+    }
+    for (const h of held) holdFetch(h, event);
+    return () => {
+        const release = () => {
+            for (const h of held) releaseFetch(h);
+        };
+        const d = _deferredRuns.get(event);
+        if (d) d.done.push(release);
+        else release();
+    };
 }
 
 /**
@@ -500,6 +550,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
                 const later = host.holdReplay();
+                // A submit's reserved fetch holds wait for these commands to run.
+                /** @type {{n: number, done: Array<() => void>}|undefined} */
+                let deferred;
+                if (event) {
+                    deferred = _deferredRuns.get(event) ?? { n: 0, done: [] };
+                    deferred.n++;
+                    _deferredRuns.set(event, deferred);
+                }
                 runTransition(opts, () =>
                     later(() => {
                         try {
@@ -510,6 +568,11 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                                 `[arizona] az-transition command failed: ${detail}`,
                                 'az-transition',
                             );
+                        } finally {
+                            if (deferred && --deferred.n === 0) {
+                                _deferredRuns.delete(/** @type {Event} */ (event));
+                                for (const done of deferred.done) done();
+                            }
                         }
                     }),
                 );
@@ -661,120 +724,129 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // Only a gesture holds (a command a server effect or a response runs has
             // no event): a repeat of one is the double submit.
             const held = event && el ? fetchHold(el, cmd) : null;
-            if (held) {
-                if (_fetchHeld.has(held)) break;
-                _fetchHeld.add(held);
-            }
-            const release = () => held && _fetchHeld.delete(held);
+            if (held && event && !holdFetch(held, event)) break;
+            const release = () => held && releaseFetch(held);
+            // Every path from the hold to the request releases it: a throw here
+            // (fetch() rejecting its init synchronously) would lock the form for good.
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
-            const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
-            const headers = { accept: 'application/json', ...(opts.headers || {}) };
-            let target = url;
-            let body;
-            if (method === 'GET' || method === 'HEAD') {
-                // No request body for GET/HEAD -- carry the payload in the query string
-                // instead (fetch is otherwise POST-oriented: it sets cookies). The same
-                // precedence as a body: an explicit `body` wins over the form's fields.
-                let params = null;
-                if (opts.body !== undefined) params = bodyQuery(opts.body);
-                else if (form) {
-                    params = new URLSearchParams(
+            let req;
+            let onError;
+            try {
+                const method = (
+                    opts.method ||
+                    form?.getAttribute('method') ||
+                    'post'
+                ).toUpperCase();
+                const headers = { accept: 'application/json', ...(opts.headers || {}) };
+                let target = url;
+                let body;
+                if (method === 'GET' || method === 'HEAD') {
+                    // No request body for GET/HEAD -- carry the payload in the query string
+                    // instead (fetch is otherwise POST-oriented: it sets cookies). The same
+                    // precedence as a body: an explicit `body` wins over the form's fields.
+                    let params = null;
+                    if (opts.body !== undefined) params = bodyQuery(opts.body);
+                    else if (form) {
+                        params = new URLSearchParams(
+                            /** @type {any} */ (new FormData(form, submitter(event))),
+                        );
+                    }
+                    const qs = params ? params.toString() : '';
+                    if (qs) target = appendQuery(url, qs);
+                } else if (opts.body !== undefined) {
+                    body = JSON.stringify(opts.body);
+                    headers['content-type'] = 'application/json';
+                } else if (form) {
+                    // Mirror a normal form POST: application/x-www-form-urlencoded.
+                    // (multipart / file uploads are a documented non-goal.)
+                    body = new URLSearchParams(
                         /** @type {any} */ (new FormData(form, submitter(event))),
                     );
                 }
-                const qs = params ? params.toString() : '';
-                if (qs) target = appendQuery(url, qs);
-            } else if (opts.body !== undefined) {
-                body = JSON.stringify(opts.body);
-                headers['content-type'] = 'application/json';
-            } else if (form) {
-                // Mirror a normal form POST: application/x-www-form-urlencoded.
-                // (multipart / file uploads are a documented non-goal.)
-                body = new URLSearchParams(
-                    /** @type {any} */ (new FormData(form, submitter(event))),
-                );
+                onError = (/** @type {object} */ detail) => {
+                    if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                    document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
+                };
+                req = fetch(target, {
+                    method,
+                    body,
+                    credentials: CREDENTIALS[opts.credentials] || 'same-origin',
+                    headers,
+                    keepalive: opts.keep_alive === true,
+                });
+            } catch (err) {
+                release();
+                throw err;
             }
-            const onError = (/** @type {object} */ detail) => {
-                if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
-                document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
-            };
             const later = host.holdReplay();
-            fetch(target, {
-                method,
-                body,
-                credentials: CREDENTIALS[opts.credentials] || 'same-origin',
-                headers,
-                keepalive: opts.keep_alive === true,
-            })
-                .then((resp) =>
-                    resp.text().then((text) =>
-                        later(() => {
-                            // Settled: released before the effects, so one of them
-                            // (or the user, at once) may post the form again.
-                            release();
-                            // Apply the effects body whenever it parses -- even on a 4xx, so
-                            // the server can drive inline validation with a real status. The
-                            // effects run against a stand-in for the trigger that names the view
-                            // its own events go to (its az-target, else its enclosing view), so a
-                            // `push_event` in the response re-renders that view via handle_event
-                            // (no pubsub) -- without scraping the form's fields into the event
-                            // payload (the stand-in is no form or field, so autoPayload is
-                            // empty; the controller passes any result explicitly). An empty 2xx
-                            // body (a cookie-only response) applies nothing. on_error runs only
-                            // when there is no usable effects body: a non-JSON page or an empty
-                            // non-2xx.
-                            let effects = null;
-                            if (text) {
-                                try {
-                                    effects = JSON.parse(text).e || [];
-                                } catch {
-                                    effects = null;
-                                }
-                            } else if (resp.ok) {
-                                effects = [];
-                            }
-                            // Effect application is isolated from the trailing network
-                            // .catch: a throw here is an app bug on a request that
-                            // SUCCEEDED (the body parsed), so it is logged -- letting it
-                            // flow into the .catch would fire on_error/arizona:fetch-error
-                            // as a phantom network failure, after effects partially applied.
-                            if (effects !== null) {
-                                // A detached stand-in carrying the trigger's target, never
-                                // a live element: as a push_event trigger a form or a field
-                                // would put what was typed in the payload, and any element
-                                // inside a <form> (a view nested in one too) would hand a
-                                // fetch in the response that form's fields to post.
-                                let trigger = el;
-                                if (el) {
-                                    const id = resolveTarget(el);
-                                    trigger = el.ownerDocument.createElement('div');
-                                    if (id) trigger.setAttribute('az-target', id);
-                                }
-                                try {
-                                    executeJS(trigger, null, effects);
-                                } catch (err) {
-                                    console.error('[arizona] fetch response effect threw', err);
-                                }
-                            } else onError({ url, status: resp.status });
-                            // Honor az-form-reset only on a 2xx success, so a validation
-                            // error (a non-2xx) keeps the typed fields. Same isolation as
-                            // the effects above.
-                            if (resp.ok && form) {
-                                try {
-                                    maybeResetForm(form);
-                                } catch (err) {
-                                    console.error('[arizona] az-form-reset failed', err);
-                                }
-                            }
-                        }),
-                    ),
-                )
-                .catch((error) =>
+            req.then((resp) =>
+                resp.text().then((text) =>
                     later(() => {
+                        // Settled: released before the effects, so one of them
+                        // (or the user, at once) may post the form again.
                         release();
-                        onError({ url, error });
+                        // Apply the effects body whenever it parses -- even on a 4xx, so
+                        // the server can drive inline validation with a real status. The
+                        // effects run against a stand-in for the trigger that names the view
+                        // its own events go to (its az-target, else its enclosing view), so a
+                        // `push_event` in the response re-renders that view via handle_event
+                        // (no pubsub) -- without scraping the form's fields into the event
+                        // payload (the stand-in is no form or field, so autoPayload is
+                        // empty; the controller passes any result explicitly). An empty 2xx
+                        // body (a cookie-only response) applies nothing. on_error runs only
+                        // when there is no usable effects body: a non-JSON page or an empty
+                        // non-2xx.
+                        let effects = null;
+                        if (text) {
+                            try {
+                                effects = JSON.parse(text).e || [];
+                            } catch {
+                                effects = null;
+                            }
+                        } else if (resp.ok) {
+                            effects = [];
+                        }
+                        // Effect application is isolated from the trailing network
+                        // .catch: a throw here is an app bug on a request that
+                        // SUCCEEDED (the body parsed), so it is logged -- letting it
+                        // flow into the .catch would fire on_error/arizona:fetch-error
+                        // as a phantom network failure, after effects partially applied.
+                        if (effects !== null) {
+                            // A detached stand-in carrying the trigger's target, never
+                            // a live element: as a push_event trigger a form or a field
+                            // would put what was typed in the payload, and any element
+                            // inside a <form> (a view nested in one too) would hand a
+                            // fetch in the response that form's fields to post.
+                            let trigger = el;
+                            if (el) {
+                                const id = resolveTarget(el);
+                                trigger = el.ownerDocument.createElement('div');
+                                if (id) trigger.setAttribute('az-target', id);
+                            }
+                            try {
+                                executeJS(trigger, null, effects);
+                            } catch (err) {
+                                console.error('[arizona] fetch response effect threw', err);
+                            }
+                        } else onError({ url, status: resp.status });
+                        // Honor az-form-reset only on a 2xx success, so a validation
+                        // error (a non-2xx) keeps the typed fields. Same isolation as
+                        // the effects above.
+                        if (resp.ok && form) {
+                            try {
+                                maybeResetForm(form);
+                            } catch (err) {
+                                console.error('[arizona] az-form-reset failed', err);
+                            }
+                        }
                     }),
-                );
+                ),
+            ).catch((error) =>
+                later(() => {
+                    release();
+                    onError({ url, error });
+                }),
+            );
             break;
         }
         case JS_FOCUS:
