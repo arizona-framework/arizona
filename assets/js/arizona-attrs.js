@@ -233,23 +233,32 @@ export function sanitized(el, text, keepStart, keepEnd) {
         .join(',');
 }
 
+// The <input> attributes its value sanitization reads.
+const SANITIZING_ATTRS = ['type', 'min', 'max', 'step', 'multiple'];
+
 /**
  * What a control's `value` shows once `text`, its default, is written to it, as the
  * browser computes it: a textarea's API value reads a CR as a LF, and an input's value
  * is sanitized by its type (newlines stripped, a color lowercased, a range clamped and
- * snapped, an invalid number or date emptied). A fresh, never-edited copy carrying the
- * control's attributes (its type and what decides the sanitization) holds `text` as its
- * default and shows it; a clone would carry the control's dirty value instead, and no
- * `value` setter runs. Compared with `value` to tell an edit from the default.
+ * snapped, an invalid number or date emptied). A fresh, never-edited copy carrying only
+ * the attributes that decide the sanitization holds `text` as its default and shows it:
+ * a clone would carry the control's dirty value instead, and any other attribute copied
+ * (a `style` a strict CSP reports) would be a write of its own. No `value` setter runs.
+ * Compared with `value` to tell an edit from the default.
  * @param {Element} el
  * @param {string} text
  * @returns {string}
  */
 export function shownDefault(el, text) {
     const probe = /** @type {HTMLInputElement} */ (el.ownerDocument.createElement(el.localName));
-    for (const a of el.attributes) probe.setAttribute(a.name, a.value);
     if (el.localName === 'textarea') probe.textContent = text;
-    else probe.setAttribute('value', text);
+    else {
+        for (const name of SANITIZING_ATTRS) {
+            const v = el.getAttribute(name);
+            if (v !== null) probe.setAttribute(name, v);
+        }
+        probe.setAttribute('value', text);
+    }
     return probe.value;
 }
 
