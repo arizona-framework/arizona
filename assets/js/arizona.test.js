@@ -4152,6 +4152,39 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'id')).toBe('amp;<2>');
     });
 
+    // A raw `&#13;` means a CR, which the page keeps as a reference (a CR byte would
+    // parse as a LF): rendered for `[?raw(~"a&#13;b"), ?local(id, ~"1")]`.
+    it('keeps the CR a raw affix means', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;title&quot;:[&quot;a\\rb&quot;,&quot;&quot;]}}" title="a&#13;b1">e</a>`,
+        );
+        const a = document.querySelector('[az="0"]');
+        expect(a.getAttribute('title')).toBe('a\rb1');
+        expect(get('v', 'id')).toBe('1');
+        set('v', 'id', '2');
+        expect(a.getAttribute('title')).toBe('a\rb2');
+        expect(get('v', 'id')).toBe('2');
+    });
+
+    // A select value's parts are read joined, then normalized, as the page reads the
+    // value: a CR ending one part and a LF starting the next are one newline. Rendered
+    // for `{value, [?raw(~"a&#13;"), <<"\nb">>, ?local(k, <<>>)]}`.
+    it('reads a select value affix split across a CR and a LF as one newline', () => {
+        setupView(
+            'v',
+            `<select az="0" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;k&quot;},&quot;ap&quot;:{&quot;value&quot;:[[&quot;a\\r&quot;,&quot;\\nb&quot;],[]]}}" value="a\nb"><option az="1" value="zz">1</option><option az="2" value="a\nb" selected>2</option></select>`,
+        );
+        const select = document.querySelector('select');
+        expect(get('v', 'k')).toBe('');
+        set('v', 'k', 'x');
+        expect(select.getAttribute('value')).toBe('a\nbx');
+        set('v', 'k', '');
+        expect(select.getAttribute('value')).toBe('a\nb');
+        expect(select.value).toBe('a\nb');
+        expect(get('v', 'k')).toBe('');
+    });
+
     it('coerces a non-string value via String() and reads it back', () => {
         setupView(
             'v',

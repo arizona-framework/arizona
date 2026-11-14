@@ -66,6 +66,7 @@ and the select keeps its value for the client to apply after.
     interpolated_raw_value_reads_as_one_text/1,
     interpolated_local_value_compiles/1,
     interpolated_local_value_with_raw_part/1,
+    interpolated_local_value_split_newline/1,
     local_value_names_what_the_page_selects/1,
     multiple_local_value_is_a_json_array/1,
     local_value_parts_follow_runtime_multiple/1
@@ -135,7 +136,8 @@ groups() ->
             raw_select_value_reads_as_the_page_holds_it,
             interpolated_raw_value_reads_as_one_text,
             interpolated_local_value_compiles,
-            interpolated_local_value_with_raw_part
+            interpolated_local_value_with_raw_part,
+            interpolated_local_value_split_newline
         ]}
     ].
 
@@ -1482,6 +1484,39 @@ interpolated_local_value_with_raw_part(Config) when is_list(Config) ->
             {"sel_raw_open_m", "multiple, ", ~"[\"&am\",\"p;\",\"c\"]", [
                 ~"&amp;am", ~"p;", ~"c"
             ]}
+        ]
+    ).
+
+%% A select's value is compared and rendered as the text the page holds once parsed, so
+%% the parts beside a `?local` are read joined and then normalized, as the page reads
+%% them: a CR ending one part and a LF starting the next are one newline, whether the
+%% CR is a byte or a raw `&#13;`. The descriptor hands the client each part as it is,
+%% and the client normalizes the joined affix the same way.
+interpolated_local_value_split_newline(Config) when is_list(Config) ->
+    Options =
+        "{option, [{value, ~\"zz\"}], [~\"1\"]}, {option, [{value, <<\"a\\nb\">>}], [~\"2\"]}",
+    lists:foreach(
+        fun({Mod, Attrs, Bindings, CR}) ->
+            M = compile_module(raw_src(Mod, Attrs, Options)),
+            HTML = ssr_picked([<<"a\nb">>], M, Bindings),
+            ?assertEqual(<<"a\nb">>, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[CR, <<"\nb">>], []]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [
+            {"sel_split_raw",
+                "{value, [arizona_template:raw(~\"a&#13;\"), <<\"\\nb\">>, "
+                "arizona_template:local(k, <<>>)]}", #{}, <<"a\r">>},
+            {"sel_split_static",
+                "{value, [<<\"a\\r\">>, <<\"\\nb\">>, arizona_template:local(k, <<>>)]}", #{},
+                <<"a\r">>},
+            {"sel_split_runtime",
+                "{multiple, arizona_template:get(m, Bindings)}, "
+                "{value, [arizona_template:raw(~\"a&#13;\"), <<\"\\nb\">>, "
+                "arizona_template:local(k, <<>>)]}", #{m => false}, <<"a\r">>}
         ]
     ).
 

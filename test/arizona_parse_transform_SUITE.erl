@@ -1903,7 +1903,8 @@ local_attr_raw_affix_live_diff_static(Config) when is_list(Config) ->
 %% Each raw affix part means the text its markup reads as on its own, whatever sits
 %% beside it: an open character reference is not completed by the init, the other
 %% side or a sibling raw, and a quote does not end the attribute. The page holds that
-%% text escaped, so it reads back as the descriptor's affix.
+%% text exactly (a CR, which a raw `&#13;` means and the parser would turn into a LF
+%% as a byte, written as a reference), so it reads back as the descriptor's affix.
 local_attr_raw_affix_reads_alone(Config) when is_list(Config) ->
     lists:foreach(
         fun({N, Value, Attr, Affixes}) ->
@@ -1943,7 +1944,10 @@ local_attr_raw_affix_reads_alone(Config) when is_list(Config) ->
                 "arizona_template:raw(<<\"&am\">>), arizona_template:raw(<<\"p;\">>), "
                 "arizona_template:local(id, <<\"c\">>)", ~"&amp;amp;c", [~"&amp;", ~""]},
             {7, "arizona_template:raw(<<\"a&#13;b\">>), arizona_template:local(id, <<\"1\">>)",
-                <<"a\nb1">>, [<<"a\nb">>, ~""]}
+                ~"a&#13;b1", [<<"a\rb">>, ~""]},
+            {8, "<<\"a\\r\">>, arizona_template:local(id, <<\"1\">>)", ~"a&#13;1", [
+                <<"a\r">>, ~""
+            ]}
         ]
     ).
 

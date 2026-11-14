@@ -293,6 +293,20 @@ written, as an escaped one does.
     {text | markup, binary()}.
 
 -doc """
+Markup for an attribute value that the backend's parser reads back as exactly `Text`:
+the inverse of `markup_text/2` in `attribute`. `escape/1` is not that wherever the
+parser rewrites a character it leaves as is. Used at compile time for the fixed text
+beside an attribute `?local` (a static part, or a literal `raw/1` folded to the text
+it means), which the client recomposes the attribute with and strips on a read, so
+the page must hold that text. For HTML: escaped, and a CR written as a reference,
+since the parser turns a CR byte into a LF.
+
+Optional, with `markup_text/2`: without it such text that `escape/1` does not keep is
+a `local_unsupported` compile error.
+""".
+-callback attr_markup(Text :: binary()) -> binary().
+
+-doc """
 Whether `Tag`'s `{attr, Name}` (`Name` as `name/1` spells it) or its `content` is a
 form control's default whose live state the user edits apart from it: HTML's `value`
 on `input`/`select`, `checked` on `input`, `selected` on `option`, and `textarea`
@@ -311,7 +325,7 @@ Optional. A backend without it marks nothing.
 """.
 -callback controlled(Tag :: tag(), Part :: {attr, binary()} | content) -> boolean().
 
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/2]).
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, attr_markup/1, controlled/2]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
