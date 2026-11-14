@@ -7941,14 +7941,24 @@ count_chosen(_Leaf) ->
 %% template nested in it, opening the choice's tag.
 count_choices({call, _, {remote, _, {atom, _, arizona_template}, {atom, _, choices}}, _}, _Sel) ->
     0;
-count_choices({map_field_assoc, _, {atom, _, s}, Statics}, Sel) ->
-    lists:sum([count_choices_in(binary_text(B), Sel) || B <- proper_ast_list(Statics)]);
+%% Only a compiled template's `s` is statics: a map of the user's in a slot may hold an
+%% `s` key too, and that is data.
+count_choices({map, _, Fields}, Sel) ->
+    case is_compiled_template_map(Fields) of
+        true -> lists:sum([count_template_field(F, Sel) || F <- Fields]);
+        false -> count_choices(Fields, Sel)
+    end;
 count_choices(Node, Sel) when is_tuple(Node) ->
     count_choices(tuple_to_list(Node), Sel);
 count_choices(Nodes, Sel) when is_list(Nodes) ->
     lists:sum([count_choices(N, Sel) || N <- Nodes]);
 count_choices(_Leaf, _Sel) ->
     0.
+
+count_template_field({map_field_assoc, _, {atom, _, s}, Statics}, Sel) ->
+    lists:sum([count_choices_in(binary_text(B), Sel) || B <- proper_ast_list(Statics)]);
+count_template_field(Field, Sel) ->
+    count_choices(Field, Sel).
 
 %% Markup opening the choice's tag (`<option`, in any case), followed by what ends a
 %% tag name or by the end of the static (an attribute dynamic comes next).

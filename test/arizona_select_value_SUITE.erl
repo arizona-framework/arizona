@@ -55,6 +55,7 @@ and the select keeps its value for the client to apply after.
     authored_selected_is_refused/1,
     choice_text_needs_markup_text/1,
     shadowing_parameter_is_renamed/1,
+    user_map_keyed_s_is_not_a_template/1,
     shadowing_hoisted_read_is_refused/1,
     static_value_selects_at_compile_time/1,
     static_text_with_references_folds/1,
@@ -79,6 +80,7 @@ groups() ->
     [
         {render, [parallel], [
             ssr_marks_the_chosen_option,
+            user_map_keyed_s_is_not_a_template,
             live_render_marks_the_chosen_option,
             no_value_attribute_on_the_select,
             option_without_value_uses_its_text,
@@ -1049,6 +1051,31 @@ load_source(Source) ->
     Forms = arizona_parse_transform:parse_transform(parse_forms(lists:flatten(Source)), []),
     {ok, Mod, Bin} = compile:forms(Forms, [return_errors]),
     code:load_binary(Mod, "", Bin).
+
+%% A compiled child under the select is searched for options through its statics,
+%% the `s` of a compiled template. A map of the user's that happens to hold an `s`
+%% key, in a slot of that child, is data: it is neither read as statics nor refused.
+user_map_keyed_s_is_not_a_template(Config) when is_list(Config) ->
+    Cases = [
+        {"sel_s_map_each",
+            "arizona_template:each(fun(X) -> {option, [{value, X}], [label(#{s => X})]} end, "
+            "arizona_template:get(xs, Bindings))", "label(M) -> maps:get(s, M). "},
+        {"sel_s_map_child",
+            "arizona_template:target(arizona_html, {option, [{value, ~\"a\"}], "
+            "[maps:get(s, #{s => arizona_template:get(x, Bindings)})]})", ""},
+        {"sel_s_map_list",
+            "arizona_template:target(arizona_html, {option, [{value, ~\"a\"}], "
+            "[hd(maps:get(s, #{s => [arizona_template:get(x, Bindings)]}))]})", ""}
+    ],
+    [
+        begin
+            Mod = compile_module(select_src_mod(Name, Child) ++ Extra),
+            B = #{v => ~"a", x => ~"X", xs => [~"a", ~"b"]},
+            HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B))),
+            ?assertEqual([~"a"], selected_values(HTML), {Name, HTML})
+        end
+     || {Name, Child, Extra} <- Cases
+    ].
 
 %% The value is read inside every option the item builds, so an `?each` parameter
 %% of a name it reads is renamed: `Bindings` here is the item, and the select's
