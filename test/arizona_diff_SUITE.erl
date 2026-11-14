@@ -137,6 +137,7 @@
     helper_raw_attr_escaped/1,
     non_literal_raw_attr_escaped/1,
     literal_raw_attr_whole_spliced/1,
+    raw_attr_quote_stays_in_the_value/1,
     local_raw_init_text_in_attr/1,
     raw_raw_template_attr_located/1,
     inlined_helper_raw_is_literal/1,
@@ -328,6 +329,7 @@ groups() ->
             helper_raw_attr_escaped,
             non_literal_raw_attr_escaped,
             literal_raw_attr_whole_spliced,
+            raw_attr_quote_stays_in_the_value,
             local_raw_init_text_in_attr,
             raw_raw_template_attr_located,
             inlined_helper_raw_is_literal
@@ -2704,6 +2706,38 @@ literal_raw_attr_whole_spliced(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"title=\"<b>\"")),
     {Ops, _, _} = arizona_diff:diff(M:literal_raw_attr_whole(#{h => ~"<s>"}), S0, V0, #{h => true}),
     ?assertMatch([[?OP_SET_ATTR, _, ~"title", #{~"raw" := ~"<s>"}]], Ops).
+
+%% A `"` in a literal `?raw` attribute value would end the value, so the page holds it
+%% as `&quot;` (the author's `"` as text) on SSR, the live render and the fingerprint
+%% payload: a constant whole value, a part beside a plain one, a whole value and a part
+%% from a binding. The diff ships the raw markup, which the client reads the same way
+%% (decodeRawAttr writes its `"` as `&quot;` before decoding).
+raw_attr_quote_stays_in_the_value(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    [
+        begin
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(M:Fun(B0))),
+            {HTML, S0, V0} = arizona_render:render(M:Fun(B0), #{}),
+            ?assertNotEqual(nomatch, binary:match(SSR, Want)),
+            ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), Want)),
+            ?assertMatch(
+                #{~"d" := [<<" ", Want/binary>> | _]}, arizona_render:fingerprint_payload(S0)
+            ),
+            {Ops, _, _} = arizona_diff:diff(M:Fun(B1), S0, V0, Changed),
+            ?assertEqual(WantOps, [Op || [_, _ | Op] <- Ops])
+        end
+     || {Fun, B0, B1, Changed, Want, WantOps} <- [
+            {raw_attr_quote_const, #{x => ~"v"}, #{x => ~"v"}, #{}, ~"title=\"a&quot;b\"", []},
+            {raw_attr_quote_interp, #{x => ~"v"}, #{x => ~"w"}, #{x => true},
+                ~"title=\"a&quot;bv\"", [[~"title", #{~"raw" => ~"a\"bw"}]]},
+            {literal_raw_attr_whole, #{h => ~"a\"b"}, #{h => ~"c\"d"}, #{h => true},
+                ~"title=\"a&quot;b\"", [[~"title", #{~"raw" => ~"c\"d"}]]},
+            {raw_interp_attr, #{h => ~"x\"y", v => ~"1"}, #{h => ~"z\"", v => ~"1"}, #{h => true},
+                ~"href=\"/a?q=&quot;&lt;&amp;x&quot;y&amp;z=1\"", [
+                    [~"href", #{~"raw" => ~"/a?q=&quot;&lt;&amp;z\"&amp;z=1"}]
+                ]}
+        ]
+    ].
 
 %% A `?local` init is the client's value, which it sets as text (`setAttribute`): in
 %% an attribute a raw init is escaped like one; in content it is still spliced.

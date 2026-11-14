@@ -483,8 +483,9 @@ controlled_part(Tag, content) ->
 %% out, references decoded. Static content holding anything `<` starts is `markup`, as
 %% it can end the option and open others (mark_choices/2 reads those).
 %%
-%% A raw attribute value is spliced verbatim between the quotes, so the page holds it
-%% as the parser reads an attribute value: preprocessed, then references decoded.
+%% A raw attribute value is spliced between the quotes (a `"` in it written `&quot;`,
+%% render_attr/2), so the page holds it as the parser reads an attribute value:
+%% preprocessed, then references decoded.
 markup_text(Markup, attribute) ->
     {text, decode_refs(preprocess(iolist_to_binary(Markup)), attribute)};
 markup_text(Markup, text) ->
@@ -1473,9 +1474,9 @@ tag_name(_Bin, _Pattern, _N) ->
 
 %% Render a dynamic attribute value: `false` strips the attribute, `true` emits a
 %% bare name. A `?raw` opt-out and an effect command are trusted (classified out
-%% via arizona_template:classify_trusted/1 and emitted verbatim, mirroring
-%% escape_value/2); any other scalar goes through attr/2, which entity-escapes
-%% it -- the one attribute-value escaping boundary.
+%% via arizona_template:classify_trusted/1 and emitted verbatim but for a raw `"`,
+%% mirroring escape_value/2); any other scalar goes through attr/2, which
+%% entity-escapes it -- the one attribute-value escaping boundary.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(_Name, false) ->
     <<>>;
@@ -1483,8 +1484,12 @@ render_attr(Name, true) ->
     attr_bool(Name, true);
 render_attr(Name, Value) ->
     case arizona_template:classify_trusted(Value) of
+        %% In a double-quoted value the only markup is a character reference, and
+        %% a `"` there would end the value, so it is written `&quot;`: the page
+        %% holds the author's `"` as text, as the live update does (decodeRawAttr).
+        %% The escaped parts hold no bare `"`, so only the raw ones change.
         {markup, Bin} ->
-            attr_unescaped(Name, Bin);
+            attr_unescaped(Name, binary:replace(Bin, ~"\"", ~"&quot;", [global]));
         %% A literal `?raw` arrives as markup, so a raw here is a helper's: escaped,
         %% as content escapes one, or it could close the attribute.
         {raw, V} ->

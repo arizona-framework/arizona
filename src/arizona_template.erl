@@ -867,7 +867,9 @@ every path; in title and textarea a template with no element renders its text
 `?local` raises the same. An **attribute value** must be text, so there a raw around one
 -- in a whole or interpolated value, or a `?json` prop -- raises `{raw_template,
 Map}` where the attribute is evaluated, located on every path. A command in a raw
-is refused as in content (`effect_in_content`). A map inside a list in the raw is
+is refused as in content (`effect_in_content`). A `"` in a raw there is written
+`&quot;` by the HTML backend (a bare one would end the value), so the page shows it
+as text. A map inside a list in the raw is
 not looked for and raises `bad_template_value`: in content at output, located on
 SSR only; in an attribute value inside its evaluation, located on every path (as
 does a raw in a literal attribute `?raw`).

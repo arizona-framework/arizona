@@ -89,6 +89,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([each_helper_raw_attr/1]).
 -export([json_helper_raw_attr/1]).
 -export([literal_raw_attr_whole/1]).
+-export([raw_attr_quote_const/1]).
+-export([raw_attr_quote_interp/1]).
 -export([local_raw_attr/1]).
 -export([local_raw_content/1]).
 -export([raw_raw_template_attr/1]).
@@ -802,6 +804,16 @@ json_helper_raw_attr(Bindings) ->
 -spec literal_raw_attr_whole(az:bindings()) -> az:template().
 literal_raw_attr_whole(Bindings) ->
     ?html({span, [{title, ?raw(?get(h))}], []}).
+
+%% A `"` in a literal `?raw` attribute value: whole and constant, and as a part
+%% beside a plain one.
+-spec raw_attr_quote_const(az:bindings()) -> az:template().
+raw_attr_quote_const(Bindings) ->
+    ?html({span, [{title, ?raw(~"a\"b")}], [?get(x)]}).
+
+-spec raw_attr_quote_interp(az:bindings()) -> az:template().
+raw_attr_quote_interp(Bindings) ->
+    ?html({span, [{title, [?raw(~"a\"b"), ?get(x)]}], []}).
 
 %% A `?local` init is the client's value: text in an attribute, spliced in content.
 -spec local_raw_attr(az:bindings()) -> az:template().
