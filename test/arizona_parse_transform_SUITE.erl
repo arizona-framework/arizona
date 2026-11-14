@@ -4741,7 +4741,7 @@ az_ctl_skips_unrendered_controls(Config) when is_list(Config) ->
             {"pt_ctl_ta_value", "{textarea, [{value, " ++ Get("v") ++ "}], []}"}
         ]
     ),
-    ?assertEqual(false, erlang:function_exported(arizona_json, controlled, 2)),
+    ?assertEqual(false, erlang:function_exported(arizona_json, controlled, 3)),
     NativeMod = compile_module(
         "-module(pt_ctl_json). -export([render/1]). render(Bindings) -> "
         "arizona_template:target(arizona_json, {'TextField', [{value, "
