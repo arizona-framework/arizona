@@ -512,7 +512,10 @@ compile_not_code_point(Config) when is_list(Config) ->
             "false -> ~\"\" end}], []}", -1},
         {"be_cp_begin_content", "{p, [], [begin <<\"a\", 55296>> end]}", 55296},
         {"be_cp_raw", "{p, [], [arizona_template:raw(<<\"a\", -1>>)]}", -1},
-        {"be_cp_raw_attr", "{p, [{title, arizona_template:raw(<<\"a\", -1>>)}], []}", -1}
+        {"be_cp_raw_attr", "{p, [{title, arizona_template:raw(<<\"a\", -1>>)}], []}", -1},
+        {"be_cp_body", "<<\"a\", -1>>", -1},
+        {"be_cp_fragment_head", "[<<\"a\", -1>>, {p, [], []}]", -1},
+        {"be_cp_fragment_tail", "[{p, [], []}, <<\"a\", 55296>>]", 55296}
     ],
     [
         ?assertEqual(

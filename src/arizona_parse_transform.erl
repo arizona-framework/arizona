@@ -4464,6 +4464,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
     ok = reject_orphaned_local(ExprAST, Backend),
+    ok = assert_code_points(ExprAST),
     DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend, CCtx)],
     Statics = [[], []],
     {Statics, DynASTs, generate_fingerprint(Statics), #{diff => false}};
@@ -4472,6 +4473,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
     ok = reject_orphaned_local(ExprAST, Backend),
+    ok = assert_code_points(ExprAST),
     %% A whole-template bare dynamic (`?html(case ...)`, `?html(?get(x))`, a
     %% root `?stateless`/`?stateful` descriptor) sits inside no element, so no
     %% content slot would otherwise anchor it: wrap the slot in its own
@@ -4708,6 +4710,7 @@ compile_mixed_non_static(Item, Module, State) ->
             compile_element(Tag, Attrs, Children, ElemLine, State);
         false ->
             ok = reject_orphaned_local(Item, State#state.backend),
+            ok = assert_code_points(Item),
             compile_mixed_dynamic(Item, Module, State)
     end.
 
