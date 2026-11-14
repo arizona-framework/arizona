@@ -2902,8 +2902,11 @@ with no diagnostic. The escalation's granularity is what makes it safe: one raw-
 the enclosing template, so a `<textarea>` is untouched when a sibling `<title>` changes.
 
 Escaping is preserved structurally rather than reimplemented -- the children compile through the
-ordinary `compile_children/3` walk, so each dynamic keeps its own policy (`raw` verbatim through
-`neutralize_raw_text/4` neutralization, `escapable` HTML-escaped via `esc_spec`).
+ordinary `compile_children/3` walk, so each dynamic keeps its own policy: `raw` goes verbatim through
+`neutralize_raw_text/4` neutralization; `escapable` goes through the same callback, a plain value
+marked by `arizona_template:mark_esc/1` and HTML-escaped, a `?raw` spliced with the element's end
+tag defused -- except a content `?local`, which keeps the `esc_spec` value path its client binding
+needs.
 
 **An executable `<script>` is the one case where updating is questionable, and `az-nodiff` is the
 answer.** A script element carries an "already started" flag, so mutating its text after it has run

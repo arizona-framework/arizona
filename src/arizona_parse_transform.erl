@@ -4543,7 +4543,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
     %% A whole-template bare dynamic (`?html(case ...)`, `?html(?get(x))`, a
     %% root `?stateless`/`?stateful` descriptor) sits inside no element, so no
     %% content slot would otherwise anchor it: wrap the slot in its own
-    %% text-slot markers, exactly like a content slot inside an element
+    %% content-slot markers, exactly like a content slot inside an element
     %% (emit_child_dynamic/4) and like a bare dynamic in a root fragment
     %% (compile_mixed_dynamic/3). Without the anchor, SSR renders no marker
     %% for the slot, so its diff ops (both branch toggles of a
@@ -4784,7 +4784,7 @@ compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = S
     flush(State, with_choices(DynAST, State));
 compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% A bare (non-element) dynamic at the fragment top level. Allocate it a
-    %% unique az from the shared element counter and wrap it in text-slot markers,
+    %% unique az from the shared element counter and wrap it in content-slot markers,
     %% exactly like a content slot (emit_child_dynamic/4). A hardcoded, markerless
     %% `"0"` collided with the first element's az -- and its first content slot's
     %% marker az is also `"0"` (content_slot_az(0, 0)) -- so an OP_TEXT for this value
@@ -4940,8 +4940,11 @@ needs_elem_az(Children, Line, #state{nodiff = true}) ->
 %%
 %% Escaping is preserved structurally rather than reimplemented: the children compile
 %% through the ordinary `compile_children/3` walk, so each dynamic keeps its own
-%% policy -- `raw` (script/style) goes verbatim through `Backend:neutralize_raw_text/4` breakout
-%% neutralization, `escapable` (textarea/title) is HTML-escaped via `esc_spec`.
+%% policy -- `raw` (script/style) goes verbatim through `Backend:neutralize_raw_text/4`
+%% breakout neutralization; `escapable` (textarea/title) goes through the same
+%% callback, a plain value marked by `arizona_template:mark_esc/1` and HTML-escaped,
+%% a `?raw` spliced with the end tag defused -- except a content `?local`, which
+%% keeps the `esc_spec` value path.
 %% Nothing here rewrites that path.
 compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0) ->
     ChildState = State0#state{
@@ -6309,7 +6312,7 @@ make_raw_text_dynamic_ast(ExprAST0, Tag, {Before, After}, Module, ExprLine, Back
     %% text because a sequence can begin in it and end in the value, or the reverse.
     GuardedAST =
         {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, neutralize_raw_text}}, [
-            {atom, 0, Tag}, ast_binary(Before), ast_binary(After), ExprAST
+            erl_parse:abstract(Tag), ast_binary(Before), ast_binary(After), ExprAST
         ]},
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.

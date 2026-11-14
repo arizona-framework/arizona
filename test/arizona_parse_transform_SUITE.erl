@@ -525,6 +525,7 @@
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
+    raw_text_script_binary_tag/1,
     raw_text_style_markerless/1,
     raw_text_json_ld_raw_verbatim/1,
     raw_text_title_escaped_markerless/1,
@@ -950,6 +951,7 @@ groups() ->
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
+            raw_text_script_binary_tag,
             raw_text_style_markerless,
             raw_text_json_ld_raw_verbatim,
             raw_text_title_escaped_markerless,
@@ -3096,6 +3098,39 @@ raw_text_script_not_escaped(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"a < b && c > d")),
     ?assertEqual(nomatch, binary:match(HTML, ~"&lt;")),
     ?assertEqual(nomatch, binary:match(HTML, ~"&amp;")).
+
+%% A binary tag reaches the backend's `neutralize_raw_text/4` as the binary literal it
+%% is, not as an atom node holding a binary (malformed abstract code the compiler
+%% happens to lower), and the breakout is still neutralized for it.
+raw_text_script_binary_tag(Config) when is_list(Config) ->
+    Source =
+        "-module(pt_rt_script_bin_tag). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, {<<\"script\">>, [], ["
+        "        arizona_template:raw(arizona_template:get(js, Bindings))"
+        "    ]}). ",
+    [TagAST] = neutralize_tag_args(transform_source(Source, {1, 1})),
+    ?assertMatch({bin, _, _}, TagAST),
+    ?assertEqual(~"script", erl_parse:normalise(TagAST)),
+    Mod = compile_module(Source),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => <<"a</script><b>">>})),
+    ?assertMatch(
+        [<<"<script az=\"", _/binary>>, <<"a<\\/script><b></script>">>],
+        binary:split(iolist_to_binary(HTML0), ~"\">")
+    ).
+
+%% The tag argument of every `neutralize_raw_text/4` call in the transformed forms.
+neutralize_tag_args(
+    {call, _, {remote, _, {atom, _, arizona_html}, {atom, _, neutralize_raw_text}}, [Tag | _]}
+) ->
+    [Tag];
+neutralize_tag_args(T) when is_tuple(T) ->
+    neutralize_tag_args(tuple_to_list(T));
+neutralize_tag_args(L) when is_list(L) ->
+    lists:append([neutralize_tag_args(X) || X <- L]);
+neutralize_tag_args(_) ->
+    [].
 
 %% A dynamic content slot inside <style> is markerless (markers would be invalid
 %% CSS) and verbatim.

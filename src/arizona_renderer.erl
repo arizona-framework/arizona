@@ -73,17 +73,17 @@ between siblings valid.
 -callback text_child(Text :: binary()) -> binary().
 
 -doc """
-The `az` for a dynamic text slot, given the element's `az` and the child slot
-index. HTML reuses the element `az` for slot 0 (the comment marker and the
-element attribute coexist); JSON needs a distinct `az` because every node
-shares one flat registry.
+The `az` for a content slot (any dynamic child of an element), given the
+element's `az` and the child slot index. HTML reuses the element `az` for slot 0
+(the comment marker and the element attribute coexist); JSON needs a distinct
+`az` because every node shares one flat registry.
 """.
 -callback content_slot_az(ElemAz :: binary(), Slot :: non_neg_integer()) -> binary().
 
--doc "Open marker for a dynamic text slot with the given `az`.".
+-doc "Open marker for a content slot (any dynamic child) with the given `az`.".
 -callback content_slot_open(Az :: binary()) -> binary().
 
--doc "Close marker for a dynamic text slot.".
+-doc "Close marker for a content slot (any dynamic child).".
 -callback content_slot_close() -> binary().
 
 -doc "Whether the tag is a void element (no children / self-closing).".
@@ -373,9 +373,11 @@ value. The zipped document always uses `escape/1`.
 
 -doc """
 Make a dynamic value safe to splice into a raw-text element, one whose
-`raw_text_kind/2` is not `none`. The parse transform wraps every such dynamic in
-this callback; a backend without raw-text elements returns the value unchanged.
-It is called for both kinds:
+`raw_text_kind/2` is not `none`. The parse transform wraps every dynamic content
+value of such an element in this callback, except a content `?local` in an
+`escapable` one, which keeps the escaped, marker-anchored value path its client
+binding needs (a `?local` in a `raw` one is a compile error). A backend without
+raw-text elements returns the value unchanged. It is called for both kinds:
 
 - `raw` (HTML `script` and the RAWTEXT `style`/`xmp`/`iframe`/`noembed`/`noframes`):
   the content is emitted verbatim (the browser decodes nothing there), so entity
