@@ -233,8 +233,9 @@ export function sanitized(el, text, keepStart, keepEnd) {
         .join(',');
 }
 
-// The <input> attributes its value sanitization reads.
-const SANITIZING_ATTRS = ['type', 'min', 'max', 'step', 'multiple'];
+// The <input> attributes its value sanitization reads (a color's `alpha` and
+// `colorspace` too).
+const SANITIZING_ATTRS = ['type', 'min', 'max', 'step', 'multiple', 'alpha', 'colorspace'];
 
 /**
  * What a control's `value` shows once `text`, its default, is written to it, as the

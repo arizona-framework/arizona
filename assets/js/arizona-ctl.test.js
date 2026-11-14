@@ -527,7 +527,7 @@ describe('server-owned controls: textarea content', () => {
     // strict CSP reports, once per check.
     it('reads the shown default without copying unrelated attributes', async () => {
         await connect(
-            `<input az="0" type="color" style="color: red" title="t" ${CHANGE} value="#FF0000" az-ctl="value" />`,
+            `<input az="0" type="color" alpha colorspace="display-p3" style="color: red" title="t" ${CHANGE} value="#FF0000" az-ctl="value" />`,
         );
         const el = /** @type {HTMLInputElement} */ (document.querySelector('input'));
         const names = /** @type {string[]} */ ([]);
@@ -545,10 +545,10 @@ describe('server-owned controls: textarea content', () => {
         mock.reply([setAttr(0, 'value', '#00ff00')], null);
         expect(el.value).toBe('#00ff00');
         spy.mockRestore();
-        expect(names.length).toBeGreaterThan(0);
-        expect(names.filter((n) => !['type', 'min', 'max', 'step', 'value'].includes(n))).toEqual(
-            [],
-        );
+        // A color's `alpha` and `colorspace` decide its value too, so they are copied.
+        expect(names).toEqual(expect.arrayContaining(['type', 'alpha', 'colorspace', 'value']));
+        const decides = ['type', 'min', 'max', 'step', 'multiple', 'alpha', 'colorspace', 'value'];
+        expect(names.filter((n) => !decides.includes(n))).toEqual([]);
     });
 
     it('an unmarked textarea keeps the user text, as before', async () => {

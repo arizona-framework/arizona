@@ -419,7 +419,7 @@ the field shows the server's state, which is the point.
   owned by that ref, drop the hold and, if connected and it still shows its snapshot,
   `showDefault` it -- text and textarea `value = defaultValue` only when it differs from what
   the control shows for its default (`shownDefault`: the default held by a fresh copy carrying only the
-  attributes the sanitization reads -- `type`, `min`, `max`, `step`, `multiple`, none for a
+  attributes the sanitization reads -- `type`, `min`, `max`, `step`, `multiple`, a color's `alpha` and `colorspace`, none for a
   textarea, so no `style` write a strict CSP reports -- and read back, so the browser's own sanitization applies -- a textarea's CR read as a LF, an
   input's newlines stripped, a color lowercased, a range clamped; a focused one keeps its
   selection, clamped); a checkbox or radio `checked = defaultChecked` (a group
