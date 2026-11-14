@@ -7955,8 +7955,13 @@ count_choices(Nodes, Sel) when is_list(Nodes) ->
 count_choices(_Leaf, _Sel) ->
     0.
 
+%% A user map can spell every key a compiled template has, so its `s` is statics only
+%% when it is what the transform writes there: a list of static binaries.
 count_template_field({map_field_assoc, _, {atom, _, s}, Statics}, Sel) ->
-    lists:sum([count_choices_in(binary_text(B), Sel) || B <- proper_ast_list(Statics)]);
+    case is_static_binary_list(Statics) of
+        true -> lists:sum([count_choices_in(binary_text(B), Sel) || B <- proper_ast_list(Statics)]);
+        false -> count_choices(Statics, Sel)
+    end;
 count_template_field(Field, Sel) ->
     count_choices(Field, Sel).
 
@@ -7970,6 +7975,13 @@ count_choices_in(Text, #{backend := Backend, choice := Choice}) ->
      || {P, Len} <- binary:matches(Lower, Open),
         ends_tag_name(binary:part(Lower, P + Len, byte_size(Lower) - P - Len))
     ]).
+
+is_static_binary_list({nil, _}) ->
+    true;
+is_static_binary_list({cons, _, Head, Tail}) ->
+    is_static_binary(Head) andalso is_static_binary_list(Tail);
+is_static_binary_list(_NotAList) ->
+    false.
 
 ends_tag_name(<<>>) -> true;
 ends_tag_name(<<C, _/binary>>) -> lists:member(C, [$\s, $\t, $\n, $\f, $\r, $/, $>]).

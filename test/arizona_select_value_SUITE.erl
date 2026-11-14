@@ -1065,7 +1065,12 @@ user_map_keyed_s_is_not_a_template(Config) when is_list(Config) ->
             "[maps:get(s, #{s => arizona_template:get(x, Bindings)})]})", ""},
         {"sel_s_map_list",
             "arizona_template:target(arizona_html, {option, [{value, ~\"a\"}], "
-            "[hd(maps:get(s, #{s => [arizona_template:get(x, Bindings)]}))]})", ""}
+            "[hd(maps:get(s, #{s => [arizona_template:get(x, Bindings)]}))]})", ""},
+        %% Spelling every key a compiled template has does not make it one.
+        {"sel_s_map_template_keys",
+            "arizona_template:target(arizona_html, {option, [{value, ~\"a\"}], "
+            "[maps:get(s, #{s => arizona_template:get(x, Bindings), d => 1, f => 2, "
+            "backend => 3})]})", ""}
     ],
     [
         begin
