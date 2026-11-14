@@ -417,8 +417,11 @@ the field shows the server's state, which is the point.
 - **Settle.** Inside the worker handler's `apply`, after the ops and effects (so a
   transition-deferred frame settles after its DOM): for each control of the frame's ref still
   owned by that ref, drop the hold and, if connected and it still shows its snapshot,
-  `showDefault` it -- text and textarea `value = defaultValue` only when it differs (a focused
-  one keeps its selection, clamped); a checkbox or radio `checked = defaultChecked` (a group
+  `showDefault` it -- text and textarea `value = defaultValue` only when it differs from what
+  the control shows for its default (`shownDefault`: the default held by a fresh copy carrying the
+  control's attributes and read back, so the browser's own sanitization applies -- a textarea's CR read as a LF, an
+  input's newlines stripped, a color lowercased, a range clamped; a focused one keeps its
+  selection, clamped); a checkbox or radio `checked = defaultChecked` (a group
   settles to its default-checked member, else none); a select with a `value` attribute through
   `applyChooser(sel, true)`, else each option to `defaultSelected` -- and fire `updated()` on
   every control whose state that changed (a radio it unchecked included). A control changed
@@ -426,7 +429,7 @@ the field shows the server's state, which is the point.
   `123` and never `13`: an earlier reply's op lands on the attribute and its settle skips the
   control a later event owns.
 - **Unsent typing.** A marked control that is focused (any member of its radio group) and
-  `edited` (shows something other than its default) is held too. A held write that is not the
+  `edited` (shows something other than its default, as `shownDefault` reads it) is held too. A held write that is not the
   reply to an event carrying the control -- a push, or an effect (even in that reply: a command
   a handler returns is a server statement) -- is noted (`_guardWrote`). Which frame is the
   reply is told by the ref of the frame being applied (`_applying`, against `_ownedRefs`);

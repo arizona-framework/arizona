@@ -234,16 +234,23 @@ export function sanitized(el, text, keepStart, keepEnd) {
 }
 
 /**
- * What a control's `value` shows once `text`, its default, is written to it: a
- * textarea's API value reads a CR (alone or before a LF) as a LF, and a text-like
- * input's value is sanitized. Compared with `value` to tell an edit from the default.
+ * What a control's `value` shows once `text`, its default, is written to it, as the
+ * browser computes it: a textarea's API value reads a CR as a LF, and an input's value
+ * is sanitized by its type (newlines stripped, a color lowercased, a range clamped and
+ * snapped, an invalid number or date emptied). A fresh, never-edited copy carrying the
+ * control's attributes (its type and what decides the sanitization) holds `text` as its
+ * default and shows it; a clone would carry the control's dirty value instead, and no
+ * `value` setter runs. Compared with `value` to tell an edit from the default.
  * @param {Element} el
  * @param {string} text
  * @returns {string}
  */
 export function shownDefault(el, text) {
-    if (el.localName === 'textarea') return text.replace(/\r\n?/g, '\n');
-    return sanitized(el, text, false, false);
+    const probe = /** @type {HTMLInputElement} */ (el.ownerDocument.createElement(el.localName));
+    for (const a of el.attributes) probe.setAttribute(a.name, a.value);
+    if (el.localName === 'textarea') probe.textContent = text;
+    else probe.setAttribute('value', text);
+    return probe.value;
 }
 
 /**

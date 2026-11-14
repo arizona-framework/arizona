@@ -507,6 +507,21 @@ describe('server-owned controls: textarea content', () => {
         expect(el.value).toBe('c');
     });
 
+    // A color input's value is its default lowercased: once a reply settles it on that
+    // default, it is not edited, so a later push still shows while it is focused.
+    it('a color input whose default is uppercase is not edited once settled', async () => {
+        await connect(`<input az="0" type="color" ${CHANGE} value="#FF0000" az-ctl="value" />`);
+        const el = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        edit(el, (e) => {
+            e.value = '#0000ff';
+        });
+        mock.reply(null, mock.lastRef());
+        expect(el.value).toBe('#ff0000');
+        el.focus();
+        mock.reply([setAttr(0, 'value', '#00ff00')], null);
+        expect(el.value).toBe('#00ff00');
+    });
+
     it('an unmarked textarea keeps the user text, as before', async () => {
         await connect(`<textarea az="0">a</textarea>`);
         const el = document.querySelector('textarea');
