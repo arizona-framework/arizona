@@ -32,6 +32,7 @@
 -export([compile_each_named_fun_undefined/1]).
 -export([compile_each_remote_fun_ref/1]).
 -export([compile_improper_template_list/1]).
+-export([compile_computed_binary_tag/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -63,7 +64,8 @@ groups() ->
             compile_each_named_fun_multi_clause,
             compile_each_named_fun_undefined,
             compile_each_remote_fun_ref,
-            compile_improper_template_list
+            compile_improper_template_list,
+            compile_computed_binary_tag
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -310,6 +312,23 @@ compile_each_remote_fun_ref(Config) when is_list(Config) ->
         {"be_remote_html", html(Each("ul"))},
         {"be_remote_json", json(Each("'Column'"))},
         {"be_remote_text", text(Each("col"))}
+    ).
+
+%% A binary tag is a literal only when it is a static binary: one built from a value
+%% is chosen at runtime, the same mistake as a computed atom.
+compile_computed_binary_tag(Config) when is_list(Config) ->
+    Computed = fun(Outer) ->
+        "{" ++ Outer ++
+            ", [], [{<<\"x-\", (arizona_template:get(k, Bindings))/binary>>, "
+            "[], [~\"a\"]}]}"
+    end,
+    ?assertEqual(
+        {arizona_html, computed_element_tag},
+        compile_error("be_bin_tag_html", html(Computed("'div'")))
+    ),
+    ?assertEqual(
+        {arizona_json, computed_element_tag},
+        compile_error("be_bin_tag_json", json(Computed("'Column'")))
     ).
 
 compile_improper_template_list(Config) when is_list(Config) ->

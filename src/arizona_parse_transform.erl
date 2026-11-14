@@ -4693,9 +4693,9 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
 %% `<my-widget-v2>`. The two forms are the same pair, and mean the same thing, for a
 %% tag as for an attribute name.
 extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node, Backend) ->
-    extract_element_parts(extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node, Backend);
+    extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend);
 extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node, Backend) ->
-    extract_element_parts(extract_binary_value(TagAST), AttrsAST, {nil, 0}, Node, Backend);
+    extract_binary_tag_element(TagAST, AttrsAST, {nil, 0}, Node, Backend);
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node, Backend) ->
     extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node, Backend) ->
@@ -4708,6 +4708,18 @@ extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node, Backend) ->
     element_tag_error(TagAST, Node, Backend);
 extract_element(Node, _Backend) ->
     parse_error(invalid_element, anno(Node)).
+
+%% A binary literal is a tag only when static: one built from a value
+%% (`<<"x-", K/binary>>`) chooses the element at runtime.
+extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend) ->
+    case is_static_binary(TagAST) of
+        true ->
+            extract_element_parts(
+                extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node, Backend
+            );
+        false ->
+            element_tag_error(TagAST, Node, Backend)
+    end.
 
 %% The attrs of an element tuple, for a pass that only reads directives ahead of the
 %% compile (prescan_directives/1). A malformed element reads as having none: the
