@@ -177,12 +177,6 @@ render(Bindings) ->
 %% first. Every such call is compiled away -- one left over is `undef` at render.
 -define(NODIFF_MOD, '$arizona_nodiff').
 
-%% The longest constant binary tag the transform builds, and the memory and time it
-%% gives the process that evaluates one (constant_binary_tag/1).
--define(TAG_MAX_BYTES, 1024).
--define(TAG_EVAL_HEAP_WORDS, 1000000).
--define(TAG_EVAL_TIMEOUT, 5000).
-
 %% Wraps the callback of an `?each` that sits under a chooser carrying a value (see
 %% push_each/2): the `?each` compiles bottom-up, before the chooser, so this is how
 %% the chooser's value reaches the choices the item builds. The each's own
@@ -1293,26 +1287,47 @@ format_error({markup_var_in_content_list, Var}) ->
 format_error({tag_not_text, Tag}) ->
     lists:flatten(
         io_lib:format(
-            "the tag ~0tP is not text: every render target writes a tag as UTF-8 text "
-            "without control characters, and this one holds a control character, is not "
-            "UTF-8 (a utf16/utf32 type, a size that splits a character, a value that is "
-            "no code point) or is not whole bytes. Write the tag as text without control "
-            "characters: an atom, ~~\"...\" or <<\"...\">>",
-            [Tag, 20]
+            "the tag ~ts is not text: every render target writes a tag as UTF-8 text "
+            "without control characters, and this one holds a control character or is "
+            "not UTF-8. Write the tag as text without control characters: an atom, "
+            "~~\"...\" or <<\"...\">>",
+            [quote_name(Tag)]
         )
     );
-format_error(tag_too_long) ->
-    "this binary tag lays out more than 1024 bytes, more than any element name needs, "
-    "so the transform does not build it. Write the tag as text: an atom, ~\"...\" or "
-    "<<\"...\">>";
+format_error(tag_not_literal_text) ->
+    "this binary tag is not literal text: its segments lay out bytes (a size, a type, "
+    "an operator, a bitstring) instead of spelling characters, and a tag is a name. "
+    "Write the tag as text: an atom, ~\"...\" or <<\"...\">>";
+format_error({not_code_point, N}) ->
+    lists:flatten(
+        io_lib:format(
+            "the binary segment ~w is not a Unicode code point (a surrogate, a negative "
+            "number, or past 16#10FFFF): a template reads an integer segment of a binary "
+            "literal as the character it names, and this one names none. Write the "
+            "character you mean; for raw bytes give the segment a size, e.g. <<255:8>>",
+            [N]
+        )
+    );
+format_error(attr_name_not_literal_text) ->
+    "an attribute name must be written as text: an atom, ~\"...\" or <<\"...\">>. A "
+    "name chosen at runtime, or a binary laid out by sizes, types or operators, has no "
+    "name the transform can write";
+format_error(attr_name_empty) ->
+    "this attribute name is empty, so it renders an attribute with no name. Write the "
+    "name as text: an atom, ~\"...\" or <<\"...\">>";
+format_error({attr_name_not_text, Name}) ->
+    lists:flatten(
+        io_lib:format(
+            "the attribute name ~ts is not text: every render target writes it as UTF-8 "
+            "text without control characters. Write the name as text without control "
+            "characters: an atom, ~~\"...\" or <<\"...\">>",
+            [quote_name(Name)]
+        )
+    );
 format_error(tag_empty) ->
     "this element's tag is empty, so it renders an element with no name, which no "
     "client reads as an element. Write the tag as text: an atom, ~\"...\" or "
     "<<\"...\">>";
-format_error(binary_tag_unbuildable) ->
-    "this binary tag cannot be built: its literal segments do not construct a binary "
-    "(a string typed /binary, a negative code point typed /utf8). Write the tag as "
-    "text: an atom, ~\"...\" or <<\"...\">>";
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
 format_error(nodiff_call_not_compiled) ->
@@ -4738,159 +4753,35 @@ extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node, Backend) ->
 extract_element(Node, _Backend) ->
     parse_error(invalid_element, anno(Node)).
 
-%% A binary literal is a tag only when static: one built from a value
-%% (`<<"x-", K/binary>>`) chooses the element at runtime.
+%% A binary literal is a tag only when it folds as text: one built from a value
+%% (`<<"x-", K/binary>>`) chooses the element at runtime, and any other spelling
+%% (sizes, types, operators) lays out bytes, which a tag is not.
 extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend) ->
     case binary_tag(TagAST) of
         {ok, Tag} -> extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
-        {not_text, Bits} -> parse_error({tag_not_text, Bits}, anno(Node));
-        too_long -> parse_error(tag_too_long, anno(Node));
-        unbuildable -> parse_error(binary_tag_unbuildable, anno(Node));
+        not_literal_text -> parse_error(tag_not_literal_text, anno(Node));
         computed -> element_tag_error(TagAST, Node, Backend)
     end.
 
-%% A binary tag of literals is a constant, whatever spells it: text that folds
-%% (binary_text/1, which also notes it folded), or segments with sizes, types or
-%% operators on literals, evaluated here to the bytes they lay out. Anything else --
-%% a variable, a call, a send, a receive, a record field -- is code: it must not run
-%% while the module compiles, so the tag is one chosen at runtime.
+%% Nothing here is evaluated: the forms a person writes a name in all fold.
 binary_tag(TagAST) ->
+    ok = assert_code_points(TagAST),
     case is_static_binary(TagAST) of
-        true ->
-            {ok, extract_binary_value(TagAST)};
-        false ->
-            case is_constant(TagAST) of
-                true -> constant_binary_tag(TagAST);
-                false -> computed
-            end
+        true -> {ok, extract_binary_value(TagAST)};
+        false -> binary_not_text(TagAST)
     end.
 
-%% Literals only, so the evaluation runs nothing of the module's. A tag is a short
-%% name, so one whose segments declare more than ?TAG_MAX_BYTES is refused before it
-%% is built: a size is a number, and `<<0:(1 bsl 40)>>` is 26 characters. What is
-%% built is built in a process of bounded memory, as an operator on literals can grow
-%% a value too. A constant that still fails to build (a string typed `/binary`)
-%% builds no tag, and one of bits that are not whole bytes is no text.
-constant_binary_tag(TagAST) ->
-    case segments_bits(TagAST) of
-        {ok, Bits} when Bits =< ?TAG_MAX_BYTES * 8 ->
-            case eval_bounded(TagAST) of
-                {ok, Bytes} when is_binary(Bytes), byte_size(Bytes) =< ?TAG_MAX_BYTES ->
-                    {ok, Bytes};
-                {ok, Bytes} when is_binary(Bytes) ->
-                    too_long;
-                {ok, Bits1} ->
-                    {not_text, Bits1};
-                Refused ->
-                    Refused
-            end;
-        {ok, _TooMany} ->
-            too_long;
-        Refused ->
-            Refused
+binary_not_text(BinAST) ->
+    case reads_value(BinAST) of
+        true -> computed;
+        false -> not_literal_text
     end.
 
-%% An upper bound on the bits a constant binary lays out, from the sizes its segments
-%% declare (each evaluated, bounded): a default size is at most 64 bits a value (a
-%% float), 32 a character of a string (utf32), and a nested binary's own bound.
-segments_bits({bin, _, Elements}) ->
-    lists:foldl(
-        fun
-            (Element, {ok, Acc}) ->
-                case segment_bits(Element) of
-                    {ok, Bits} -> {ok, Acc + Bits};
-                    Refused -> Refused
-                end;
-            (_Element, Refused) ->
-                Refused
-        end,
-        {ok, 0},
-        Elements
-    ).
-
-segment_bits({bin_element, _, Value, default, _Type}) ->
-    value_bits(Value);
-segment_bits({bin_element, _, Value, SizeAST, Type}) ->
-    case eval_bounded(SizeAST) of
-        {ok, Size} when is_integer(Size), Size >= 0 -> {ok, value_count(Value) * Size * unit(Type)};
-        {ok, _NotASize} -> unbuildable;
-        Refused -> Refused
-    end.
-
-value_bits({bin, _, _} = Bin) -> segments_bits(Bin);
-value_bits({string, _, Chars}) -> {ok, 32 * length(Chars)};
-value_bits(_Value) -> {ok, 64}.
-
-value_count({string, _, Chars}) -> length(Chars);
-value_count(_Value) -> 1.
-
-unit(Type) when is_list(Type) ->
-    case lists:keyfind(unit, 1, Type) of
-        {unit, Unit} -> Unit;
-        false -> default_unit(Type)
-    end;
-unit(default) ->
-    1.
-
-default_unit(Type) ->
-    case lists:member(binary, Type) orelse lists:member(bytes, Type) of
-        true -> 8;
-        false -> 1
-    end.
-
-%% Evaluate a constant in a process whose memory is capped (shared binaries
-%% included), so no literal arithmetic can exhaust the compiler's.
-eval_bounded(AST) ->
-    {Pid, Ref} = spawn_opt(
-        fun() ->
-            Result =
-                try erl_eval:expr(AST, erl_eval:new_bindings()) of
-                    {value, Value, _} when
-                        is_bitstring(Value), bit_size(Value) > ?TAG_MAX_BYTES * 8
-                    ->
-                        too_long;
-                    {value, Value, _} ->
-                        {ok, Value}
-                catch
-                    error:system_limit -> too_long;
-                    error:_Unbuildable -> unbuildable
-                end,
-            exit({?MODULE, Result})
-        end,
-        [
-            monitor,
-            {max_heap_size, #{
-                size => ?TAG_EVAL_HEAP_WORDS,
-                kill => true,
-                error_logger => false,
-                include_shared_binaries => true
-            }}
-        ]
-    ),
-    receive
-        {'DOWN', Ref, process, Pid, {?MODULE, Result}} -> Result;
-        {'DOWN', Ref, process, Pid, _Killed} -> too_long
-    after ?TAG_EVAL_TIMEOUT ->
-        %% Arithmetic on literals that runs this long builds no tag either.
-        true = demonitor(Ref, [flush]),
-        true = exit(Pid, kill),
-        too_long
-    end.
-
-is_constant({bin, _, Elements}) ->
-    lists:all(fun is_constant/1, Elements);
-is_constant({bin_element, _, Value, Size, _Type}) ->
-    is_constant(Value) andalso (Size =:= default orelse is_constant(Size));
-is_constant({Literal, _, _}) when
-    Literal =:= integer; Literal =:= char; Literal =:= float; Literal =:= string
-->
-    true;
-is_constant({op, _, Op, Operand}) when Op =/= '!' ->
-    is_constant(Operand);
-is_constant({op, _, Op, Left, Right}) when Op =/= '!' ->
-    is_constant(Left) andalso is_constant(Right);
-is_constant(_Code) ->
-    false.
+reads_value({var, _, _}) -> true;
+reads_value({call, _, _, _}) -> true;
+reads_value(Node) when is_tuple(Node) -> reads_value(tuple_to_list(Node));
+reads_value(Nodes) when is_list(Nodes) -> lists:any(fun reads_value/1, Nodes);
+reads_value(_Leaf) -> false.
 
 %% The attrs of an element tuple, for a pass that only reads directives ahead of the
 %% compile (prescan_directives/1). A malformed element reads as having none: the
@@ -4930,14 +4821,9 @@ extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend) ->
 %% A tag is written as UTF-8 text with no C0 control or DEL, however it is spelled: a
 %% NUL-laden utf16/utf32 layout is valid UTF-8 byte by byte, but names no element.
 assert_tag_text(Tag, Node) ->
-    case unicode:characters_to_list(tag_bytes(Tag)) of
-        Chars when is_list(Chars) ->
-            case lists:any(fun(C) -> C < 32 orelse C =:= 127 end, Chars) of
-                true -> parse_error({tag_not_text, Tag}, anno(Node));
-                false -> ok
-            end;
-        _NotUtf8 ->
-            parse_error({tag_not_text, Tag}, anno(Node))
+    case is_name_text(tag_bytes(Tag)) of
+        true -> ok;
+        false -> parse_error({tag_not_text, Tag}, anno(Node))
     end.
 
 tag_bytes(Tag) when is_atom(Tag) -> atom_to_binary(Tag);
@@ -5178,7 +5064,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = record_directive_attr(extract_binary_value(Bin)),
+    NameBin = record_directive_attr(extract_attr_name(Backend, Bin)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -5195,6 +5081,7 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
+    ok = assert_code_points(ValueAST),
     case fold_literal_text(ValueAST) of
         {ok, ValBin} ->
             %% A literal value (a binary, or a list of literals, folded by
@@ -5228,9 +5115,9 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
                 end,
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
-compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
+compile_attr({atom, _, _} = NameAST, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = record_directive_attr(Backend:name(Name)),
+    NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrAnno =
@@ -5800,6 +5687,7 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
                 Child, State0#state.raw_text_kind, State0#state.backend
             ),
             ok = reject_command_in_content(Child, State0#state.backend),
+            ok = assert_code_points(Child),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
@@ -6897,8 +6785,26 @@ normalize_children(AST, Backend) ->
         false -> [AST]
     end.
 
-extract_attr_name(Backend, {atom, _, Name}) -> Backend:name(Name);
-extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
+%% A name is written as text, as a tag is: an atom, or a binary that folds.
+extract_attr_name(Backend, {atom, _, Name} = NameAST) ->
+    checked_attr_name(Name, Backend:name(Name), NameAST);
+extract_attr_name(_Backend, BinAST) ->
+    ok = assert_code_points(BinAST),
+    case is_static_binary(BinAST) of
+        true ->
+            Name = extract_binary_value(BinAST),
+            checked_attr_name(Name, Name, BinAST);
+        false ->
+            parse_error(attr_name_not_literal_text, anno(BinAST))
+    end.
+
+checked_attr_name(_Written, <<>>, NameAST) ->
+    parse_error(attr_name_empty, anno(NameAST));
+checked_attr_name(Written, Name, NameAST) ->
+    case is_name_text(Name) of
+        true -> Name;
+        false -> parse_error({attr_name_not_text, Written}, anno(NameAST))
+    end.
 
 extract_binary_value({bin, _, _} = Bin) ->
     ok = note_folded(Bin),
@@ -6964,6 +6870,55 @@ is_foldable_bin_element(_) ->
     false.
 
 is_code_point(N) -> N >= 0 andalso N =< 16#10FFFF andalso not (N >= 16#D800 andalso N =< 16#DFFF).
+
+%% A template reads an integer or `$x` segment of a binary literal as the character it
+%% names, so one that names none (a surrogate, a negative number, past U+10FFFF) in a
+%% tag, an attribute name or value, or content is a mistake, not a byte to render.
+%% A segment with a size (`<<255:8>>`) lays out bytes and is not checked.
+assert_code_points({bin, _, Elements}) ->
+    lists:foreach(fun assert_code_point/1, Elements);
+assert_code_points({cons, _, Head, Tail}) ->
+    ok = assert_code_points(Head),
+    assert_code_points(Tail);
+assert_code_points(_NotALiteral) ->
+    ok.
+
+assert_code_point({bin_element, Line, Value, default, Type}) when
+    Type =:= default; Type =:= [utf8]
+->
+    case code_point_literal(Value) of
+        {ok, N} ->
+            case is_code_point(N) of
+                true -> ok;
+                false -> parse_error({not_code_point, N}, Line)
+            end;
+        error ->
+            ok
+    end;
+assert_code_point(_Sized) ->
+    ok.
+
+code_point_literal({integer, _, N}) -> {ok, N};
+code_point_literal({char, _, N}) -> {ok, N};
+code_point_literal({op, _, '-', {integer, _, N}}) -> {ok, -N};
+code_point_literal(_Other) -> error.
+
+%% A name as written: an atom as an atom, UTF-8 as text, anything else as its bytes,
+%% so `<<255>>` does not read as a `ÿ`. Cut short either way.
+quote_name(Name) when is_atom(Name) ->
+    io_lib:format("~0tP", [Name, 20]);
+quote_name(Name) ->
+    case unicode:characters_to_binary(Name) of
+        Name -> io_lib:format("~0tP", [Name, 20]);
+        _NotUtf8 -> io_lib:format("~W", [Name, 20])
+    end.
+
+%% UTF-8 text without a C0 control or DEL.
+is_name_text(Bytes) ->
+    case unicode:characters_to_list(Bytes) of
+        Chars when is_list(Chars) -> not lists:any(fun(C) -> C < 32 orelse C =:= 127 end, Chars);
+        _NotUtf8 -> false
+    end.
 
 %% The text a literal attribute value folds to: a binary literal, or a (possibly
 %% nested) list of literals, which renders at runtime as the chardata it is. A pure

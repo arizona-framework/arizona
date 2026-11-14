@@ -33,15 +33,14 @@
 -export([compile_each_remote_fun_ref/1]).
 -export([compile_improper_template_list/1]).
 -export([compile_computed_binary_tag/1]).
--export([compile_constant_binary_tag/1]).
--export([compile_binary_tag_not_text/1]).
 -export([compile_empty_tag/1]).
 -export([compile_binary_tag_runs_nothing/1]).
 -export([compile_tag_not_text/1]).
--export([compile_bitstring_tag/1]).
--export([compile_tag_too_long/1]).
--export([compile_tag_bad_code_point/1]).
 -export([compile_tag_not_text_message/1]).
+-export([compile_binary_tag_folds/1]).
+-export([compile_binary_tag_not_literal_text/1]).
+-export([compile_not_code_point/1]).
+-export([compile_attr_name/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -75,15 +74,14 @@ groups() ->
             compile_each_remote_fun_ref,
             compile_improper_template_list,
             compile_computed_binary_tag,
-            compile_constant_binary_tag,
-            compile_binary_tag_not_text,
             compile_empty_tag,
             compile_binary_tag_runs_nothing,
             compile_tag_not_text,
-            compile_bitstring_tag,
-            compile_tag_too_long,
-            compile_tag_bad_code_point,
-            compile_tag_not_text_message
+            compile_tag_not_text_message,
+            compile_binary_tag_folds,
+            compile_binary_tag_not_literal_text,
+            compile_not_code_point,
+            compile_attr_name
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -349,13 +347,15 @@ compile_computed_binary_tag(Config) when is_list(Config) ->
         compile_error("be_bin_tag_json", json(Computed("'Column'")))
     ).
 
-%% A binary tag that reads no value is a constant, whatever its segments: char
-%% segments, or sizes that lay out the same text, render as the tag they spell.
-compile_constant_binary_tag(Config) when is_list(Config) ->
+%% Every way a name is written as text folds: a string, several, `$x` and integer code
+%% points, an explicit /utf8.
+compile_binary_tag_folds(Config) when is_list(Config) ->
     Cases = [
-        {"be_tag_char", "<<$a, $b>>", ~"ab"},
-        {"be_tag_sized_int", "<<97:8, 98:8>>", ~"ab"},
-        {"be_tag_sized_str", "<<\"ab\":8>>", ~"ab"}
+        {"be_fold_str", "<<\"ab\">>", ~"ab"},
+        {"be_fold_parts", "<<\"a\", \"b\">>", ~"ab"},
+        {"be_fold_char", "<<$a, $b>>", ~"ab"},
+        {"be_fold_int", "<<97, 98>>", ~"ab"},
+        {"be_fold_utf8", "<<\"\\x{e9}\"/utf8>>", ~"\x{e9}"}
     ],
     [
         begin
@@ -369,20 +369,47 @@ compile_constant_binary_tag(Config) when is_list(Config) ->
      || {Name, Tag, Text} <- Cases
     ].
 
-%% A constant binary whose bytes are not text (a utf16 layout puts a NUL before each
-%% letter) is no tag any target can write: refused as such, not as a computed tag.
-compile_binary_tag_not_text(Config) when is_list(Config) ->
-    {Formatter, Reason} = compile_error(
-        "be_tag_utf16", html("{'div', [], [{<<\"ab\"/utf16>>, [], [~\"x\"]}]}")
+%% Any other binary of literals lays out bytes rather than spelling a name: refused
+%% without being built, so a size that would exhaust memory costs nothing. Under a
+%% select too, whose chooser pass reads tags first.
+compile_binary_tag_not_literal_text(Config) when is_list(Config) ->
+    Tags = [
+        "<<97:8>>",
+        "<<\"a\":8>>",
+        "<<\"ab\"/utf16>>",
+        "<<\"ab\"/binary>>",
+        "<<1:1>>",
+        "<<\"a\", 1:7>>",
+        "<<\"a\\tb\":8>>",
+        "<<0:(1 bsl 40)>>",
+        "<<(<<0:(1 bsl 40)>>):8/bits>>",
+        "<<0:(<<0:(1 bsl 40)>>)>>"
+    ],
+    [
+        begin
+            {Micros, Result} = timer:tc(fun() ->
+                compile_error("be_not_lit", html("{'div', [], [{" ++ Tag ++ ", [], []}]}"))
+            end),
+            ?assertEqual({arizona_parse_transform, tag_not_literal_text}, Result, Tag),
+            ?assert(Micros < 1000000, {Tag, Micros}),
+            ?assertEqual(
+                {arizona_parse_transform, tag_not_literal_text},
+                compile_error("be_not_lit_json", json("{'Column', [], [{" ++ Tag ++ ", [], []}]}")),
+                Tag
+            )
+        end
+     || Tag <- Tags
+    ],
+    ?assertEqual(
+        {arizona_parse_transform, tag_not_literal_text},
+        compile_error(
+            "be_not_lit_select",
+            html("{select, [{value, arizona_template:get(v, Bindings)}], [{<<1:1>>, [], []}]}")
+        )
     ),
-    ?assertEqual({arizona_parse_transform, {tag_not_text, <<0, $a, 0, $b>>}}, {Formatter, Reason}),
-    ?assert(contains(Formatter:format_error(Reason), ~"not text")),
-    %% Segments that cannot be built at all name that instead.
-    {Formatter, Unbuildable} = compile_error(
-        "be_tag_unbuildable", html("{'div', [], [{<<\"ab\"/binary>>, [], [~\"x\"]}]}")
-    ),
-    ?assertEqual(binary_tag_unbuildable, Unbuildable),
-    ?assert(contains(Formatter:format_error(Unbuildable), ~"cannot be built")).
+    ?assert(
+        contains(arizona_parse_transform:format_error(tag_not_literal_text), ~"not literal text")
+    ).
 
 %% An element needs a name: an empty one renders `<>`/`</>` in HTML and an empty
 %% type in JSON, which no client reads as an element.
@@ -404,9 +431,8 @@ compile_empty_tag(Config) when is_list(Config) ->
      || {Name, Tag} <- Cases
     ].
 
-%% Only a binary of literals (and operators on them) is a constant the transform
-%% evaluates: a send, a receive or a record field is code, which must not run while
-%% the module compiles, so such a tag is one chosen at runtime.
+%% Nothing in a binary tag is run while the module compiles: a send, a receive or a
+%% record field is not text, and is refused unevaluated.
 compile_binary_tag_runs_nothing(Config) when is_list(Config) ->
     true = register(be_tag_spy, self()),
     try
@@ -421,7 +447,7 @@ compile_binary_tag_runs_nothing(Config) when is_list(Config) ->
                     source(Name, html("{'div', [], [{" ++ Tag ++ ", [], [~\"x\"]}]}")) ++ " " ++
                         Extra,
                 ?assertEqual(
-                    {arizona_html, computed_element_tag}, compile_error_forms(Src), Name
+                    {arizona_parse_transform, tag_not_literal_text}, compile_error_forms(Src), Name
                 )
             end
          || {Name, Tag, Extra} <- Cases
@@ -440,8 +466,7 @@ compile_tag_not_text(Config) when is_list(Config) ->
         {"be_ctl_sigil", "~\"a\\tb\""},
         {"be_ctl_bin", "<<\"a\\tb\">>"},
         {"be_ctl_atom", "'a\\tb'"},
-        {"be_ctl_nul", "<<0>>"},
-        {"be_ctl_sized", "<<\"a\\tb\":8>>"}
+        {"be_ctl_nul", "<<0>>"}
     ],
     [
         begin
@@ -461,48 +486,33 @@ compile_tag_not_text(Config) when is_list(Config) ->
      || {Name, Tag} <- Cases
     ].
 
-%% A constant that lays out bits, not whole bytes, is no text: refused as such, in
-%% any element and under a select, whose chooser pass reads tags first.
-compile_bitstring_tag(Config) when is_list(Config) ->
-    [
-        ?assertMatch(
-            {arizona_parse_transform, {tag_not_text, _}},
-            compile_error(Name, html(Body)),
-            Name
-        )
-     || {Name, Body} <- [
-            {"be_bits_div", "{'div', [], [{<<1:1>>, [], [~\"x\"]}]}"},
-            {"be_bits_tail", "{'div', [], [{<<\"a\", 1:7>>, [], []}]}"},
-            {"be_bits_select",
-                "{select, [{value, arizona_template:get(v, Bindings)}], [{<<1:1>>, [], []}]}"}
-        ]
-    ].
-
-%% A tag is a short name: a constant laying out more than 1024 bytes is refused before
-%% it is built, so a size that would exhaust memory costs nothing.
-compile_tag_too_long(Config) when is_list(Config) ->
-    [
-        begin
-            {Micros, Result} = timer:tc(fun() -> compile_error(Name, html(Body)) end),
-            ?assertEqual({arizona_parse_transform, tag_too_long}, Result, Name),
-            ?assert(Micros < 2000000, {Name, Micros})
-        end
-     || {Name, Body} <- [
-            {"be_long_2k", "{'div', [], [{<<0:(1 bsl 14)>>, [], []}]}"},
-            {"be_long_huge", "{'div', [], [{<<0:(1 bsl 40)>>, [], []}]}"},
-            {"be_long_text", "{'div', [], [{<<\"ab\":(1 bsl 40)>>, [], []}]}"}
-        ]
+%% An integer segment that names no code point is refused wherever a template reads
+%% it as a character -- a tag, an attribute name or value, content -- rather than
+%% rendered as whatever byte Erlang makes of it. A sized segment lays out bytes.
+compile_not_code_point(Config) when is_list(Config) ->
+    Cases = [
+        {"be_cp_tag_surrogate", "{'div', [], [{<<55296>>, [], []}]}", 55296},
+        {"be_cp_tag_past", "{'div', [], [{<<1114112>>, [], []}]}", 1114112},
+        {"be_cp_tag_negative", "{'div', [], [{<<-1>>, [], []}]}", -1},
+        {"be_cp_content", "{p, [], [<<55296>>]}", 55296},
+        {"be_cp_attr_value", "{p, [{class, <<-1>>}], []}", -1},
+        {"be_cp_attr_list", "{p, [{class, [<<\"a\">>, <<1114112>>]}], []}", 1114112},
+        {"be_cp_attr_name", "{p, [{<<55296>>, ~\"x\"}], []}", 55296}
     ],
-    ?assert(contains(arizona_parse_transform:format_error(tag_too_long), ~"1024")).
+    [
+        ?assertEqual(
+            {arizona_parse_transform, {not_code_point, N}}, compile_error(Name, html(Body)), Name
+        )
+     || {Name, Body, N} <- Cases
+    ],
+    ?assert(
+        contains(arizona_parse_transform:format_error({not_code_point, 55296}), ~"code point")
+    ),
+    Sized = compile("be_cp_sized", html("{p, [], [<<255:8>>]}")),
+    ?assertMatch(#{}, Sized:render(#{})).
 
-%% An integer segment that is no code point (a surrogate) folds to no text.
-compile_tag_bad_code_point(Config) when is_list(Config) ->
-    ?assertMatch(
-        {arizona_parse_transform, {tag_not_text, _}},
-        compile_error("be_surrogate", html("{'div', [], [{<<55296>>, [], []}]}"))
-    ).
-
-%% The message quotes the tag as written, an atom as an atom.
+%% The message quotes the tag as written, an atom as an atom, and bytes that are not
+%% UTF-8 as bytes.
 compile_tag_not_text_message(Config) when is_list(Config) ->
     {arizona_parse_transform, Reason} = compile_error(
         "be_ctl_msg", html("{'div', [], [{'a\\x{7f}', [], []}]}")
@@ -510,7 +520,49 @@ compile_tag_not_text_message(Config) when is_list(Config) ->
     Msg = arizona_parse_transform:format_error(Reason),
     ?assert(contains(Msg, ~"'a")),
     ?assertNot(contains(Msg, ~"<<97")),
-    ?assert(contains(Msg, ~"without control characters")).
+    ?assert(contains(Msg, ~"without control characters")),
+    ?assert(contains(arizona_parse_transform:format_error({tag_not_text, <<255>>}), ~"<<255>>")).
+
+%% An attribute name is written as text, as a tag is: the forms that fold compile, the
+%% rest are refused where the attribute is written.
+compile_attr_name(Config) when is_list(Config) ->
+    Ok = compile(
+        "be_attr_ok",
+        html("{p, [{<<\"data-x\">>, ~\"1\"}, {<<$d, $y>>, ~\"2\"}, <<\"hidden\">>], []}")
+    ),
+    Out = iolist_to_binary(arizona_render:render_to_iolist(Ok:render(#{}))),
+    ?assert(contains(Out, ~"data-x=\"1\""), Out),
+    ?assert(contains(Out, ~"dy=\"2\""), Out),
+    Cases = [
+        {"be_an_sized", "{p, [{<<97:8>>, ~\"x\"}], []}", attr_name_not_literal_text},
+        {"be_an_bare_huge", "{p, [<<0:(1 bsl 40)>>], []}", attr_name_not_literal_text},
+        {"be_an_utf16", "{p, [{<<\"a\"/utf16>>, ~\"x\"}], []}", attr_name_not_literal_text},
+        {"be_an_empty_bin", "{p, [{<<>>, ~\"x\"}], []}", attr_name_empty},
+        {"be_an_empty_atom", "{p, [{'', ~\"x\"}], []}", attr_name_empty}
+    ],
+    [
+        ?assertEqual({arizona_parse_transform, Reason}, compile_error(Name, html(Body)), Name)
+     || {Name, Body, Reason} <- Cases
+    ],
+    [
+        ?assertMatch(
+            {arizona_parse_transform, {attr_name_not_text, _}},
+            compile_error(Name, html(Body)),
+            Name
+        )
+     || {Name, Body} <- [
+            {"be_an_nul", "{p, [{<<\"a\", 0>>, ~\"x\"}], []}"},
+            {"be_an_ctl_atom", "{p, [{'a\\tb', ~\"x\"}], []}"}
+        ]
+    ],
+    ?assertEqual(
+        {arizona_parse_transform, attr_name_not_literal_text},
+        compile_error("be_an_json", json("{'Text', [{<<97:8>>, ~\"x\"}], []}"))
+    ),
+    [
+        ?assert(is_list(arizona_parse_transform:format_error(R)))
+     || R <- [attr_name_not_literal_text, attr_name_empty, {attr_name_not_text, ~"a"}]
+    ].
 
 compile_improper_template_list(Config) when is_list(Config) ->
     Improper = fun(Outer, Inner) ->
