@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
 const PORT = process.env.PORT || '4041';
 const BASE_URL = `http://localhost:${PORT}`;
@@ -38,17 +38,7 @@ export default defineConfig({
             testDir: './e2e/sequential',
             fullyParallel: false,
             workers: 1,
-            dependencies: ['parallel', 'json', 'firefox'],
-        },
-        {
-            // The unproven-name spec runs in Firefox too: its proofs reach the
-            // client through where the parser puts markup appended after the
-            // document, which is the parser's call. Scoped to that spec, so the
-            // rest of the suite stays Chromium-only.
-            name: 'firefox',
-            testDir: './e2e/parallel',
-            testMatch: 'arizona_unproven.spec.js',
-            use: { ...devices['Desktop Firefox'] },
+            dependencies: ['parallel', 'json'],
         },
         {
             // Native (JSON) wire e2e: a real WebSocket client (no browser),

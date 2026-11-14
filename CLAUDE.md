@@ -35,11 +35,10 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
-| `make test-e2e` | Playwright E2E tests (incl. the `json` wire and `firefox` projects; needs Chromium and Firefox, `make setup-e2e`) |
+| `make test-e2e` | Playwright E2E tests (incl. the `json` wire project) |
 | `make test-e2e-parallel` | Playwright `parallel` project only |
-| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, `firefox` included, since its specs disturb every connection -- this target skips them with `--no-deps`) |
+| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, since its specs disturb every connection) |
 | `make test-e2e-json` | Playwright `json` project only (`?json` wire, no browser) |
-| `make test-e2e-firefox` | Playwright `firefox` project only (the specs whose behaviour differs per engine, e.g. the proven-name embedding, in Firefox) |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
