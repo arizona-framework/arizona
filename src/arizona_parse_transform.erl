@@ -4560,7 +4560,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
 %% A ?local outside an element -- a whole template body, a fragment top-level
 %% item, or a conditional-branch tail -- gets a slot but no enclosing element
 %% to carry the `az-local` descriptor (only compile_element/5 injects it via
-%% maybe_inject_local_descriptor/5). The client binds keys by scanning that
+%% maybe_inject_local_descriptor/7). The client binds keys by scanning that
 %% attribute, so the key would be unreachable and set/set_all silent no-ops.
 %% Reject at compile time.
 reject_orphaned_local(ExprAST) ->
@@ -7115,7 +7115,7 @@ bare_attr_name(_AtomName, _) ->
 %% The attribute names the transform emits into the rendered output itself:
 %% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
 %% carrying dynamics) and `az-local` (the `?local` descriptor injected by
-%% maybe_inject_local_descriptor/5). A template-authored copy is emitted *beside*
+%% maybe_inject_local_descriptor/7). A template-authored copy is emitted *beside*
 %% the injected one: HTML keeps the first of a duplicate pair and the JSON wire
 %% keeps the last, so one of the two silently disappears -- and when the element
 %% has no dynamics the user's `az` is the only one, is fingerprint-scoped like a
