@@ -240,6 +240,51 @@ attribute, no client-owned `?local` state, and no directive kept in the document
 JSON has no raw-text elements and no selection roles, so those reasons never reach it.
 """.
 -spec format_error(term()) -> string().
+format_error(computed_element_tag) ->
+    "a node's type must be a literal atom. The type is baked into the template's "
+    "statics at compile time, which is what lets a later change ship only the values, "
+    "so a type chosen at runtime has no single set of statics to bake. Put the CHOICE "
+    "inside a stable node instead of choosing the node: {'Column', [], [case Kind of "
+    "note -> {'Text', [], [X]}; _ -> {'Button', [], [X]} end]} -- a conditional in a "
+    "content slot may return bare node tuples, so the branches can differ completely. "
+    "Inside an ?each the stable node is the item itself and carries az_key, which is "
+    "also what keeps its identity across a change: "
+    "fun(Item, Key) -> {'Row', [{az_key, Key}], [case Item of ... end]} end";
+format_error(element_in_comprehension) ->
+    "a comprehension in a content slot builds its list at render time, so the slot "
+    "holds one plain value and a node (or template) per item fails at render. Render a "
+    "runtime list of nodes with ?each, which compiles the item once and diffs it per "
+    "item: ?each(fun(X) -> {'Text', [], [X]} end, ?get(items)). A comprehension of "
+    "plain values is fine";
+format_error(each_body_not_element) ->
+    "an ?each callback over a list must return a node ({Type, Props, Children}) or a "
+    "list of nodes -- ?each builds a per-item template for fine-grained diffing, so a "
+    "single-value body defeats its purpose (and a template or descriptor value crashes on "
+    "the first diff). For a list of plain values use a list comprehension or "
+    "lists:map/2. For a conditional, put it inside a node as a text/value child: "
+    "{'Text', [], [case ... of ... end]}";
+format_error(each_stream_body_not_element) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return a node ({Type, "
+    "Props, Children}); a map source may also take a list of nodes or a static/mixed "
+    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
+    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
+    "has no stream/keyed semantics): wrap the value in a node, e.g. "
+    "fun(Item, Key) -> {'Text', [{az_key, Key}], [Item]} end";
+format_error(each_named_fun_multi_clause) ->
+    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have "
+    "a single clause -- ?each inlines the function's body into one shared per-item "
+    "template, so multiple clauses (which would select different per-item structures) "
+    "can't be compiled to a single template. Collapse them into one clause with a case "
+    "inside the returned node: name(I) -> {'Row', [], [case I of ... end]}";
+format_error(each_named_fun_undefined) ->
+    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not "
+    "defined in this module. Define it as a single-clause function returning a node, or "
+    "inline the callback (fun(I) -> {'Text', [], [I]} end)";
+format_error(each_remote_fun_ref) ->
+    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each "
+    "inlines the callback body to build a per-item template, which is impossible across "
+    "a module boundary. Inline it (fun(I) -> {'Text', [], [I]} end), or move the body "
+    "into a single-clause local function and pass fun name/1";
 format_error(local_unsupported) ->
     "?local is client-owned state that the browser keeps, and a ?json view's native "
     "client keeps none: it has no local slot to bind the key to. Keep the value in the "
@@ -271,8 +316,8 @@ format_error(each_stream_body_control_flow) ->
     "widget type is fixed at compile time. The branches can still be entirely different "
     "widgets -- put them inside one stable item node carrying az_key, e.g. "
     "fun(Item, Key) -> {'Row', [{az_key, Key}], [case Item of ... end]} end, where a "
-    "conditional child may return bare node tuples ('Text' vs 'Image' vs a whole subtree "
-    "all work)";
+    "conditional child may return bare node tuples ('Text' vs 'Button' vs a whole "
+    "'Column' subtree all work)";
 format_error(stream_each_multi_root) ->
     "an ?each over a stream must return ONE node per item, not a list of nodes, a "
     "fragment mixing text and nodes, or bare text: a keyed op (insert, remove, move, "
@@ -294,7 +339,7 @@ format_error({stateful_in_layout, Mod, Fun, Handler}) ->
             "claim a view node the server never registers, and every event its "
             "native client sends from it would be dropped. Use ?stateless for layout "
             "chrome; chrome that must stay live across navigation belongs in a "
-            "view the routes share, reached with a patch navigation.",
+            "view the routes share, navigating between them.",
             [Mod, Fun, Handler]
         )
     ).

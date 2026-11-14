@@ -11716,11 +11716,11 @@ element_in_comprehension_rejected(Config) when is_list(Config) ->
         "    arizona_template:target(arizona_html, {'ul', [], [L]}). ",
         fun(R) -> R =:= element_in_comprehension end
     ),
-    ?assertMatch([_ | _], arizona_parse_transform:format_error(element_in_comprehension)).
+    ?assertMatch([_ | _], arizona_html:format_error(element_in_comprehension)).
 
 element_in_comprehension_names_line(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{_File, [{5, arizona_parse_transform, element_in_comprehension}]}], []},
+        {error, [{_File, [{5, arizona_html, element_in_comprehension}]}], []},
         arizona_parse_transform:parse_transform(
             parse_forms(
                 "-module(pt_lc_line).\n"

@@ -114,6 +114,13 @@ supports_keyed_item_ops() -> false.
 
 %% The reasons this target's other answers let reach it: no raw text, no `?local`,
 %% no keyed item ops, no selection roles.
+format_error(computed_element_tag) -> "text: a tag must be a literal atom";
+format_error(element_in_comprehension) -> "text: use ?each for a list of elements";
+format_error(each_body_not_element) -> "text: an ?each item must be an element";
+format_error(each_stream_body_not_element) -> "text: a stream item must be an element";
+format_error(each_named_fun_multi_clause) -> "text: one clause per ?each callback";
+format_error(each_named_fun_undefined) -> "text: the ?each callback is undefined";
+format_error(each_remote_fun_ref) -> "text: the ?each callback must be local";
 format_error(local_unsupported) -> "text: ?local is not supported";
 format_error(local_orphaned) -> "text: ?local outside an element";
 format_error(nodiff_value) -> "text: az-nodiff takes no value";

@@ -486,9 +486,12 @@ reports such a compile error under the backend module, so the compiler's
 
 A backend words every reason that can reach it, given its other capability answers:
 
-- Always: `local_orphaned`, `nodiff_value`, `nested_nodiff`, `effect_in_content`,
-  `each_stream_body_control_flow` (compile time), and `stream_each_multi_root` and
-  `{stateful_in_layout, Layout, Function, Handler}` (render time).
+- Always, at compile time: `computed_element_tag`, `element_in_comprehension`,
+  `each_body_not_element`, `each_stream_body_not_element`,
+  `each_stream_body_control_flow`, `each_named_fun_multi_clause`,
+  `each_named_fun_undefined`, `each_remote_fun_ref`, `local_orphaned`, `nodiff_value`,
+  `nested_nodiff`, `effect_in_content`; at render time: `stream_each_multi_root` and
+  `{stateful_in_layout, Layout, Function, Handler}`.
 - `supports_local/0` false: `local_unsupported`.
 - `keyed_item_ops/0` true: `stream_each_keyless` (render time).
 - A `raw_text_kind/2` other than `none`: `dynamic_in_raw_text`, `local_in_raw_text`,

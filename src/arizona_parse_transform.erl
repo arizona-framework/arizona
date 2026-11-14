@@ -1235,16 +1235,6 @@ Called by the compiler when `parse_transform/2` returns an error tuple.
     Reason :: term().
 format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
-format_error(computed_element_tag) ->
-    "an element's tag must be a literal atom. The tag is baked into the template's "
-    "statics at compile time, which is what lets a later change ship only the values, "
-    "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
-    "inside a stable element instead of choosing the element: {'div', [], [case Kind "
-    "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "
-    "content slot may return bare element tuples, so the branches can differ "
-    "completely. Inside an ?each the stable element is the item itself and carries "
-    "az_key, which is also what keeps its identity across a change: "
-    "fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end";
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -1320,18 +1310,12 @@ format_error(local_attr_mixed) ->
 %% declare_target/2 refused (tagged `target`).
 format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
     format_target_error(Reason);
-%% The `?each` callback errors live in their own function: they are a related family
-%% and, together, they carried `format_error/1` past the cyclomatic limit.
-format_error(Reason) when
-    Reason =:= each_body_not_element;
-    Reason =:= each_stream_body_not_element;
-    Reason =:= each_named_fun_multi_clause;
-    Reason =:= each_named_fun_undefined;
-    Reason =:= each_remote_fun_ref;
-    Reason =:= element_in_comprehension;
-    Reason =:= each_outside_target
-->
-    format_each_error(Reason);
+format_error(each_outside_target) ->
+    "this ?each is outside every template (?html, ?json, ...), so it has no render "
+    "target to compile with. An ?each compiles where a template takes it in: write it "
+    "inside the template, bind it to a variable the template uses, or return it from "
+    "a local helper the template calls. A function that returns it on its own (to "
+    "another module, or as a value) must wrap it in its target, e.g. ?html([?each(...)])";
 format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
     lists:flatten(
         io_lib:format(
@@ -1348,7 +1332,7 @@ format_error(Reason) when
     format_source_error(Reason).
 
 %% Diagnostics about how a value is written in the source rather than the template's
-%% structure. Kept apart for the same reason as format_each_error/1.
+%% structure. Kept apart to keep format_error/1 under the cyclomatic limit.
 format_source_error(latin1_binary_literal) ->
     "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
     "For intended bytes, spell them so they do not warn: integer segments "
@@ -1409,48 +1393,6 @@ format_select_error({no_markup_text, Backend, Tag}) ->
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
 binder_kind(generator) -> "generator pattern variable".
-
-format_each_error(each_outside_target) ->
-    "this ?each is outside every template (?html, ?json, ...), so it has no render "
-    "target to compile with. An ?each compiles where a template takes it in: write it "
-    "inside the template, bind it to a variable the template uses, or return it from "
-    "a local helper the template calls. A function that returns it on its own (to "
-    "another module, or as a value) must wrap it in its target, e.g. ?html([?each(...)])";
-format_each_error(element_in_comprehension) ->
-    "a comprehension in a content slot builds its list at render time, so the slot "
-    "holds one plain value and an element (or template) per item fails at render. "
-    "Render a runtime list of elements with ?each, which compiles the item once and "
-    "diffs it per item: ?each(fun(X) -> {'li', [], [X]} end, ?get(items)). A "
-    "comprehension of plain values is fine";
-format_each_error(each_body_not_element) ->
-    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
-    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
-    "single-value body defeats its purpose (and a template or descriptor value crashes on "
-    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
-    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
-    "text/value child: {li, [], [case ... of ... end]}";
-format_each_error(each_stream_body_not_element) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}); a map source may also take a list of elements or a static/mixed "
-    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
-    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
-    "has no stream/keyed semantics): wrap the value in an element, e.g. "
-    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
-format_each_error(each_named_fun_multi_clause) ->
-    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
-    "single clause -- ?each inlines the function's body into one shared per-item template, so "
-    "multiple clauses (which would select different per-item structures) can't be compiled to "
-    "a single template. Collapse them into one clause with a case inside the returned element: "
-    "name(I) -> {li, [], [case I of ... end]}";
-format_each_error(each_named_fun_undefined) ->
-    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
-    "in this module. Define it as a single-clause function returning an element, or inline the "
-    "callback (fun(I) -> {li, [], [...]} end)";
-format_each_error(each_remote_fun_ref) ->
-    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
-    "the callback body to build a per-item template, which is impossible across a module "
-    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
-    "local function and pass fun name/1".
 
 format_impure_error({hoisted, Var}, What) ->
     lists:flatten(
@@ -2086,7 +2028,7 @@ ih(Other, _Ctx, Ch, _Tail) ->
 
 ih_content_lc(L, Body, Quals, {Module, FunDefs, Target, _Stack} = Ctx, Ch) ->
     case is_lc_element_body(Body, {Module, FunDefs, Target}) of
-        true -> parse_error(element_in_comprehension, anno(Body));
+        true -> parse_error(element_in_comprehension, anno(Body), target_backend(Target));
         false -> ok
     end,
     {Body1, Ch1} = ih(Body, Ctx, Ch, lc_body),
@@ -4155,7 +4097,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs, Unit) ->
         %% A remote `fun Mod:Name/Arity` ref to another module: its body isn't visible at
         %% compile time, so it can't be inlined into the per-item template.
         {'fun', L, {function, _Mod, _Name, _Arity}} ->
-            parse_error(each_remote_fun_ref, L);
+            parse_error(each_remote_fun_ref, L, Backend);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
@@ -4203,9 +4145,9 @@ compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs, Un
             %% the enclosing slot's closure, which carries the call site's line.
             compile_each(FunAST, SourceAST, CL, Module, Backend, CCtx, FunDefs, Unit);
         #{{Name, Arity} := [_ | _]} ->
-            parse_error(each_named_fun_multi_clause, L);
+            parse_error(each_named_fun_multi_clause, L, Backend);
         #{} ->
-            parse_error(each_named_fun_undefined, L)
+            parse_error(each_named_fun_undefined, L, Backend)
     end.
 
 %% Compile one inline `?each` callback clause (`Kind` = list | stream, from the arity) into
@@ -4301,7 +4243,7 @@ maybe_multi_root_opt(_Kind, _Classification, Opts) ->
 maybe_keyless_opt(Backend, stream, element_tuple, ElemAST, Opts) when
     not is_map_key(diff, Opts)
 ->
-    {_Tag, Attrs, _Children, _Line} = extract_element(ElemAST),
+    {_Tag, Attrs, _Children, _Line} = extract_element(ElemAST, Backend),
     case Backend:supports_keyed_item_ops() andalso not has_az_key(Attrs) of
         true -> Opts#{keyless => true};
         false -> Opts
@@ -4403,14 +4345,10 @@ validate_each_body(_Backend, _Kind, _Classification, _LastExpr) ->
 %% path needs telling apart: "wrap the value in an element" reads as advice to pick a
 %% tag, which for branches that already return different elements changes the markup
 %% instead of fixing it. The list message names the conditional case already.
-%% Only the control-flow advice names the target's own elements, so only it is
-%% the backend's to word.
+%% Each of these advises in the target's own elements, so the backend words it.
 -spec each_body_parse_error(module(), list | stream, erl_parse:abstract_expr()) -> no_return().
 each_body_parse_error(Backend, Kind, Expr) ->
-    case each_body_error(Kind, Expr) of
-        each_stream_body_control_flow = Reason -> parse_error(Reason, anno(Expr), Backend);
-        Reason -> parse_error(Reason, anno(Expr))
-    end.
+    parse_error(each_body_error(Kind, Expr), anno(Expr), Backend).
 
 each_body_error(list, _LastExpr) ->
     each_body_not_element;
@@ -4537,7 +4475,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
     },
     State1 = fold_fragment_items(
         fun(Elem, State) ->
-            {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Elem, Backend),
             {Attrs, ElemOpts} = extract_directives(Attrs0),
             Mark = nodiff_mark(ElemOpts, Marked, Keepable),
             compile_element(Tag, Attrs, Children, ElemLine, State#state{nodiff_mark = Mark})
@@ -4578,7 +4516,7 @@ nodiff_mark(_ElemOpts, _Marked, _Keepable) -> none.
 is_keepable_nodiff([Elem], false, Unit, Backend) ->
     case is_element_tuple(Elem) of
         true ->
-            {_Tag, Attrs, _Children, _Line} = extract_element(Elem),
+            {_Tag, Attrs, _Children, _Line} = extract_element(Elem, Backend),
             {_Rest, ElemOpts} = extract_directives(Attrs),
             maps:is_key(diff, ElemOpts) andalso not contains_inner_content(Elem) andalso
                 (Unit =:= template orelse has_az_key(Attrs)) andalso
@@ -4727,7 +4665,7 @@ compile_mixed_item(Item, Module, State) ->
 compile_mixed_non_static(Item, Module, State) ->
     case is_element_tuple(Item) of
         true ->
-            {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Item, State#state.backend),
             {Attrs, _ElemOpts} = extract_directives(Attrs0),
             compile_element(Tag, Attrs, Children, ElemLine, State);
         false ->
@@ -4761,22 +4699,35 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
 %% does contain an underscore unwritable -- `{'my-widget_v2', ...}` silently emitted
 %% `<my-widget-v2>`. The two forms are the same pair, and mean the same thing, for a
 %% tag as for an attribute name.
-extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node) ->
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node, _Backend) ->
     extract_element_parts(extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node);
-extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node) ->
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node, _Backend) ->
     extract_element_parts(extract_binary_value(TagAST), AttrsAST, {nil, 0}, Node);
-extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node, _Backend) ->
     extract_element_parts(Tag, AttrsAST, ChildrenAST, Node);
-extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node, _Backend) ->
     extract_element_parts(Tag, AttrsAST, {nil, 0}, Node);
 %% Shaped like an element but with a tag that is neither a literal atom nor a
 %% literal binary.
-extract_element({tuple, _, [TagAST, _Attrs]} = Node) ->
-    parse_error(element_tag_reason(TagAST), anno(Node));
-extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
-    parse_error(element_tag_reason(TagAST), anno(Node));
-extract_element(Node) ->
+extract_element({tuple, _, [TagAST, _Attrs]} = Node, Backend) ->
+    element_tag_error(TagAST, Node, Backend);
+extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node, Backend) ->
+    element_tag_error(TagAST, Node, Backend);
+extract_element(Node, _Backend) ->
     parse_error(invalid_element, anno(Node)).
+
+%% The attrs of an element tuple, for a pass that only reads directives ahead of the
+%% compile (prescan_directives/1). A malformed element reads as having none: the
+%% compile that follows extracts it with the backend in hand and refuses it there.
+element_attrs({tuple, _, [TagAST, AttrsAST | _]}) when
+    element(1, TagAST) =:= atom; element(1, TagAST) =:= bin
+->
+    case is_list_ast(AttrsAST) of
+        true -> ast_list_to_list(AttrsAST);
+        false -> []
+    end;
+element_attrs(_Malformed) ->
+    [].
 
 %% A tag written as a literal of a type that is not a name (a string, a number) is a
 %% malformed element form, and the form error says exactly what the accepted shapes
@@ -4792,10 +4743,13 @@ extract_element_parts(Tag, AttrsAST, ChildrenAST, Node) ->
             parse_error(invalid_element, anno(Node))
     end.
 
-element_tag_reason(TagAST) ->
+%% A computed tag is advised in the target's own elements, so the backend words it.
+-spec element_tag_error(erl_parse:abstract_expr(), erl_parse:abstract_expr(), module()) ->
+    no_return().
+element_tag_error(TagAST, Node, Backend) ->
     case is_literal_tag(TagAST) of
-        true -> invalid_element;
-        false -> computed_element_tag
+        true -> parse_error(invalid_element, anno(Node));
+        false -> parse_error(computed_element_tag, anno(Node), Backend)
     end.
 
 is_literal_tag({atom, _, _}) -> true;
@@ -5611,7 +5565,7 @@ static_child_bytes(Child, #state{backend = Backend, raw_text_kind = RawKind}) ->
 compile_non_static_child(Child, ElemAz, State0, Slot) ->
     case is_element_tuple(Child) of
         true ->
-            {Tag, Attrs, Children, ElemLine} = extract_element(Child),
+            {Tag, Attrs, Children, ElemLine} = extract_element(Child, State0#state.backend),
             %% A literal element in title/textarea content shows as literal text.
             case State0#state.raw_text_kind of
                 escapable -> parse_error(markup_in_raw_text, ElemLine, State0#state.backend);
@@ -5654,9 +5608,8 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
 %% attribute (try_fold_command/1), which proves the slot would hold one; any other
 %% command is refused when it renders (`effect_in_content`).
 reject_command_in_content(Child, Backend) ->
-    _Walked = map_tail_exprs(Child, fun(Leaf) -> reject_command_leaf(Leaf, Backend) end, fun(E) ->
-        E
-    end),
+    Reject = fun(Leaf) -> reject_command_leaf(Leaf, Backend) end,
+    _Walked = map_tail_exprs(Child, Reject, fun(E) -> E end),
     ok.
 
 reject_command_leaf({nil, _} = Leaf, _Backend) ->
@@ -6971,8 +6924,7 @@ prescan_directives(Items) ->
         fun(Item, Acc) ->
             case is_element_tuple(Item) of
                 true ->
-                    {_Tag, Attrs0, _Children, _Line} = extract_element(Item),
-                    {_Attrs, ElemOpts} = extract_directives(Attrs0),
+                    {_Attrs, ElemOpts} = extract_directives(element_attrs(Item)),
                     maps:merge(Acc, ElemOpts);
                 false ->
                     Acc

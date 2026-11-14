@@ -322,6 +322,51 @@ The HTML wording of the errors the core raises for an `?html` template
 vocabulary of its examples. `local_unsupported` cannot reach it: HTML supports `?local`.
 """.
 -spec format_error(term()) -> string().
+format_error(computed_element_tag) ->
+    "an element's tag must be a literal atom. The tag is baked into the template's "
+    "statics at compile time, which is what lets a later change ship only the values, "
+    "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
+    "inside a stable element instead of choosing the element: {'div', [], [case Kind "
+    "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "
+    "content slot may return bare element tuples, so the branches can differ "
+    "completely. Inside an ?each the stable element is the item itself and carries "
+    "az_key, which is also what keeps its identity across a change: "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end";
+format_error(element_in_comprehension) ->
+    "a comprehension in a content slot builds its list at render time, so the slot "
+    "holds one plain value and an element (or template) per item fails at render. "
+    "Render a runtime list of elements with ?each, which compiles the item once and "
+    "diffs it per item: ?each(fun(X) -> {'li', [], [X]} end, ?get(items)). A "
+    "comprehension of plain values is fine";
+format_error(each_body_not_element) ->
+    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
+    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
+    "single-value body defeats its purpose (and a template or descriptor value crashes on "
+    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
+    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
+    "text/value child: {li, [], [case ... of ... end]}";
+format_error(each_stream_body_not_element) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
+    "Attrs, Children}); a map source may also take a list of elements or a static/mixed "
+    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
+    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
+    "has no stream/keyed semantics): wrap the value in an element, e.g. "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
+format_error(each_named_fun_multi_clause) ->
+    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
+    "single clause -- ?each inlines the function's body into one shared per-item template, so "
+    "multiple clauses (which would select different per-item structures) can't be compiled to "
+    "a single template. Collapse them into one clause with a case inside the returned element: "
+    "name(I) -> {li, [], [case I of ... end]}";
+format_error(each_named_fun_undefined) ->
+    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
+    "in this module. Define it as a single-clause function returning an element, or inline the "
+    "callback (fun(I) -> {li, [], [...]} end)";
+format_error(each_remote_fun_ref) ->
+    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
+    "the callback body to build a per-item template, which is impossible across a module "
+    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
+    "local function and pass fun name/1";
 format_error(dynamic_in_raw_text) ->
     "a dynamic content slot inside <script>/<style> (or another raw-text element: <xmp>, "
     "<iframe>, <noembed>, <noframes>) is spliced verbatim -- the browser "

@@ -4,10 +4,11 @@
 -include_lib("stdlib/include/assert.hrl").
 
 %% The render target words its own errors: a compile error a backend words is
-%% reported under the backend module (the compiler calls its `format_error/1`), a
-%% runtime one is raised with the backend in its `error_info`, and a backend
-%% without wording for a reason (`arizona_text_backend`, like `arizona_terminal`)
-%% gets the core's neutral message.
+%% reported under the backend module (the compiler calls its `format_error/1`), and a
+%% runtime one is raised with the backend in its `error_info`. Every backend words
+%% every such reason its capability answers let reach it -- `arizona_text_backend`
+%% stands in for a target outside core, like `arizona_terminal` -- and the core keeps
+%% no wording of its own for them.
 
 -export([all/0]).
 -export([groups/0]).
@@ -23,6 +24,13 @@
 -export([compile_option_selected/1]).
 -export([compile_no_markup_text_is_neutral/1]).
 -export([compile_local_unsupported/1]).
+-export([compile_computed_element_tag/1]).
+-export([compile_element_in_comprehension/1]).
+-export([compile_each_body_not_element/1]).
+-export([compile_each_stream_body_not_element/1]).
+-export([compile_each_named_fun_multi_clause/1]).
+-export([compile_each_named_fun_undefined/1]).
+-export([compile_each_remote_fun_ref/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -46,7 +54,14 @@ groups() ->
             compile_each_stream_body_control_flow,
             compile_option_selected,
             compile_no_markup_text_is_neutral,
-            compile_local_unsupported
+            compile_local_unsupported,
+            compile_computed_element_tag,
+            compile_element_in_comprehension,
+            compile_each_body_not_element,
+            compile_each_stream_body_not_element,
+            compile_each_named_fun_multi_clause,
+            compile_each_named_fun_undefined,
+            compile_each_remote_fun_ref
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -200,6 +215,98 @@ compile_local_unsupported(Config) when is_list(Config) ->
         compile_error("be_local_text", text("{line, [], [arizona_template:local(k, <<\"x\">>)]}"))
     ).
 
+%% The element-shape and ?each advice names the target's own elements.
+compile_computed_element_tag(Config) when is_list(Config) ->
+    Computed = fun(Tag) ->
+        "{" ++ Tag ++ ", [], [{arizona_template:get(tag, Bindings), [], [~\"x\"]}]}"
+    end,
+    assert_tag_advice(
+        computed_element_tag,
+        {"be_tag_html", html(Computed("'div'"))},
+        {"be_tag_json", json(Computed("'Column'"))},
+        {"be_tag_text", text(Computed("line"))}
+    ).
+
+compile_element_in_comprehension(Config) when is_list(Config) ->
+    Lc = fun(Outer, Inner) ->
+        "{" ++ Outer ++ ", [], [[{" ++ Inner ++
+            ", [], [X]} || X <- arizona_template:get(xs, Bindings)]]}"
+    end,
+    assert_tag_advice(
+        element_in_comprehension,
+        {"be_lc_html", html(Lc("ul", "li"))},
+        {"be_lc_json", json(Lc("'Column'", "'Text'"))},
+        {"be_lc_text", text(Lc("col", "line"))}
+    ).
+
+compile_each_body_not_element(Config) when is_list(Config) ->
+    Each = fun(Outer) ->
+        "{" ++ Outer ++
+            ", [], [arizona_template:each(fun(I) -> I end, "
+            "arizona_template:get(xs, Bindings))]}"
+    end,
+    assert_tag_advice(
+        each_body_not_element,
+        {"be_body_html", html(Each("ul"))},
+        {"be_body_json", json(Each("'Column'"))},
+        {"be_body_text", text(Each("col"))}
+    ).
+
+compile_each_stream_body_not_element(Config) when is_list(Config) ->
+    Each = fun(Outer) ->
+        "{" ++ Outer ++
+            ", [], [arizona_template:each(fun(I, _K) -> I end, "
+            "arizona_template:get(xs, Bindings))]}"
+    end,
+    assert_tag_advice(
+        each_stream_body_not_element,
+        {"be_sbody_html", html(Each("ul"))},
+        {"be_sbody_json", json(Each("'Column'"))},
+        {"be_sbody_text", text(Each("col"))}
+    ).
+
+compile_each_named_fun_multi_clause(Config) when is_list(Config) ->
+    Each = fun(Outer, Inner) ->
+        {
+            "{" ++ Outer ++
+                ", [], [arizona_template:each(fun row/1, "
+                "arizona_template:get(xs, Bindings))]}",
+            "row(a) -> {" ++ Inner ++ ", [], []}; row(_) -> {" ++ Inner ++ ", [], [~\"b\"]}."
+        }
+    end,
+    assert_tag_advice(
+        each_named_fun_multi_clause,
+        with_forms("be_multi_clause_html", Each("ul", "li"), fun html/1),
+        with_forms("be_multi_clause_json", Each("'Column'", "'Text'"), fun json/1),
+        with_forms("be_multi_clause_text", Each("col", "line"), fun text/1)
+    ).
+
+compile_each_named_fun_undefined(Config) when is_list(Config) ->
+    Each = fun(Outer) ->
+        "{" ++ Outer ++
+            ", [], [arizona_template:each(fun missing/1, "
+            "arizona_template:get(xs, Bindings))]}"
+    end,
+    assert_tag_advice(
+        each_named_fun_undefined,
+        {"be_undef_html", html(Each("ul"))},
+        {"be_undef_json", json(Each("'Column'"))},
+        {"be_undef_text", text(Each("col"))}
+    ).
+
+compile_each_remote_fun_ref(Config) when is_list(Config) ->
+    Each = fun(Outer) ->
+        "{" ++ Outer ++
+            ", [], [arizona_template:each(fun other_mod:row/1, "
+            "arizona_template:get(xs, Bindings))]}"
+    end,
+    assert_tag_advice(
+        each_remote_fun_ref,
+        {"be_remote_html", html(Each("ul"))},
+        {"be_remote_json", json(Each("'Column'"))},
+        {"be_remote_text", text(Each("col"))}
+    ).
+
 %% --------------------------------------------------------------------
 %% Runtime
 %% --------------------------------------------------------------------
@@ -324,6 +431,31 @@ split_forms([{dot, _} = Dot | Rest], Current, Acc) ->
     split_forms(Rest, [], [lists:reverse([Dot | Current]) | Acc]);
 split_forms([Token | Rest], Current, Acc) ->
     split_forms(Rest, [Token | Current], Acc).
+
+%% `Reason` compiled from an `?html`, a `?json` and a test-target page: each is
+%% reported under its own backend, HTML advises in `li`, JSON in its nodes.
+assert_tag_advice(Reason, {HtmlMod, HtmlSrc}, {JsonMod, JsonSrc}, {TextMod, TextSrc}) ->
+    ?assertEqual({arizona_html, Reason}, compile_error_src(HtmlMod, HtmlSrc)),
+    ?assert(contains(arizona_html:format_error(Reason), ~"li")),
+    ?assertEqual({arizona_json, Reason}, compile_error_src(JsonMod, JsonSrc)),
+    JsonMsg = arizona_json:format_error(Reason),
+    ?assertNot(contains(JsonMsg, ~"{li")),
+    ?assertNot(contains(JsonMsg, ~"'li'")),
+    ?assert(contains(JsonMsg, ~"{'")),
+    ?assertEqual({arizona_text_backend, Reason}, compile_error_src(TextMod, TextSrc)).
+
+with_forms(Mod, {Body, Forms}, Target) ->
+    {Mod, source(Mod, Target(Body)) ++ " " ++ Forms}.
+
+compile_error_src(_Mod, Source) when is_list(Source), hd(Source) =:= $- ->
+    compile_error_forms(Source);
+compile_error_src(Mod, Body) ->
+    compile_error_forms(source(Mod, Body)).
+
+compile_error_forms(Source) ->
+    {error, [{_File, [{_Loc, Formatter, Reason}]}], []} =
+        arizona_parse_transform:parse_transform(forms(Source), []),
+    {Formatter, Reason}.
 
 %% The module the compiler asks to word the error, and the reason it hands it.
 compile_error(Mod, Body) ->
