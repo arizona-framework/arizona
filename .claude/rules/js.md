@@ -210,7 +210,7 @@ flush would only reopen the window early. Pacing is a `push_event` mechanism: an
 `arizona_js:fetch` is issued as it is raised, on a submit or any event, and `az-debounce`/
 `az-throttle` do not defer it (a deferred request would need its own answer to the navigate
 epoch and the replay hold, both defined for view events, and a paced double submit still posts
-twice). A debounce mode the server switches mid-window sends the slot's latest raise in the new
+twice); a repeat while its previous request is in flight is dropped instead (see "HTTP fetch"). A debounce mode the server switches mid-window sends the slot's latest raise in the new
 mode: the old timer neither fires a raise the new one replaced nor drops it.
 
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
@@ -230,7 +230,9 @@ is a drop like the disconnected one below (a warning and `arizona:submit-dropped
   the submission **whole**, with no `az-form-reset`: the worker drops pre-open sends, so running
   the rest would apply half a submission and discard the typed fields. Every drop warns and
   dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
-  `detail: {reason: 'disconnected'}`, so the app can tell the user.
+  `detail: {reason: 'disconnected'}`, so the app can tell the user. A submit whose fetch would post a
+  form still waiting on its previous one is dropped the same way, `reason: 'in_flight'`, without
+  the warning (see "HTTP fetch").
 - **A `fetch` or client-only list** runs: an HTTP login form needs no socket. It runs under the
   page's embedded proof of `az-submit`, so on a page without the embed it is dropped as
   `unproven` until the connect frame proves the name.
@@ -509,7 +511,8 @@ Behaviour:
 - **GET/HEAD.** No request body; the payload is appended to the URL query string instead (`fetch` is otherwise POST-oriented -- it exists to set cookies), spliced in **before** any `#fragment` (`appendQuery`) -- after it the query would be part of the fragment, which `fetch` never sends. The same precedence as a body: an explicit `Opts.body` wins over the form. A form contributes its fields; a `body` map contributes one parameter per key (`bodyQuery`: a list repeats its key, `null` is left out, a nested map is JSON-encoded); a `body` that is not a map has no keys to name parameters by, so it is not sent and a console warning says so.
 - **Request.** `method` = `Opts.method` -> the form's `method` -> `POST`. `credentials` maps the atom (`same_origin` -> `'same-origin'`, default) to the fetch mode. Headers default to `accept: application/json` plus `Opts.headers`. `keep_alive` = `Opts.keep_alive === true` (default `false`) -- maps straight to `fetch()`'s `keepalive`, so a request fired just before a navigation completes instead of being cancelled (browser inflight-body cap ~64KB).
 - **Effects body.** Whenever the response body parses as `{ e: effects }`, `applyEffects(effects)` runs -- **regardless of status**, so a controller can return a real `4xx` (e.g. `422`). An empty `2xx` body (a `204` cookie-only response) applies nothing. `Set-Cookie` is applied natively by the browser. (No response-effect view-transition wrapping -- a follow-up; server-driven re-renders animate through the normal WS path.)
-- **Form reset.** `az-form-reset` is honored via the shared `maybeResetForm` helper. The submit listener resets synchronously for non-fetch commands; for a fetch command it defers (the listener skips the sync reset via `commandsIncludeFetch`) and the fetch handler resets **only on a 2xx success** -- so a validation error (a non-2xx) keeps the typed fields.
+- **In flight.** A non-GET/HEAD fetch a user event started (`event` non-null) holds its element -- the trigger's form, else the trigger -- in `_fetchHeld` (a `WeakSet`) until it settles: released at the start of the response leg (before its effects, so one may post again) and on a network failure. Another gesture's fetch on a held element is dropped; the submit listener checks first (`fetchInFlight` over `socketNeeds`' fetch commands) and drops the submission whole with `arizona:submit-dropped` `{reason: 'in_flight'}` and no warning (a double click is not a page fault). Dropped, not queued: the queued repeat is the duplicate POST. GET/HEAD is never held (a newer query must not lose to an older one), nor a server or response effect (no event, so not a repeat gesture). `az-throttle` does not pace a fetch; this is what stops a repeated one.
+- **Form reset.** `az-form-reset` is honored via the shared `maybeResetForm` helper. The submit listener resets synchronously for non-fetch commands; for a fetch command it defers (the listener skips the sync reset when `socketNeeds` finds a fetch) and the fetch handler resets **only on a 2xx success** -- so a validation error (a non-2xx) keeps the typed fields.
 - **Redirect.** There is **no HTTP-3xx handling** -- `fetch`'s `redirect: 'manual'` yields an opaque-redirect whose `Location` is unreadable. A redirect is delivered as an `arizona_js:navigate` effect in a 2xx body (`arizona_controller:reply_redirect/1`).
 - **Failure.** `Opts.on_error` runs (via `executeJS`) and an `arizona:fetch-error` `CustomEvent` is dispatched on `document` only when there is **no usable effects body**: a non-JSON error page, an empty non-2xx, or a network failure.
 

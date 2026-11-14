@@ -1,4 +1,10 @@
-import { executeJS, flushTimer, maybeResetForm, socketNeeds } from './arizona-commands.js';
+import {
+    executeJS,
+    fetchInFlight,
+    flushTimer,
+    maybeResetForm,
+    socketNeeds,
+} from './arizona-commands.js';
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
@@ -388,13 +394,15 @@ function scanEvents(root) {
 }
 
 /**
- * Tell the console and the app that a submit ran nothing: every drop warns and
- * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
+ * Tell the app that a submit ran nothing: every drop dispatches
+ * `arizona:submit-dropped` on the form, so the app can show feedback. One the page
+ * caused also warns; a repeat while the form's fetch is in flight is the user's
+ * double click, not a fault, so it does not.
  * @param {Element} form
- * @param {'disconnected'|'unproven'} reason
+ * @param {'disconnected'|'unproven'|'in_flight'} reason
  */
 function dropSubmit(form, reason) {
-    console.warn(`[arizona] az-submit dropped: ${reason}`);
+    if (reason !== 'in_flight') console.warn(`[arizona] az-submit dropped: ${reason}`);
     form.dispatchEvent(
         new CustomEvent('arizona:submit-dropped', { bubbles: true, detail: { reason } }),
     );
@@ -457,11 +465,18 @@ export function bindDocumentEvents(target, signal, abort) {
                 return;
             }
             const raw = form.getAttribute('az-submit');
-            /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
+            /** @type {{event?: boolean, fetch?: Array<*>[], nav?: Array<*>}} */
             let needs = {};
             try {
                 const cmds = raw ? JSON.parse(raw) : null;
                 if (cmds) needs = socketNeeds(cmds, {}, false);
+                // The form's previous fetch has not settled: a second click or Enter
+                // would post it twice, so the repeat is dropped whole (none of its
+                // other commands run, nothing resets).
+                if (needs.fetch && fetchInFlight(form, needs.fetch)) {
+                    dropSubmit(form, 'in_flight');
+                    return;
+                }
                 // While the socket is down (the worker drops pre-open sends):
                 // - an SPA navigation alone degrades to a full load of its URL, as a
                 //   disconnected az-navigate click does;

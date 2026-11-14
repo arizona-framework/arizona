@@ -285,19 +285,20 @@ export function maybeResetForm(form) {
  * `nav`, the first SPA `navigate`/`patch` that runs unconditionally (a `full`
  * navigate is a plain page load and needs no socket). A navigation under `on_key`
  * runs only on a matching key, so it counts as `event`: it cannot be degraded to a
- * page load that may never have been asked for. `fetch` also tells the submit
- * listener to leave `az-form-reset` to the fetch's own response, wherever the fetch
- * sits (a transition runs it inside its callback, an on_key on a matching key).
+ * page load that may never have been asked for. `fetch` (the fetch commands) also
+ * tells the submit listener to leave `az-form-reset` to the fetch's own response,
+ * wherever the fetch sits (a transition runs it inside its callback, an on_key on a
+ * matching key), and which requests to check against one still in flight.
  * @param {Array<*>} cmds
- * @param {{event?: boolean, fetch?: boolean, nav?: Array<*>}} acc
+ * @param {{event?: boolean, fetch?: Array<*>[], nav?: Array<*>}} acc
  * @param {boolean} conditional
- * @returns {{event?: boolean, fetch?: boolean, nav?: Array<*>}}
+ * @returns {{event?: boolean, fetch?: Array<*>[], nav?: Array<*>}}
  */
 export function socketNeeds(cmds, acc, conditional) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
     for (const c of list) {
         if (c[0] === JS_PUSH_EVENT) acc.event = true;
-        else if (c[0] === JS_FETCH) acc.fetch = true;
+        else if (c[0] === JS_FETCH) acc.fetch = [...(acc.fetch ?? []), c];
         else if (c[0] === JS_PATCH || (c[0] === JS_NAVIGATE && !c[2]?.full)) {
             if (conditional) acc.event = true;
             else acc.nav ??= c;
@@ -305,6 +306,46 @@ export function socketNeeds(cmds, acc, conditional) {
         else if (c[0] === JS_ON_KEY) socketNeeds(c[2], acc, true);
     }
     return acc;
+}
+
+/**
+ * The elements holding a non-GET/HEAD `fetch` a user gesture started that has not
+ * settled yet. While one is held, a gesture's fetch on it is dropped: a double click
+ * or a second Enter would otherwise post a login or an order twice, and the server
+ * cannot tell the repeat from a new request. Dropped rather than queued, since a
+ * queued repeat is the duplicate request itself.
+ * @type {WeakSet<Element>}
+ */
+const _fetchHeld = new WeakSet();
+
+/**
+ * The element a gesture's `fetch` command holds while in flight: the trigger's form
+ * (whose fields it posts, from whichever control inside it), else the trigger. None
+ * for a GET/HEAD, which changes nothing, so a newer query is never dropped behind an
+ * older one.
+ * @param {Element} el
+ * @param {Array<*>} cmd
+ * @returns {Element|null}
+ */
+function fetchHold(el, cmd) {
+    const form = el.closest?.('form') ?? null;
+    const method = (cmd[2]?.method || form?.getAttribute('method') || 'post').toUpperCase();
+    return method === 'GET' || method === 'HEAD' ? null : (form ?? el);
+}
+
+/**
+ * Whether any of `fetches`, raised by a gesture on `el`, would be dropped because
+ * its element still holds a fetch in flight -- so a submit is dropped whole rather
+ * than run in part.
+ * @param {Element} el
+ * @param {Array<*>[]} fetches
+ * @returns {boolean}
+ */
+export function fetchInFlight(el, fetches) {
+    return fetches.some((c) => {
+        const held = fetchHold(el, c);
+        return held !== null && _fetchHeld.has(held);
+    });
 }
 
 /**
@@ -617,6 +658,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
+            // Only a gesture holds (a command a server effect or a response runs has
+            // no event): a repeat of one is the double submit.
+            const held = event && el ? fetchHold(el, cmd) : null;
+            if (held) {
+                if (_fetchHeld.has(held)) break;
+                _fetchHeld.add(held);
+            }
+            const release = () => held && _fetchHeld.delete(held);
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
             const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
             const headers = { accept: 'application/json', ...(opts.headers || {}) };
@@ -660,6 +709,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 .then((resp) =>
                     resp.text().then((text) =>
                         later(() => {
+                            // Settled: released before the effects, so one of them
+                            // (or the user, at once) may post the form again.
+                            release();
                             // Apply the effects body whenever it parses -- even on a 4xx, so
                             // the server can drive inline validation with a real status. The
                             // effects run against a stand-in for the trigger that names the view
@@ -717,7 +769,12 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         }),
                     ),
                 )
-                .catch((error) => later(() => onError({ url, error })));
+                .catch((error) =>
+                    later(() => {
+                        release();
+                        onError({ url, error });
+                    }),
+                );
             break;
         }
         case JS_FOCUS:

@@ -7985,6 +7985,153 @@ describe('form submit', () => {
 });
 
 // ---------------------------------------------------------------------------
+// fetch in flight: a gesture cannot post the same form (or trigger) twice
+// ---------------------------------------------------------------------------
+
+describe('fetch in flight', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+    /** @type {any} */
+    let originalFetch;
+    /** @type {Array<{resolve: Function, reject: Function}>} */
+    let pending;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+        pending = [];
+        globalThis.fetch = vi.fn(
+            () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+        );
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        if (mock) mock.restore();
+    });
+
+    /** A fake Response; `body` is the raw text. */
+    function response(status, body) {
+        return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body) };
+    }
+
+    async function page(html) {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', html);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+    }
+
+    function submit(id) {
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        document.getElementById(id).dispatchEvent(ev);
+        return ev;
+    }
+
+    it('drops a second submit of the same form while its fetch is in flight', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[[6,"#f","busy"],[22,"/login",{}]]'>
+                <input name="user" value="u" />
+            </form>`,
+        );
+        const form = document.getElementById('f');
+        const dropped = vi.fn();
+        form.addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const first = submit('f');
+        const second = submit('f');
+        // The user's double click, not a page fault: no console noise.
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        // Dropped whole: the rest of the list does not run again either.
+        expect(form.classList.contains('busy')).toBe(true);
+        // Still never submitted natively.
+        expect(first.defaultPrevented).toBe(true);
+        expect(second.defaultPrevented).toBe(true);
+        expect(dropped).toHaveBeenCalledWith({ reason: 'in_flight' });
+
+        pending[0].resolve(response(200, '{"e":[]}'));
+        await vi.waitFor(() => {
+            submit('f');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    it.each([
+        ['a non-2xx with effects', (p) => p.resolve(response(422, '{"e":[]}'))],
+        ['a non-JSON error page', (p) => p.resolve(response(500, '<h1>boom</h1>'))],
+        ['a network failure', (p) => p.reject(new TypeError('Failed to fetch'))],
+    ])('releases the form after %s', async (_label, settle) => {
+        await page(`<form id="f" method="post" az-submit='[22,"/login",{}]'></form>`);
+        submit('f');
+        settle(pending[0]);
+        await vi.waitFor(() => {
+            submit('f');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    it('lets on_error resubmit the form it reports on', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/login",{"on_error":[22,"/retry",{}]}]'></form>`,
+        );
+        submit('f');
+        pending[0].reject(new TypeError('Failed to fetch'));
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+        expect(globalThis.fetch.mock.calls[1][0]).toBe('/retry');
+    });
+
+    it('is per form: another form submits while one is in flight', async () => {
+        await page(
+            `<form id="a" method="post" az-submit='[22,"/a",{}]'></form>
+             <form id="b" method="post" az-submit='[22,"/b",{}]'></form>`,
+        );
+        submit('a');
+        submit('b');
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/a', '/b']);
+    });
+
+    it('does not hold a GET fetch: a newer query is never stale', async () => {
+        await page(`<form id="f" az-submit='[22,"/search",{"method":"get"}]'></form>`);
+        submit('f');
+        submit('f');
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops a second click on a fetch trigger outside a form while in flight', async () => {
+        await page(`<button id="b" az-click='[22,"/like",{}]'>Like</button>`);
+        const button = document.getElementById('b');
+        button.click();
+        button.click();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        pending[0].resolve(response(200, ''));
+        await vi.waitFor(() => {
+            button.click();
+            expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    it('holds a form across its submit and a click fetch that posts it', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/save",{}]'>
+                <button type="button" id="b" az-click='[22,"/save",{}]'>Save</button>
+            </form>`,
+        );
+        submit('f');
+        document.getElementById('b').click();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not hold a fetch the server issues (no gesture)', async () => {
+        await page(`<div id="x"></div>`);
+        executeJS(document.documentElement, null, [22, '/ping', {}]);
+        executeJS(document.documentElement, null, [22, '/ping', {}]);
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Drag and drop
 // ---------------------------------------------------------------------------
 
