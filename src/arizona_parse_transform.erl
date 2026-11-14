@@ -1190,7 +1190,7 @@ template_is_nodiff(Arg) ->
         element_tuple ->
             maps:is_key(diff, prescan_directives([Arg]));
         Class when Class =:= element_list; Class =:= list_ast ->
-            maps:is_key(diff, prescan_directives(ast_list_to_list(Arg)));
+            maps:is_key(diff, prescan_directives(ast_list_prefix(Arg)));
         _ ->
             false
     end.
@@ -1326,8 +1326,7 @@ format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
     );
 format_error(Reason) when
     Reason =:= tracked_get_on_non_bindings_map;
-    Reason =:= latin1_binary_literal;
-    Reason =:= improper_template_list
+    Reason =:= latin1_binary_literal
 ->
     format_source_error(Reason).
 
@@ -1337,12 +1336,6 @@ format_source_error(latin1_binary_literal) ->
     "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
     "For intended bytes, spell them so they do not warn: integer segments "
     "(<<16#89, \"PNG\">>) or a sized string (<<\"\\351\":8>>)";
-format_source_error(improper_template_list) ->
-    "a template's attribute, child and body lists must be proper list literals: "
-    "their items are laid out one slot each at compile time, so a list ending in "
-    "an expression ([A, B | Rest]) has no length to lay out. Write every item in "
-    "the list; render a runtime list of children with ?each, as one item of it: "
-    "{'ul', [], [{'li', [], [~\"first\"]}, ?each(fun(I) -> {'li', [], [I]} end, Rest)]}";
 format_source_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings. This local holds a "
@@ -4418,10 +4411,10 @@ compile_classified_body(
     {Statics, [], generate_fingerprint(Statics), #{}};
 compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx, Inherited) ->
     compile_fragment_parts(
-        ast_list_to_list(ExprAST), Module, LiveRender, Backend, CCtx, {Inherited, template}
+        ast_list_to_list(ExprAST, Backend), Module, LiveRender, Backend, CCtx, {Inherited, template}
     );
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, Inherited) ->
-    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, Inherited);
+    compile_mixed_items(ast_list_to_list(ExprAST, Backend), Module, Backend, CCtx, Inherited);
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, true) ->
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
@@ -4699,14 +4692,14 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
 %% does contain an underscore unwritable -- `{'my-widget_v2', ...}` silently emitted
 %% `<my-widget-v2>`. The two forms are the same pair, and mean the same thing, for a
 %% tag as for an attribute name.
-extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node, _Backend) ->
-    extract_element_parts(extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node);
-extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node, _Backend) ->
-    extract_element_parts(extract_binary_value(TagAST), AttrsAST, {nil, 0}, Node);
-extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node, _Backend) ->
-    extract_element_parts(Tag, AttrsAST, ChildrenAST, Node);
-extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node, _Backend) ->
-    extract_element_parts(Tag, AttrsAST, {nil, 0}, Node);
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node, Backend) ->
+    extract_element_parts(extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node, Backend);
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node, Backend) ->
+    extract_element_parts(extract_binary_value(TagAST), AttrsAST, {nil, 0}, Node, Backend);
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node, Backend) ->
+    extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node, Backend) ->
+    extract_element_parts(Tag, AttrsAST, {nil, 0}, Node, Backend);
 %% Shaped like an element but with a tag that is neither a literal atom nor a
 %% literal binary.
 extract_element({tuple, _, [TagAST, _Attrs]} = Node, Backend) ->
@@ -4723,7 +4716,7 @@ element_attrs({tuple, _, [TagAST, AttrsAST | _]}) when
     element(1, TagAST) =:= atom; element(1, TagAST) =:= bin
 ->
     case is_list_ast(AttrsAST) of
-        true -> ast_list_to_list(AttrsAST);
+        true -> ast_list_prefix(AttrsAST);
         false -> []
     end;
 element_attrs(_Malformed) ->
@@ -4735,10 +4728,11 @@ element_attrs(_Malformed) ->
 %% author is choosing the element at runtime -- so it gets advice instead.
 %% Shared by both tag forms: the attrs must still be a literal list, and a void
 %% element's `{Tag, Attrs}` shorthand is the same as an empty child list.
-extract_element_parts(Tag, AttrsAST, ChildrenAST, Node) ->
+extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend) ->
     case is_list_ast(AttrsAST) of
         true ->
-            {Tag, ast_list_to_list(AttrsAST), normalize_children(ChildrenAST), anno(Node)};
+            {Tag, ast_list_to_list(AttrsAST, Backend), normalize_children(ChildrenAST, Backend),
+                anno(Node)};
         false ->
             parse_error(invalid_element, anno(Node))
     end.
@@ -5677,7 +5671,7 @@ list_has_markup_value(_) ->
 %% The compile-time half of arizona_template:text_markup/2: no tag in the statics once
 %% the slot markers are gone, and no attribute dynamic.
 is_text_only_template(Fields, Backend) ->
-    Statics = [extract_binary_value(B) || B <- ast_list_to_list(template_map_field(s, Fields))],
+    Statics = [extract_binary_value(B) || B <- proper_ast_list(template_map_field(s, Fields))],
     case dynamic_azs(template_map_field(d, Fields)) of
         {ok, Azs} ->
             not lists:any(
@@ -5690,7 +5684,7 @@ is_text_only_template(Fields, Backend) ->
 
 dynamic_azs(DAST) ->
     try
-        {ok, [text_dynamic_az(D) || D <- ast_list_to_list(DAST)]}
+        {ok, [text_dynamic_az(D) || D <- proper_ast_list(DAST)]}
     catch
         error:_NotTextDynamic -> error
     end.
@@ -6556,7 +6550,7 @@ reuse_field(Line, [ItemPat, KeyPat], Prefix, DynamicsAST) ->
     KeyVars = ordsets:from_list(collect_var_names(KeyPat)),
     HeadVars = collect_var_names(ItemPat) ++ collect_var_names(KeyPat),
     Local = (HeadVars ++ prefix_bound(Prefix, HeadVars)) -- item_vars(ItemPat),
-    Flags = [reusable_dynamic(D, KeyVars, Local) || D <- ast_list_to_list(DynamicsAST)],
+    Flags = [reusable_dynamic(D, KeyVars, Local) || D <- proper_ast_list(DynamicsAST)],
     case lists:member(true, Flags) of
         true ->
             [
@@ -6669,9 +6663,21 @@ ast_list([H | T]) ->
 %% A template list (children, attrs, a body) is laid out at compile time, one slot
 %% per item, so its length must be known: a variable or other non-list tail has no
 %% items to lay out.
-ast_list_to_list({nil, _}) -> [];
-ast_list_to_list({cons, _, Head, Tail}) -> [Head | ast_list_to_list(Tail)];
-ast_list_to_list(Tail) -> parse_error(improper_template_list, anno(Tail)).
+%% The advice names the target's own elements, so the backend words the error.
+ast_list_to_list({nil, _}, _Backend) -> [];
+ast_list_to_list({cons, _, Head, Tail}, Backend) -> [Head | ast_list_to_list(Tail, Backend)];
+ast_list_to_list(Tail, Backend) -> parse_error(improper_template_list, anno(Tail), Backend).
+
+%% The items before an improper tail, for a pass that only reads ahead of the compile
+%% (directives): the compile that follows lays the list out with the backend in hand
+%% and refuses the tail there.
+ast_list_prefix({cons, _, Head, Tail}) -> [Head | ast_list_prefix(Tail)];
+ast_list_prefix(_NilOrTail) -> [].
+
+%% A list the transform built itself (a compiled template's statics or dynamics),
+%% always proper.
+proper_ast_list({nil, _}) -> [];
+proper_ast_list({cons, _, Head, Tail}) -> [Head | proper_ast_list(Tail)].
 
 %% An attribute value list is text, where an improper tail is one more part of the
 %% chardata (`[~"/u/" | Id]` means `[~"/u/", Id]`), so it is kept as a part instead.
@@ -6679,9 +6685,9 @@ attr_value_parts({nil, _}) -> [];
 attr_value_parts({cons, _, Head, Tail}) -> [Head | attr_value_parts(Tail)];
 attr_value_parts(Tail) -> [Tail].
 
-normalize_children(AST) ->
+normalize_children(AST, Backend) ->
     case is_list_ast(AST) of
-        true -> ast_list_to_list(AST);
+        true -> ast_list_to_list(AST, Backend);
         false -> [AST]
     end.
 
@@ -7352,7 +7358,7 @@ push_choices(Leaf, _Backend) ->
 push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend) ->
     case is_element_tuple(Node) andalso element_tag(TagAST) of
         {ok, Tag} ->
-            case chooser_sel(Backend, Tag, ast_list_to_list(AttrsAST)) of
+            case chooser_sel(Backend, Tag, ast_list_to_list(AttrsAST, Backend)) of
                 {Sel, _Rest} ->
                     {tuple, L, [TagAST, AttrsAST, choice_children(Children, Sel, push)]};
                 none ->
@@ -7727,7 +7733,7 @@ choose_each_item(Sel, Body) ->
 rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
     #{value := ValueName, selected := Flag} = Info,
     #{backend := Backend, tag := Chooser} = Sel,
-    Attrs = ast_list_to_list(AttrsAST),
+    Attrs = ast_list_to_list(AttrsAST, Backend),
     case take_attr(Backend, Flag, Attrs) of
         {ok, Authored, _Rest} ->
             Name = attr_name(fun Backend:name/1, Authored),
@@ -7767,7 +7773,7 @@ choice_text(_Backend, []) ->
 choice_text(Backend, [Children]) ->
     Items =
         case is_list_ast(Children) of
-            true -> ast_list_to_list(Children);
+            true -> ast_list_to_list(Children, Backend);
             false -> [Children]
         end,
     Parts = [text_part(Backend, I) || I <- Items],
@@ -7936,7 +7942,7 @@ count_chosen(_Leaf) ->
 count_choices({call, _, {remote, _, {atom, _, arizona_template}, {atom, _, choices}}, _}, _Sel) ->
     0;
 count_choices({map_field_assoc, _, {atom, _, s}, Statics}, Sel) ->
-    lists:sum([count_choices_in(binary_text(B), Sel) || B <- ast_list_to_list(Statics)]);
+    lists:sum([count_choices_in(binary_text(B), Sel) || B <- proper_ast_list(Statics)]);
 count_choices(Node, Sel) when is_tuple(Node) ->
     count_choices(tuple_to_list(Node), Sel);
 count_choices(Nodes, Sel) when is_list(Nodes) ->

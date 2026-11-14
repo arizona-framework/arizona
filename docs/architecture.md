@@ -270,11 +270,11 @@ call reaches the backend; at render time the error is raised with the backend in
 other capability answers let reach it: always the `?each` and element-shape advice
 (`computed_element_tag`, `element_in_comprehension`, `each_body_not_element`,
 `each_stream_body_not_element`, `each_stream_body_control_flow`,
-`each_named_fun_multi_clause`, `each_named_fun_undefined`, `each_remote_fun_ref`, whose
-examples are the target's own elements), `local_orphaned`, `nodiff_value`, `nested_nodiff`,
-`effect_in_content`, `stream_each_multi_root` and `{stateful_in_layout, Layout, Function,
-Handler}`;
-`local_unsupported` when `supports_local/0` is `false`; `stream_each_keyless` when
+`each_named_fun_multi_clause`, `each_named_fun_undefined`, `each_remote_fun_ref`,
+`improper_template_list`, whose examples are the target's own elements), `local_orphaned`,
+`nodiff_value`, `nested_nodiff`, `effect_in_content`, `stream_each_multi_root` and
+`{stateful_in_layout, Layout, Function, Handler}`; `local_unsupported` when
+`supports_local/0` is `false`; `stream_each_keyless` when
 `keyed_item_ops/0` is `true`; the raw-text family (`dynamic_in_raw_text`,
 `local_in_raw_text`, `markup_in_raw_text`, `{markup_in_raw_text, Element, Value}`) when a
 tag's `raw_text_kind/2` is not `none`; and `{select_value, {option_selected, Tag, Name,

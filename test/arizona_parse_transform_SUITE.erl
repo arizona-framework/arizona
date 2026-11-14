@@ -8774,8 +8774,7 @@ element_error_keeps_file_and_column(Config) when is_list(Config) ->
 %% when the list sits in a helper inlined from a header.
 improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{"pt_main.erl", [{{5, 65}, arizona_parse_transform, improper_template_list}]}],
-            []},
+        {error, [{"pt_main.erl", [{{5, 65}, arizona_html, improper_template_list}]}], []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_improper_main).\n"
@@ -8787,7 +8786,7 @@ improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
         )
     ),
     ?assertMatch(
-        {error, [{"pt_inc.hrl", [{{7, 28}, arizona_parse_transform, improper_template_list}]}], []},
+        {error, [{"pt_inc.hrl", [{{7, 28}, arizona_html, improper_template_list}]}], []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_improper_inc).\n"
@@ -14479,7 +14478,7 @@ improper_template_list_rejected(Config) when is_list(Config) ->
                     "    arizona_template:target(arizona_html, \n" ++ Template ++
                     "    ).\n",
             ?assertMatch(
-                {error, [{_File, [{6, arizona_parse_transform, improper_template_list}]}], []},
+                {error, [{_File, [{6, arizona_html, improper_template_list}]}], []},
                 arizona_parse_transform:parse_transform(parse_forms(Source), []),
                 Name
             )
@@ -14496,7 +14495,7 @@ improper_template_list_rejected(Config) when is_list(Config) ->
         ]
     ),
     ?assertMatch(
-        [_ | _], arizona_parse_transform:format_error(improper_template_list)
+        [_ | _], arizona_html:format_error(improper_template_list)
     ).
 
 %% An attribute value list is text, so an improper tail is one more part of the

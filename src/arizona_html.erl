@@ -367,6 +367,12 @@ format_error(each_remote_fun_ref) ->
     "the callback body to build a per-item template, which is impossible across a module "
     "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
     "local function and pass fun name/1";
+format_error(improper_template_list) ->
+    "a template's attribute, child and body lists must be proper list literals: "
+    "their items are laid out one slot each at compile time, so a list ending in "
+    "an expression ([A, B | Rest]) has no length to lay out. Write every item in "
+    "the list; render a runtime list of children with ?each, as one item of it: "
+    "{'ul', [], [{'li', [], [~\"first\"]}, ?each(fun(I) -> {'li', [], [I]} end, Rest)]}";
 format_error(dynamic_in_raw_text) ->
     "a dynamic content slot inside <script>/<style> (or another raw-text element: <xmp>, "
     "<iframe>, <noembed>, <noframes>) is spliced verbatim -- the browser "

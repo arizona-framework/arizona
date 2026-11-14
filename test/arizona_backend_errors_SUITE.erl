@@ -31,6 +31,7 @@
 -export([compile_each_named_fun_multi_clause/1]).
 -export([compile_each_named_fun_undefined/1]).
 -export([compile_each_remote_fun_ref/1]).
+-export([compile_improper_template_list/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -61,7 +62,8 @@ groups() ->
             compile_each_stream_body_not_element,
             compile_each_named_fun_multi_clause,
             compile_each_named_fun_undefined,
-            compile_each_remote_fun_ref
+            compile_each_remote_fun_ref,
+            compile_improper_template_list
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -305,6 +307,17 @@ compile_each_remote_fun_ref(Config) when is_list(Config) ->
         {"be_remote_html", html(Each("ul"))},
         {"be_remote_json", json(Each("'Column'"))},
         {"be_remote_text", text(Each("col"))}
+    ).
+
+compile_improper_template_list(Config) when is_list(Config) ->
+    Improper = fun(Outer, Inner) ->
+        "{" ++ Outer ++ ", [], [{" ++ Inner ++ ", [], []} | arizona_template:get(xs, Bindings)]}"
+    end,
+    assert_tag_advice(
+        improper_template_list,
+        {"be_improper_html", html(Improper("ul", "li"))},
+        {"be_improper_json", json(Improper("'Column'", "'Text'"))},
+        {"be_improper_text", text(Improper("col", "line"))}
     ).
 
 %% --------------------------------------------------------------------

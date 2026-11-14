@@ -285,6 +285,12 @@ format_error(each_remote_fun_ref) ->
     "inlines the callback body to build a per-item template, which is impossible across "
     "a module boundary. Inline it (fun(I) -> {'Text', [], [I]} end), or move the body "
     "into a single-clause local function and pass fun name/1";
+format_error(improper_template_list) ->
+    "a template's prop, child and body lists must be proper list literals: their items "
+    "are laid out one slot each at compile time, so a list ending in an expression "
+    "([A, B | Rest]) has no length to lay out. Write every item in the list; render a "
+    "runtime list of children with ?each, as one item of it: {'Column', [], "
+    "[{'Text', [], [~\"first\"]}, ?each(fun(I) -> {'Text', [], [I]} end, Rest)]}";
 format_error(local_unsupported) ->
     "?local is client-owned state that the browser keeps, and a ?json view's native "
     "client keeps none: it has no local slot to bind the key to. Keep the value in the "

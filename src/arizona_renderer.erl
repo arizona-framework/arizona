@@ -489,7 +489,8 @@ A backend words every reason that can reach it, given its other capability answe
 - Always, at compile time: `computed_element_tag`, `element_in_comprehension`,
   `each_body_not_element`, `each_stream_body_not_element`,
   `each_stream_body_control_flow`, `each_named_fun_multi_clause`,
-  `each_named_fun_undefined`, `each_remote_fun_ref`, `local_orphaned`, `nodiff_value`,
+  `each_named_fun_undefined`, `each_remote_fun_ref`, `improper_template_list`,
+  `local_orphaned`, `nodiff_value`,
   `nested_nodiff`, `effect_in_content`; at render time: `stream_each_multi_root` and
   `{stateful_in_layout, Layout, Function, Handler}`.
 - `supports_local/0` false: `local_unsupported`.

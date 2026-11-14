@@ -114,6 +114,7 @@ supports_keyed_item_ops() -> false.
 
 %% The reasons this target's other answers let reach it: no raw text, no `?local`,
 %% no keyed item ops, no selection roles.
+format_error(improper_template_list) -> "text: a template list must be proper";
 format_error(computed_element_tag) -> "text: a tag must be a literal atom";
 format_error(element_in_comprehension) -> "text: use ?each for a list of elements";
 format_error(each_body_not_element) -> "text: an ?each item must be an element";
