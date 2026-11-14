@@ -593,15 +593,19 @@ authored_selected_follows_the_value(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a"}))),
     ?assertEqual([~"a"], selected_values(HTML), HTML).
 
-%% The parser normalizes newlines (CR LF and CR to LF) and replaces NUL in attribute
-%% values with U+FFFD before anything compares; the picks render as an attribute too,
-%% so both sides are read alike. A `<template>` in an option holds no text of it.
+%% The parser normalizes the newlines markup holds (CR LF and CR to LF) and replaces
+%% NUL in attribute values with U+FFFD before anything compares, while a reference
+%% decodes to the character itself; the picks are the text the page holds (NUL is
+%% U+FFFD there too). A `<template>` in an option holds no text of it.
 fragment_reads_as_the_parser_preprocesses(Config) when is_list(Config) ->
     One = fun(Fragment, Picks) ->
         count_selected(iolist_to_binary(arizona_html:mark_choices(Fragment, Picks)))
     end,
-    ?assertEqual(1, One(~"<option value=\"a\nb\">x", [~"a\r\nb"])),
-    ?assertEqual(1, One(~"<option value=\"a\r\nb\">x", [~"a\rb"])),
+    ?assertEqual(1, One(~"<option value=\"a\r\nb\">x", [~"a\nb"])),
+    ?assertEqual(1, One(~"<option value=\"a\rb\">x", [~"a\nb"])),
+    ?assertEqual(0, One(~"<option value=\"a\rb\">x", [~"a\rb"])),
+    ?assertEqual(1, One(~"<option value=\"a&#13;b\">x", [~"a\rb"])),
+    ?assertEqual(0, One(~"<option value=\"a&#13;b\">x", [~"a\nb"])),
     ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 0>>])),
     ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 16#FFFD/utf8>>])),
     ?assertEqual(1, One(~"<option>a<template>b</template></option>", [~"a"])),
@@ -1159,33 +1163,46 @@ static_text_with_references_folds(Config) when is_list(Config) ->
         {match, _}, re:run(HTML, ~"<option[^>]* selected az-ctl=\"selected\">Caf&eacute;"), HTML
     ).
 
-%% The parser normalizes newlines and NUL before an attribute value exists, so a value
-%% and an option compare as it reads them on every path: an option the transform
-%% marks, and the value a select keeps for the client (a JSON array under `multiple`).
+%% An escaped value holds its exact text on the page -- a CR is written as a
+%% reference -- so a value and an option compare as that text on every path: an
+%% option the transform marks, and the value a select keeps for the client (a JSON
+%% array under `multiple`). A CR and a LF are different text. A NUL, which no page can
+%% hold, is U+FFFD on every path.
 values_compare_as_the_parser_reads_them(Config) when is_list(Config) ->
     Mod = compile_module(
-        select_src_mod("sel_crlf", "{option, [{value, ~\"a\\nb\"}], []}, {option, [], [~\"z\"]}")
+        select_src_mod(
+            "sel_crlf",
+            "{option, [{value, ~\"a\\nb\"}], [~\"n\"]}, "
+            "{option, [{value, ~\"a\\r\\nb\"}], [~\"rn\"]}"
+        )
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"a\r\nb"}))),
     ?assertEqual(1, count_selected(HTML), HTML),
+    ?assertMatch({match, _}, re:run(HTML, ~"value=\"a&#13;\nb\" selected"), HTML),
     Static = compile_module(
         "-module(sel_crlf_static). -export([render/1]). render(_Bindings) -> "
         "arizona_template:target(arizona_html, {select, [{value, ~\"a\\r\\nb\"}], "
         "[{option, [{value, ~\"a\\nb\"}], []}]}). "
     ),
     ?assertEqual(
-        1, count_selected(iolist_to_binary(arizona_render:render_to_iolist(Static:render(#{}))))
+        0, count_selected(iolist_to_binary(arizona_render:render_to_iolist(Static:render(#{}))))
     ),
+    ?assertNot(arizona_template:chosen(arizona_html, ~"a\r\nb", ~"a\nb", false)),
     ?assert(arizona_template:chosen(arizona_html, <<"a", 0>>, <<"a", 16#FFFD/utf8>>, false)),
     ?assertEqual(
-        ~"[\"a\\nb\",\"c\\nd\"]",
+        ~"[\"a\\r\\nb\",\"c\\rd\"]",
         arizona_template:chooser_value(arizona_html, [~"a\r\nb", ~"c\rd"], true)
     ),
-    ?assertEqual([~"a\nb"], arizona_template:picks(arizona_html, ~"a\r\nb", false)),
-    %% A NUL in text is dropped by the tree builder, on every path that reads text.
+    ?assertEqual([~"a\r\nb"], arizona_template:picks(arizona_html, ~"a\r\nb", false)),
+    %% A raw value is markup, so it holds what the parser makes of its newlines.
+    ?assert(arizona_template:chosen(arizona_html, {arizona_markup, ~"a\rb"}, ~"a\nb", false)),
+    %% A NUL markup holds in text is dropped by the tree builder; an escaped one is
+    %% U+FFFD on the page, which the text of a choice holding a value keeps.
     ?assertEqual({text, ~"ab"}, arizona_html:markup_text(<<"a", 0, "b">>, text)),
     ?assertEqual({markup, ~"ab"}, arizona_html:markup_text(<<"<b>a", 0, "</b>b">>, text)),
-    ?assertEqual(~"ab", arizona_template:choice_text(arizona_html, [<<"a", 0>>, ~"b"])).
+    ?assertEqual(
+        <<"a", 16#FFFD/utf8, "b">>, arizona_template:choice_text(arizona_html, [<<"a", 0>>, ~"b"])
+    ).
 
 %% A raw a helper returns into an option's value is text, escaped where it renders, so
 %% the value the page holds is the one the option is compared by: a select valued by
@@ -1519,19 +1536,20 @@ interpolated_local_value_with_raw_part(Config) when is_list(Config) ->
         ]
     ).
 
-%% A select's value is compared and rendered as the text the page holds once parsed, so
-%% the parts beside a `?local` are read joined and then normalized, as the page reads
-%% them: a CR ending one part and a LF starting the next are one newline, whether the
-%% CR is a byte or a raw `&#13;`. The descriptor hands the client each part as it is,
-%% and the client normalizes the joined affix the same way.
+%% A select's value is compared and rendered as the text the page holds, so the parts
+%% beside a `?local` are read joined as exact text: a CR ending one part and a LF
+%% starting the next stay a CR and a LF, whether the CR is a byte or a raw `&#13;` (the
+%% page holds it as `&#13;`), and name an option holding the same. The descriptor hands
+%% the client each part as it is, and the client joins them the same way.
 interpolated_local_value_split_newline(Config) when is_list(Config) ->
     Options =
-        "{option, [{value, ~\"zz\"}], [~\"1\"]}, {option, [{value, <<\"a\\nb\">>}], [~\"2\"]}",
+        "{option, [{value, ~\"zz\"}], [~\"1\"]}, {option, [{value, <<\"a\\nb\">>}], [~\"2\"]}, "
+        "{option, [{value, <<\"a\\r\\nb\">>}], [~\"3\"]}",
     lists:foreach(
         fun({Mod, Attrs, Bindings, CR}) ->
             M = compile_module(raw_src(Mod, Attrs, Options)),
-            HTML = ssr_picked([<<"a\nb">>], M, Bindings),
-            ?assertEqual(<<"a\nb">>, select_value(HTML), HTML),
+            HTML = ssr_picked([<<"a\r\nb">>], M, Bindings),
+            ?assertEqual(<<"a\r\nb">>, select_value(HTML), HTML),
             ?assertEqual(
                 #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[CR, <<"\nb">>], []]}},
                 local_descriptor(HTML),
@@ -1786,7 +1804,13 @@ unescape_attr(V) ->
     lists:foldl(
         fun({From, To}, Acc) -> binary:replace(Acc, From, To, [global]) end,
         V,
-        [{~"&quot;", ~"\""}, {~"&lt;", ~"<"}, {~"&gt;", ~">"}, {~"&amp;", ~"&"}]
+        [
+            {~"&quot;", ~"\""},
+            {~"&lt;", ~"<"},
+            {~"&gt;", ~">"},
+            {~"&#13;", ~"\r"},
+            {~"&amp;", ~"&"}
+        ]
     ).
 
 shapes() ->

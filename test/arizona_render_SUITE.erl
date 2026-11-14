@@ -51,6 +51,7 @@
     nested_command_list_renders_flat/1,
     escape_clean_value_not_rebuilt/1,
     escape_matches_reference/1,
+    cr_and_nul_render_as_the_page_holds_them/1,
     raw_text_breakout_neutralized/1,
     raw_text_breakout_neutralized_for_chardata/1,
     raw_text_breakout_neutralized_for_atom/1,
@@ -183,6 +184,7 @@ groups() ->
             nested_command_list_renders_flat,
             escape_clean_value_not_rebuilt,
             escape_matches_reference,
+            cr_and_nul_render_as_the_page_holds_them,
             raw_text_breakout_neutralized,
             raw_text_breakout_neutralized_for_chardata,
             to_bin_rejects_non_chardata_list,
@@ -540,6 +542,48 @@ escape_matches_reference(Config) when is_list(Config) ->
     Inputs = EveryByte ++ Gaps ++ Dense ++ Utf8 ++ Random,
     ?assertEqual([], [I || I <- Inputs, arizona_html:escape(I) =/= reference_escape(I)]).
 
+%% The parser turns a CR byte (alone or before a LF) into a LF and a NUL into U+FFFD
+%% (or drops it, in body text) before anything reads the page, while a live update
+%% writes its value through the DOM untouched. So an escaped value writes a CR as a
+%% reference, which the parser decodes to the CR itself, and a NUL, which no HTML
+%% can hold, as U+FFFD: the page then holds what the client's live write holds.
+cr_and_nul_render_as_the_page_holds_them(Config) when is_list(Config) ->
+    Fffd = <<16#FFFD/utf8>>,
+    ?assertEqual(~"a&#13;b", arizona_html:escape(~"a\rb")),
+    ?assertEqual(~"a&#13;\nb", arizona_html:escape(~"a\r\nb")),
+    ?assertEqual(<<"a", Fffd/binary, "b">>, arizona_html:escape(<<"a", 0, "b">>)),
+    ?assertEqual(~"&lt;&#13;&amp;", arizona_html:escape(~"<\r&")),
+    Cr = render_bin(arizona_cr_nul:render(#{t => ~"a\r\nb"})),
+    ?assertNotEqual(nomatch, binary:match(Cr, ~" title=\"a&#13;\nb\""), Cr),
+    ?assertNotEqual(nomatch, binary:match(Cr, ~"-->a&#13;\nb<!--"), Cr),
+    ?assertNotEqual(nomatch, binary:match(Cr, ~" value=\"a&#13;\nb\""), Cr),
+    ?assertNotEqual(nomatch, binary:match(Cr, ~">a&#13;\nb</textarea>"), Cr),
+    %% The `?local` initial and its static affix both keep their CR.
+    ?assertNotEqual(nomatch, binary:match(Cr, ~" title=\"x&#13;\ny\""), Cr),
+    ?assertNotEqual(nomatch, binary:match(Cr, ~" value=\"x&#13;\ny\""), Cr),
+    ?assertEqual(nomatch, binary:match(Cr, ~"\r"), Cr),
+    Nul = render_bin(arizona_cr_nul:render(#{t => <<"a", 0, "b">>})),
+    ?assertNotEqual(nomatch, binary:match(Nul, <<" title=\"a", Fffd/binary, "b\"">>), Nul),
+    ?assertNotEqual(nomatch, binary:match(Nul, <<"-->a", Fffd/binary, "b<!--">>), Nul),
+    ?assertNotEqual(nomatch, binary:match(Nul, <<">a", Fffd/binary, "b</textarea>">>), Nul),
+    ?assertEqual(nomatch, binary:match(Nul, <<0>>), Nul),
+    %% The live diff ships the value itself (the client writes it, see
+    %% arizona-escape.test.js); a re-rendered textarea's content is markup, escaped
+    %% as the page is.
+    {_, Snap0, V0} = arizona_render:render(arizona_cr_nul:render(#{t => ~"i"}), #{}),
+    {Ops, _, _} = arizona_diff:diff(
+        arizona_cr_nul:render(#{t => ~"a\r\nb"}), Snap0, V0, #{t => true}
+    ),
+    ?assertMatch(
+        [
+            [?OP_SET_ATTR, _, ~"title", ~"a\r\nb"],
+            [?OP_TEXT, _, ~"a\r\nb"],
+            [?OP_SET_ATTR, _, ~"value", ~"a\r\nb"],
+            [?OP_TEXT, _, #{~"d" := [~"a&#13;\nb"]}]
+        ],
+        Ops
+    ).
+
 %% Seeded values over `Alphabet`, the rand state threaded explicitly so the
 %% process-global state is left alone.
 random_values(0, _Alphabet, _State) ->
@@ -563,6 +607,8 @@ reference_entity($<) -> ~"&lt;";
 reference_entity($>) -> ~"&gt;";
 reference_entity($") -> ~"&quot;";
 reference_entity($') -> ~"&#39;";
+reference_entity($\r) -> ~"&#13;";
+reference_entity(0) -> <<16#FFFD/utf8>>;
 reference_entity(C) -> <<C>>.
 
 %% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a

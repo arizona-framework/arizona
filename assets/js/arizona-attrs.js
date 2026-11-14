@@ -48,7 +48,8 @@ function decodeRawAttr(raw) {
  */
 export function applySetAttrOp(el, name, val) {
     if (Array.isArray(val)) val = JSON.stringify(val);
-    else if (typeof val !== 'string') val = decodeRawAttr(val.raw);
+    else if (typeof val === 'string') val = pageText(val);
+    else val = decodeRawAttr(val.raw);
     const local = name === 'multiple' ? heldLocal(el) : null;
     // Asked before the write: the default it changes is what the user's edit is
     // compared against.
@@ -180,23 +181,24 @@ function chooserPicks(sel, raw) {
     if (sel.multiple) {
         try {
             const picks = JSON.parse(raw);
-            if (Array.isArray(picks)) return picks.map((p) => attrInput(String(p)));
+            if (Array.isArray(picks)) return picks.map((p) => pageText(String(p)));
         } catch {
             // Not the server's array: one value, as the server compares it.
         }
     }
-    return [attrInput(raw)];
+    return [pageText(raw)];
 }
 
 /**
- * A pick as the parser reads an attribute value (and an option's value reads):
- * newlines normalized, NUL replaced. A value written live or decoded from JSON skipped
- * the parser, so it is read here as the server compares it.
+ * A value as the page holds it: a NUL, which no HTML can hold, as U+FFFD (the server
+ * renders it so). Every other character, a CR included, is held as it is. A server
+ * value written live, and a pick decoded from JSON, go through it so they hold what
+ * the server's render of the same value does.
  * @param {string} text
  * @returns {string}
  */
-export function attrInput(text) {
-    return text.replace(/\r\n?/g, '\n').replace(/\0/g, '\uFFFD');
+export function pageText(text) {
+    return text.includes('\0') ? text.replace(/\0/g, '\uFFFD') : text;
 }
 
 /**

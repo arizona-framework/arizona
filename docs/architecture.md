@@ -156,6 +156,13 @@ binary is emitted as the bytes it holds, unchecked, because checking every value
 render path was measured at +22% to +49% on non-ASCII SSR (see docs/performance.md,
 "What did not work").
 
+Two characters the HTML parser rewrites before the page exists are escaped too, so the
+page holds what a live update writes through the DOM: a CR (alone or before a LF, which
+the parser turns into a LF) is written `&#13;`, which decodes to the CR itself, and a
+NUL, which no HTML can hold (the parser drops it in text and replaces it elsewhere), is
+written U+FFFD, which the web client also writes for a NUL in a live text or attribute
+value.
+
 The usual source of a non-UTF-8 binary is a bare `<<"café">>` literal: with no type
 spec, each character is stored as one byte, which is Latin-1. Fix it at the source:
 
@@ -292,21 +299,21 @@ the parser, which loads on the first option (or the one marked `selected`), whil
 (its `value`, its `selected`) -- and the transform does the rest generically: it drops the chooser's
 value and appends to every choice under it a `selected` calling
 `arizona_template:chosen(Backend, ChoiceValue, ChooserValue, Multiple)` (both read as the text the
-page holds, `attr_text/2`: an escaped value as the parser reads an attribute value, `attr_input/1`,
-newlines normalized and NUL replaced; a literal `?raw` value, or an interpolated one with a
-literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its character references
-are decoded too, through the backend's optional `c:arizona_renderer:markup_text/2` in `attribute`;
-a raw a helper returns renders escaped and compares as its text; the transform marks the parts of
-both values as the attribute renders them, so every path compares them alike, and under
-`multiple` each part of a literal list holding a `?raw` is its own pick), folded to a
-static `true`/`false` when both values are literals (text, or a literal `?raw` of text). The
-choices are found where the chooser compiles (`compile_element/5`), after hoisted variables and
-helper bodies are spliced, through elements, content lists and conditional tails. An `?each`
-compiles bottom-up, before its chooser, so the pre-pass (`mark_targets/3`, and again after each
-splice) wraps an `?each` under a chooser in a `'$arizona_choice'` mark carrying the value; the each
-takes it off and rewrites its item as it compiles (`compile_each_clause/11`). A template compiled
-before the chooser was seen counts as reached only when every option element in its statics carries
-a `chosen/4` call.
+page holds, `attr_text/2`: an escaped value as its own text, a NUL as U+FFFD, `attr_input/1` (the
+escape writes a CR as a reference, see "Output is UTF-8"); a literal `?raw` value, or an
+interpolated one with a literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its
+character references are decoded too, through the backend's optional
+`c:arizona_renderer:markup_text/2` in `attribute`; a raw a helper returns renders escaped and
+compares as its text; the transform marks the parts of both values as the attribute renders them, so
+every path compares them alike, and under `multiple` each part of a literal list holding a `?raw` is
+its own pick), folded to a static `true`/`false` when both values are literals (text, or a literal
+`?raw` of text). The choices are found where the chooser compiles (`compile_element/5`), after
+hoisted variables and helper bodies are spliced, through elements, content lists and conditional
+tails. An `?each` compiles bottom-up, before its chooser, so the pre-pass (`mark_targets/3`, and
+again after each splice) wraps an `?each` under a chooser in a `'$arizona_choice'` mark carrying the
+value; the each takes it off and rewrites its item as it compiles (`compile_each_clause/11`). A
+template compiled before the chooser was seen counts as reached only when every option element in
+its statics carries a `chosen/4` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
 stripped and collapsed). Both kinds of text are read through the backend's optional
@@ -347,20 +354,20 @@ the in-body rules: classic in-select parsing ignores those start tags (it switch
 and `template`), so an option inside one there is real and is left for the client; an option whose
 text runs past the fragment is valued by the part inside it. An option's value is its `value`
 attribute, else its text as its `text` property reads it, with the input preprocessed (CR LF and CR
-to LF, NUL to U+FFFD, picks alike) and character references decoded the way the tokenizer decodes
-them (`arizona_html_entities`, the standard's whole named table, legacy names and the
-attribute-value exception included), and it is marked when it is one of `Picks` (a `selected` the
-markup carries is cut from any other option, as the client clears it). A page without such a chooser
-renders exactly as before, and one with it pays for that child's bytes only. A live render and every
-diff see the child as written (`arizona_eval` and `peek_nodiff` unwrap it; an `?each` inside still
-diffs item by item), and `Picks` is never called there. In the live client the select's `value` is
-applied to its options' `selected` attributes (and, on a change, their selection): when the page
-starts, when an op writes it, and after any batch that rendered or changed an option
-(`applyChooser`, `arizona-attrs.js`). Options the transform reached keep their own `selected` diffs
-beside it; both compute the same choice. A backend without the callbacks keeps `value` as an
-ordinary attribute, which is what `?json` wants. Options sharing a value are all marked, by every
-path, so the browser selects the last of them, as the parser selects the last `selected` option (the
-`.value` setter would pick the first).
+to LF, NUL to U+FFFD; the picks are the text the page holds) and character references decoded the
+way the tokenizer decodes them (`arizona_html_entities`, the standard's whole named table, legacy
+names and the attribute-value exception included), and it is marked when it is one of `Picks` (a
+`selected` the markup carries is cut from any other option, as the client clears it). A page without
+such a chooser renders exactly as before, and one with it pays for that child's bytes only. A live
+render and every diff see the child as written (`arizona_eval` and `peek_nodiff` unwrap it; an
+`?each` inside still diffs item by item), and `Picks` is never called there. In the live client the
+select's `value` is applied to its options' `selected` attributes (and, on a change, their
+selection): when the page starts, when an op writes it, and after any batch that rendered or changed
+an option (`applyChooser`, `arizona-attrs.js`). Options the transform reached keep their own
+`selected` diffs beside it; both compute the same choice. A backend without the callbacks keeps
+`value` as an ordinary attribute, which is what `?json` wants. Options sharing a value are all
+marked, by every path, so the browser selects the last of them, as the parser selects the last
+`selected` option (the `.value` setter would pick the first).
 
 ## API -- `arizona_diff.erl`
 

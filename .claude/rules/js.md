@@ -312,11 +312,12 @@ batch in which an op, at any depth (an item or list patch's inner ops, a child v
 an item), targeted a select/option/optgroup or carried markup holding one (`noteChoices`,
 `arizona-ops.js`): an option the value names may arrive later. Option markup counts only when the
 page has a valued select (asked once per batch); otherwise only markup bringing a select does, so a
-page without one never searches for one. Picks are read as the parser reads an attribute value
-(newlines normalized, NUL replaced; a live write or a JSON array skipped the parser), as the server
-compares them. Options sharing a value are all marked, and the last one is selected, as the parser
-selects the last `selected` option (the `.value` setter would pick the first), also when an update
-brings one before it. The `arizona_js` attribute effects (`set_attr`, `remove_attr`, `toggle_attr`)
+page without one never searches for one. Picks are read as the text the page holds (`pageText`:
+a NUL as U+FFFD, as the server renders one and as a live text or attribute write stores it; a CR the
+server escapes as `&#13;`, so a CR and a LF are different picks), as the server compares them.
+Options sharing a value are all marked, and the last one is selected, as the parser selects the
+last `selected` option (the `.value` setter would pick the first), also when an update brings one
+before it. The `arizona_js` attribute effects (`set_attr`, `remove_attr`, `toggle_attr`)
 go through the same writers, so `value` on a select means the same from an effect: it picks the
 option(s) it names, and removing it names none, which leaves a single select on its first option
 (the HTML default) and a multiple one on none. A select without a `value` is never touched by a

@@ -1,4 +1,4 @@
-import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
+import { applyChoosers, applyRemAttrOp, applySetAttrOp, pageText } from './arizona-attrs.js';
 import {
     _pipWindows,
     _viewDocs,
@@ -291,6 +291,7 @@ function mountHooksOutside(root, kept) {
  * @param {boolean} [isHtml]
  */
 function applyTextOp(el, az, val, isHtml) {
+    if (!isHtml) val = pageText(val);
     const marker = findMarker(el, az);
     if (marker) {
         // A re-rendered slot keeps the az-nodiff elements its new content names again:

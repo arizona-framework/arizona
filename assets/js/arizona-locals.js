@@ -1,8 +1,8 @@
 import {
     applyRemAttrOp,
     applySetAttrOp,
-    attrInput,
     isMultipleChooser,
+    pageText,
     syncsProp,
 } from './arizona-attrs.js';
 import { resolveTarget } from './arizona-commands.js';
@@ -111,7 +111,7 @@ function readLocalValue(el, target) {
     // A multiple select holds a list: the values of the options the user sees picked,
     // but those a static part beside the local names -- they are the part's.
     if (isMultipleChooser(el, name)) {
-        const fixed = target.length === 4 ? [...target[2], ...target[3]].map(attrInput) : [];
+        const fixed = target.length === 4 ? [...target[2], ...target[3]].map(pageText) : [];
         return Array.from(
             /** @type {HTMLSelectElement} */ (el).selectedOptions,
             (o) => o.value,
@@ -156,14 +156,14 @@ function ownPicks(value) {
 
 /**
  * An affix as one text: a select value's static parts arrive as a list (one pick each
- * under `multiple`), any other attribute's as the text itself. A select value is read
- * as the page reads it, so its joined parts are normalized as one input (a CR ending
- * one part and a LF starting the next are one newline), as the server compares it.
+ * under `multiple`), any other attribute's as the text itself. It is the text the page
+ * holds (the server escapes a CR as `&#13;`), so the joined parts are exact text, a
+ * NUL as U+FFFD, as the server compares them.
  * @param {string | string[]} a
  * @returns {string}
  */
 function affix(a) {
-    return Array.isArray(a) ? attrInput(a.join('')) : a;
+    return pageText(Array.isArray(a) ? a.join('') : a);
 }
 
 /**
