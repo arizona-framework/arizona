@@ -503,7 +503,16 @@ compile_not_code_point(Config) when is_list(Config) ->
         {"be_cp_neg_char_content", "{p, [], [<<\"a\", -$a>>]}", -97},
         {"be_cp_neg_char_attr", "{p, [{title, <<\"a\", -$a>>}], []}", -97},
         {"be_cp_neg_char_utf8", "{p, [], [<<\"a\", -$a/utf8>>]}", -97},
-        {"be_cp_neg_char_tag", "{'div', [], [{<<-$a>>, [], []}]}", -97}
+        {"be_cp_neg_char_tag", "{'div', [], [{<<-$a>>, [], []}]}", -97},
+        {"be_cp_case_content",
+            "{p, [], [case arizona_template:get(x, Bindings) of true -> <<\"a\", -1>>; "
+            "false -> ~\"\" end]}", -1},
+        {"be_cp_case_attr",
+            "{p, [{title, case arizona_template:get(x, Bindings) of true -> <<\"a\", -1>>; "
+            "false -> ~\"\" end}], []}", -1},
+        {"be_cp_begin_content", "{p, [], [begin <<\"a\", 55296>> end]}", 55296},
+        {"be_cp_raw", "{p, [], [arizona_template:raw(<<\"a\", -1>>)]}", -1},
+        {"be_cp_raw_attr", "{p, [{title, arizona_template:raw(<<\"a\", -1>>)}], []}", -1}
     ],
     [
         ?assertEqual(

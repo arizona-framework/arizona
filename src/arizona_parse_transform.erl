@@ -6885,16 +6885,29 @@ is_code_point(N) -> N >= 0 andalso N =< 16#10FFFF andalso not (N >= 16#D800 anda
 %% U+10FFFF) in a tag, an attribute name or value, or content is a mistake, not a byte
 %% to render. A binary with any other segment (a size, a type, a value read at
 %% runtime) does not fold: Erlang builds it, and a bare integer there is a byte.
-assert_code_points({bin, _, Elements}) ->
-    case lists:all(fun is_fold_shaped/1, Elements) of
-        true -> lists:foreach(fun assert_code_point/1, Elements);
-        false -> ok
-    end;
-assert_code_points({cons, _, Head, Tail}) ->
-    ok = assert_code_points(Head),
-    assert_code_points(Tail);
-assert_code_points(_NotALiteral) ->
+%% Checked in every value the expression can take (a conditional's tails) and in the
+%% literal a `?raw` wraps.
+assert_code_points(Expr) ->
+    _Walked = map_tail_exprs(Expr, fun assert_leaf_code_points/1, fun(E) -> E end),
     ok.
+
+assert_leaf_code_points({bin, _, Elements} = Leaf) ->
+    case lists:all(fun is_fold_shaped/1, Elements) of
+        true -> ok = lists:foreach(fun assert_code_point/1, Elements);
+        false -> ok
+    end,
+    Leaf;
+assert_leaf_code_points({cons, _, Head, Tail} = Leaf) ->
+    ok = assert_code_points(Head),
+    ok = assert_code_points(Tail),
+    Leaf;
+assert_leaf_code_points(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [Arg]} = Leaf
+) when Mod =:= arizona_template; Mod =:= az ->
+    ok = assert_code_points(Arg),
+    Leaf;
+assert_leaf_code_points(Leaf) ->
+    Leaf.
 
 assert_code_point({bin_element, Line, Value, default, Type}) when
     Type =:= default; Type =:= [utf8]
