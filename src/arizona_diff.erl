@@ -2137,7 +2137,7 @@ make_op(Az, #{s := _, d := _} = NewNested, _Old) ->
 %% A plain-list `?each` in a content slot is anchored by the slot's
 %% `<!--az:X-->...<!--/az-->` comment markers, exactly like the nested-template
 %% case above (every dynamic-text child is marker-wrapped in SSR -- see
-%% arizona_html:text_slot_open/1). There is no wrapper element carrying
+%% arizona_html:content_slot_open/1). There is no wrapper element carrying
 %% `az="X"`, so `?OP_TEXT` (replace marker content) is correct and a
 %% whole-element innerHTML write is wrong: when the each sits among static
 %% siblings, the client's resolveEl finds no element for the slot az and falls

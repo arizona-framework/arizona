@@ -1161,8 +1161,8 @@ text_statics(Backend, [S, Next | Statics], [undefined | Azs]) ->
     [S | text_statics(Backend, [Next | Statics], Azs)];
 text_statics(Backend, [S, Next | Statics], [Az | Azs]) ->
     [
-        strip_suffix(S, Backend:text_slot_open(Az))
-        | text_statics(Backend, [strip_prefix(Next, Backend:text_slot_close()) | Statics], Azs)
+        strip_suffix(S, Backend:content_slot_open(Az))
+        | text_statics(Backend, [strip_prefix(Next, Backend:content_slot_close()) | Statics], Azs)
     ].
 
 strip_suffix(Bin, Suffix) ->

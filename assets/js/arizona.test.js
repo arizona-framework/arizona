@@ -954,7 +954,7 @@ describe('applyOps -- plain-list each among static siblings', () => {
 //
 // The only path where the plain-list OP_TEXT change touches streams. SSR anchors
 // BOTH a stream each and a plain-list each by the same `<!--az:X-->...<!--/az-->`
-// content-slot markers (arizona_html:text_slot_open/1; verified against real
+// content-slot markers (arizona_html:content_slot_open/1; verified against real
 // arizona_render output). A stream addresses its visible items by `az-key`
 // ELEMENT children; the comment markers are never the target of a stream op
 // (insert/remove/move/patch all query `:scope > [az-key]`), so the marker

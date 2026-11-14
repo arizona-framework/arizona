@@ -2202,7 +2202,7 @@ shared_az(Config) when is_list(Config) ->
 %% bare value its OWN az and its own text-slot markers. Previously the bare
 %% dynamic was hardcoded to a markerless az "0", which collided with the first
 %% element's az -- and that element's first content-slot marker az is also "0"
-%% (text_az(0, 0)) -- so an OP_TEXT for the bare value resolved to the element's
+%% (content_slot_az(0, 0)) -- so an OP_TEXT for the bare value resolved to the element's
 %% slot and overwrote it, while the bare value (having no marker) stayed stale.
 mixed_fragment_bare_value_gets_own_az(Config) when is_list(Config) ->
     Mod = compile_module(
@@ -2688,7 +2688,7 @@ raw_text_in_nodiff_bare_dynamic_rejected(Config) when is_list(Config) ->
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
-%% ...and the marked value in an az-nodiff element must still reach raw_text/4.
+%% ...and the marked value in an az-nodiff element must still reach neutralize_raw_text/4.
 %% Skipping the raw-text clause sent it through the nodiff path, which neutralizes
 %% nothing, so a ?raw close tag broke straight out of the element.
 raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->
@@ -7672,7 +7672,7 @@ each_stream_keyless_body_nodiff_renders(Config) when is_list(Config) ->
      || F <- [inherited, own]
     ].
 
-%% A target whose `keyed_item_ops/0` is false (it redraws whole frames) never addresses
+%% A target whose `supports_keyed_item_ops/0` is false (it redraws whole frames) never addresses
 %% a stream item, and an `az_key` is not even expressible there (the backend refuses
 %% dynamic attributes), so a keyless stream body renders.
 each_keyless_stream_target_body_renders(Config) when is_list(Config) ->
@@ -14032,7 +14032,7 @@ literal_list_attr_json_matches_runtime(Config) when is_list(Config) ->
     T = Mod:render(#{}),
     ?assertEqual([], maps:get(d, T)),
     Prop = <<
-        (arizona_json:attr_dyn_name(<<"label">>))/binary,
+        (arizona_json:attr_dynamic_prefix(<<"label">>))/binary,
         (arizona_json:render_attr(<<"label">>, Value))/binary
     >>,
     ?assertEqual(

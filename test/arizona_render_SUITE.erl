@@ -567,7 +567,7 @@ reference_entity(C) -> <<C>>.
 
 %% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a
 %% `</script>` in the value would break out into HTML parsing. The backend's
-%% raw_text/4 neutralizes the close tag (inserting a backslash), transparently for
+%% neutralize_raw_text/4 neutralizes the close tag (inserting a backslash), transparently for
 %% JSON, while a benign value is left byte-for-byte unchanged.
 raw_text_breakout_neutralized(Config) when is_list(Config) ->
     Payload = ~"{\"x\":\"</script><img src=x onerror=alert(1)>\"}",
@@ -608,15 +608,21 @@ raw_text_breakout_neutralized(Config) when is_list(Config) ->
     %% and `<script` become `\u003c` rather than the close tag's `<\` because
     %% `\!`/`\s` are not valid JSON escapes while `\u003c` is (and both decode
     %% back to `<` in a JSON or JavaScript string).
-    ?assertEqual(~"\\u003c!--", arizona_html:raw_text(script, <<>>, <<>>, ~"<!--")),
-    ?assertEqual(~"\\u003cSCRIPT>", arizona_html:raw_text(script, <<>>, <<>>, ~"<SCRIPT>")),
+    ?assertEqual(~"\\u003c!--", arizona_html:neutralize_raw_text(script, <<>>, <<>>, ~"<!--")),
+    ?assertEqual(
+        ~"\\u003cSCRIPT>", arizona_html:neutralize_raw_text(script, <<>>, <<>>, ~"<SCRIPT>")
+    ),
     %% A lone `<` that begins none of those sequences is still left alone.
-    ?assertEqual(~"a < b <!x", arizona_html:raw_text(script, <<>>, <<>>, ~"a < b <!x")),
+    ?assertEqual(~"a < b <!x", arizona_html:neutralize_raw_text(script, <<>>, <<>>, ~"a < b <!x")),
     %% The tag picks the policy: <style> is RAWTEXT, so the script-data rewrites do
     %% not apply there (they would defend nothing and corrupt the CSS), while its
     %% own close tag still does.
-    ?assertEqual(~"<!--<script>", arizona_html:raw_text(style, <<>>, <<>>, ~"<!--<script>")),
-    ?assertEqual(~"a<\\/style>b", arizona_html:raw_text(style, <<>>, <<>>, ~"a</style>b")).
+    ?assertEqual(
+        ~"<!--<script>", arizona_html:neutralize_raw_text(style, <<>>, <<>>, ~"<!--<script>")
+    ),
+    ?assertEqual(
+        ~"a<\\/style>b", arizona_html:neutralize_raw_text(style, <<>>, <<>>, ~"a</style>b")
+    ).
 
 %% Render the raw-text fixture and keep only the <script> element's content, so a
 %% breakout that survived would truncate the slice and fail the caller's decode.
@@ -653,21 +659,23 @@ raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
     %% Byte-identical to the flat-binary path -- iodata is not a second policy.
     ?assertEqual(render_json_script(iolist_to_binary(Encoded)), HTML),
     %% A charlist and a deeply nested iolist neutralize the same way.
-    ?assertEqual(~"a<\\/script>b", arizona_html:raw_text(script, <<>>, <<>>, "a</script>b")),
+    ?assertEqual(
+        ~"a<\\/script>b", arizona_html:neutralize_raw_text(script, <<>>, <<>>, "a</script>b")
+    ),
     ?assertEqual(
         ~"a<\\/script>b",
-        arizona_html:raw_text(script, <<>>, <<>>, [~"a", [~"</scr", "ipt>"], ~"b"])
+        arizona_html:neutralize_raw_text(script, <<>>, <<>>, [~"a", [~"</scr", "ipt>"], ~"b"])
     ),
     %% Through the ?raw opt-out, which is the only shape a script slot can carry.
     ?assertEqual(
         {arizona_raw, ~"x<\\/script>"},
-        arizona_html:raw_text(script, <<>>, <<>>, {arizona_raw, ["x", ~"</script>"]})
+        arizona_html:neutralize_raw_text(script, <<>>, <<>>, {arizona_raw, ["x", ~"</script>"]})
     ),
     %% Chardata that will not decode (invalid UTF-8) is named by to_bin/1, called
     %% here so the error is raised inside the slot's located evaluation.
     Undecodable = [<<255>>],
     ?assertError(
-        {non_utf8_render, 255, 0}, arizona_html:raw_text(script, <<>>, <<>>, Undecodable)
+        {non_utf8_render, 255, 0}, arizona_html:neutralize_raw_text(script, <<>>, <<>>, Undecodable)
     ).
 
 %% The template's own static text sits right beside a slot, so the `<` that starts
@@ -895,7 +903,8 @@ raw_text_breakout_neutralized_for_atom(Config) when is_list(Config) ->
     ?assertEqual(~"</script><img src=x onerror=alert(1)>", arizona_template:to_bin(Nasty)),
     %% Neutralized, and normalized to the binary it would have rendered as.
     ?assertEqual(
-        ~"<\\/script><img src=x onerror=alert(1)>", arizona_html:raw_text(script, <<>>, <<>>, Nasty)
+        ~"<\\/script><img src=x onerror=alert(1)>",
+        arizona_html:neutralize_raw_text(script, <<>>, <<>>, Nasty)
     ),
     HTML = render_json_script(Nasty),
     ?assertEqual(nomatch, binary:match(HTML, ~"</script><img")),
@@ -905,12 +914,15 @@ raw_text_breakout_neutralized_for_atom(Config) when is_list(Config) ->
     ?assertEqual(render_json_script(atom_to_binary(Nasty)), HTML),
     %% The script-data half folds case and is tag-gated the same way.
     ?assertEqual(
-        ~"\\u003c!--\\u003cscript>", arizona_html:raw_text(script, <<>>, <<>>, '<!--<script>')
+        ~"\\u003c!--\\u003cscript>",
+        arizona_html:neutralize_raw_text(script, <<>>, <<>>, '<!--<script>')
     ),
-    ?assertEqual(~"<!--<script>", arizona_html:raw_text(style, <<>>, <<>>, '<!--<script>')),
+    ?assertEqual(
+        ~"<!--<script>", arizona_html:neutralize_raw_text(style, <<>>, <<>>, '<!--<script>')
+    ),
     %% Shapes that cannot carry a metacharacter are still passed straight through.
-    ?assertEqual(123, arizona_html:raw_text(script, <<>>, <<>>, 123)),
-    ?assertEqual(1.5, arizona_html:raw_text(script, <<>>, <<>>, 1.5)).
+    ?assertEqual(123, arizona_html:neutralize_raw_text(script, <<>>, <<>>, 123)),
+    ?assertEqual(1.5, arizona_html:neutralize_raw_text(script, <<>>, <<>>, 1.5)).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{

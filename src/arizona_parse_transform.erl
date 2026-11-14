@@ -117,7 +117,7 @@ render(Bindings) ->
 %% static text child is spliced verbatim -- it is the documented raw-HTML seam
 %% -- so ` az="` / `<!--az:` in a page *about* markup is ordinary content).
 %% `{dyn_attr, Name, Bytes}` is the static part of a dynamic attribute: it renders
-%% as the backend's `attr_dyn_name/1` bytes, but carries `Name` into the
+%% as the backend's `attr_dynamic_prefix/1` bytes, but carries `Name` into the
 %% fingerprint. HTML renders the name inside the dynamic and contributes no bytes,
 %% so without it two templates differing only in a dynamic attribute's name share
 %% a fingerprint, and the diff patches one into the other, leaving the old
@@ -130,7 +130,7 @@ render(Bindings) ->
 %% compiling a module. See `inject_az_attrs/1`.
 -define(AZ_ATTRS_KEY, arizona_az_attrs).
 
-%% How many bytes of a raw-text slot's static neighbours reach `Backend:raw_text/4`
+%% How many bytes of a raw-text slot's static neighbours reach `Backend:neutralize_raw_text/4`
 %% -- the bound `arizona_renderer` sets on that callback, so the call embeds this
 %% many bytes per side rather than the whole static.
 -define(RAW_TEXT_NEIGHBOUR_BYTES, 8).
@@ -213,13 +213,13 @@ render(Bindings) ->
     %% become literal content there (script/style/textarea/title, and the other
     %% RAWTEXT elements: xmp/iframe/noembed/noframes).
     raw_text_kind = none :: arizona_renderer:raw_text_kind(),
-    %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/4`:
+    %% The tag that produced `raw_text_kind`, handed to the backend's `neutralize_raw_text/4`:
     %% the neutralization a value needs belongs to *that element's* tokenizer state
     %% (`<script>` is script data, `<style>` is RAWTEXT), not to raw text at large.
-    raw_text_tag = undefined :: atom(),
+    raw_text_tag = undefined :: arizona_renderer:tag(),
     %% The static text following the child being compiled, up to the next dynamic,
     %% while inside a `raw` raw-text element (static_run_after/2). With the static
-    %% before it (static_run_before/1) it goes to `raw_text/4`: a breakout can
+    %% before it (static_run_before/1) it goes to `neutralize_raw_text/4`: a breakout can
     %% straddle a slot and its static neighbour.
     raw_text_after = <<>> :: binary(),
     %% Content context of the enclosing element while compiling its children
@@ -1896,7 +1896,7 @@ transform_node(Node, Module, Inline, FunDefs) ->
     case N of
         %% Every target compiles non-live here (LiveRender = false). The live root
         %% is handled in transform_live_render_leaf/4; a target whose backend's
-        %% `live_root/0` is false (its transport repaints whole frames rather than
+        %% `supports_live_root/0` is false (its transport repaints whole frames rather than
         %% addressing the root node) never gets a client root id / az_view, so its
         %% live-render last expr falls through to here too.
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
@@ -2964,14 +2964,14 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
     Targets = get(?TARGETS_KEY),
     case erl_syntax:revert(Expr) of
         %% A live root compiles live (LiveRender = true, injecting the client root
-        %% id / az_view) when its backend's `live_root/0` says the client addresses
+        %% id / az_view) when its backend's `supports_live_root/0` says the client addresses
         %% it. A target that repaints whole frames does not, so its root falls
         %% through to the non-live path (transform_node/4).
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
             (Mod =:= arizona_template orelse Mod =:= az) andalso
                 is_map_key(Target, Targets)
         ->
-            case (target_backend(Target)):live_root() of
+            case (target_backend(Target)):supports_live_root() of
                 true -> transform_live_root(Target, Arg, L, Module, Inline, FunDefs);
                 false -> transform_expr(Expr, Module, Inline, FunDefs)
             end;
@@ -4350,12 +4350,12 @@ maybe_multi_root_opt(_Kind, _Classification, Opts) ->
 %% diffs by position and needs no key, so the body is stamped here and
 %% `arizona_template:each/2` refuses the stream pairing. A nodiff item is never
 %% addressed by a keyed op, and a backend that redraws whole frames has none to
-%% address (`keyed_item_ops/0`).
+%% address (`supports_keyed_item_ops/0`).
 maybe_keyless_opt(Backend, stream, element_tuple, ElemAST, Opts) when
     not is_map_key(diff, Opts)
 ->
     {_Tag, Attrs, _Children, _Line} = extract_element(ElemAST),
-    case Backend:keyed_item_ops() andalso not has_az_key(Attrs) of
+    case Backend:supports_keyed_item_ops() andalso not has_az_key(Attrs) of
         true -> Opts#{keyless => true};
         false -> Opts
     end;
@@ -4549,7 +4549,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
     %% for the slot, so its diff ops (both branch toggles of a
     %% conditional-only child) target an az that exists nowhere in the DOM
     %% and the client drops them.
-    Statics = [[{az_slot, ~"0"}], [Backend:text_slot_close()]],
+    Statics = [[{az_slot, ~"0"}], [Backend:content_slot_close()]],
     DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend, CCtx)],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
@@ -4787,7 +4787,7 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% unique az from the shared element counter and wrap it in text-slot markers,
     %% exactly like a content slot (emit_child_dynamic/4). A hardcoded, markerless
     %% `"0"` collided with the first element's az -- and its first content slot's
-    %% marker az is also `"0"` (text_az(0, 0)) -- so an OP_TEXT for this value
+    %% marker az is also `"0"` (content_slot_az(0, 0)) -- so an OP_TEXT for this value
     %% resolved to that element's slot and overwrote it, while this value, having
     %% no marker of its own, could not be patched and stayed stale.
     Az = integer_to_binary(State0#state.az),
@@ -4797,7 +4797,7 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
         Az, Item, Module, line(Item), Backend, State0#state.content_ctx
     ),
     State3 = flush(State2, with_choices(DynAST, State0)),
-    State3#state{buf = [Backend:text_slot_close()]}.
+    State3#state{buf = [Backend:content_slot_close()]}.
 
 %% A BINARY tag is taken verbatim, exactly as a binary attribute name is
 %% (`extract_attr_name/2`). The atom form is translated `_` -> `-` by the backend's
@@ -4940,7 +4940,7 @@ needs_elem_az(Children, Line, #state{nodiff = true}) ->
 %%
 %% Escaping is preserved structurally rather than reimplemented: the children compile
 %% through the ordinary `compile_children/3` walk, so each dynamic keeps its own
-%% policy -- `raw` (script/style) goes verbatim through `Backend:raw_text/4` breakout
+%% policy -- `raw` (script/style) goes verbatim through `Backend:neutralize_raw_text/4` breakout
 %% neutralization, `escapable` (textarea/title) is HTML-escaped via `esc_spec`.
 %% Nothing here rewrites that path.
 compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0) ->
@@ -5452,7 +5452,7 @@ local_call({interp, LocalCall, _Prefix, _Suffix}) -> LocalCall.
 
 %% Collect each content `?local` keyed by its dynamic-text slot index -- the
 %% suffix the client needs to reconstruct the slot's comment-marker az (see
-%% the backend's `text_az/2`). The slot counter advances on every dynamic text
+%% the backend's `content_slot_az/2`). The slot counter advances on every dynamic text
 %% child (the same classification compile_child/4 uses), so static text and
 %% nested elements don't consume a slot. No sole-child restriction: multiple
 %% content locals, and locals mixed with other children, each get their own
@@ -5761,7 +5761,7 @@ emit_child_dynamic(
 emit_child_dynamic(Child, ElemAz, #state{raw_text_kind = escapable} = State0, Slot) ->
     %% textarea/title: escapable raw text. Comments are literal there, so the slot is
     %% markerless and render-once; the backend renders the value for that context
-    %% (`raw_text/4`): a literal `?raw` spliced with the element's end tag defused, any
+    %% (`neutralize_raw_text/4`): a literal `?raw` spliced with the element's end tag defused, any
     %% other value escaped (marked here, as a content value is), a text-only template
     %% as its text. A `?local` keeps the value path its own markers need.
     case is_local_marker(Child) of
@@ -5838,13 +5838,13 @@ emit_escapable_local(Child, _ElemAz, #state{module = Module, backend = Backend} 
 
 emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
-    MarkerAz = Backend:text_az(ElemAzBin, Slot),
+    MarkerAz = Backend:content_slot_az(ElemAzBin, Slot),
     State1 = buf_az_slot(State0, MarkerAz),
     DynAST = make_esc_text_dynamic_ast(
         MarkerAz, Child, Module, line(Child), Backend, State0#state.content_ctx
     ),
     State2 = flush(State1, with_choices(DynAST, State0)),
-    {State2#state{buf = [Backend:text_slot_close()]}, Slot + 1}.
+    {State2#state{buf = [Backend:content_slot_close()]}, Slot + 1}.
 
 %% The slot of a chooser's child the compiler cannot see into: its value goes to
 %% arizona_template:choices/3 with the chooser's value, read lazily (only the SSR render
@@ -6308,7 +6308,7 @@ make_raw_text_dynamic_ast(ExprAST0, Tag, {Before, After}, Module, ExprLine, Back
     %% the enclosing element's, not raw text's in general; the neighbouring static
     %% text because a sequence can begin in it and end in the value, or the reverse.
     GuardedAST =
-        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [
+        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, neutralize_raw_text}}, [
             {atom, 0, Tag}, ast_binary(Before), ast_binary(After), ExprAST
         ]},
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
@@ -6341,7 +6341,7 @@ buf_az_slot(State, Az) ->
     State#state{buf = [{az_slot, Az} | State#state.buf]}.
 
 buf_dyn_attr(State, Backend, NameBin, Anno) ->
-    Bin = emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, Anno),
+    Bin = emit_backend(fun() -> Backend:attr_dynamic_prefix(NameBin) end, Anno),
     State#state{buf = [{dyn_attr, NameBin, Bin} | State#state.buf]}.
 
 flush(State, DynAST) ->
@@ -6368,7 +6368,7 @@ render_segment(_Backend, _Prefix, Bin) when is_binary(Bin) ->
 render_segment(Backend, Prefix, {az_attr, Az}) ->
     Backend:az_attr(<<Prefix/binary, Az/binary>>);
 render_segment(Backend, Prefix, {az_slot, Az}) ->
-    Backend:text_slot_open(<<Prefix/binary, Az/binary>>);
+    Backend:content_slot_open(<<Prefix/binary, Az/binary>>);
 render_segment(_Backend, _Prefix, {dyn_attr, _Name, Bin}) ->
     Bin.
 
