@@ -5293,9 +5293,8 @@ compile_interp_local_attr(Backend, NameBin, LocalCall, Before, After, ElemAz, St
 %% them (`attr_markup/1`) and `v` is that markup beside the escaped init.
 local_attr_interp_expr_ast(Backend, NameBin, LocalCall, Before, After) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
-    Line = anno(LocalCall),
-    Prefix = affix_text(Backend, Before, Line),
-    Suffix = affix_text(Backend, After, Line),
+    Prefix = affix_text(Backend, Before),
+    Suffix = affix_text(Backend, After),
     Init = to_bin_ast(local_init(LocalCall)),
     VAST =
         case escape_keeps(Backend, Prefix) andalso escape_keeps(Backend, Suffix) of
@@ -5305,9 +5304,9 @@ local_attr_interp_expr_ast(Backend, NameBin, LocalCall, Before, After) ->
                 {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, raw_attr}}, [
                     {atom, 0, Backend},
                     ast_list([
-                        raw_ast(attr_markup(Backend, Prefix, Line)),
+                        raw_ast(Backend:attr_markup(Prefix)),
                         Init,
-                        raw_ast(attr_markup(Backend, Suffix, Line))
+                        raw_ast(Backend:attr_markup(Suffix))
                     ])
                 ]}
         end,
@@ -5390,41 +5389,29 @@ raw_affix_markup(_Part) ->
 %% beside it at runtime, so a raw left as markup could be completed by them (an open
 %% `&amp` before an init `1` reads `&amp1`) or end the attribute (a `"`), and the
 %% page would stop meaning the affix the client composes with and strips.
-affix_part_text(Backend, Part, Line) ->
+%% A static part is the text the page holds once it is written as markup reading back
+%% as it, which differs where the parser cannot hold a character (a NUL reads U+FFFD).
+affix_part_text(Backend, Part) ->
     case raw_affix_markup(Part) of
-        {ok, Markup} -> attr_markup_text(Backend, Markup, Line);
-        error -> extract_binary_value(Part)
+        {ok, Markup} -> attr_markup_text(Backend, Markup);
+        error -> attr_markup_text(Backend, Backend:attr_markup(extract_binary_value(Part)))
     end.
 
 %% The text of the parts on one side of the local: the client's affix.
-affix_text(Backend, Parts, Line) ->
-    iolist_to_binary([affix_part_text(Backend, P, Line) || P <- Parts]).
+affix_text(Backend, Parts) ->
+    iolist_to_binary([affix_part_text(Backend, P) || P <- Parts]).
 
-%% Whether the page holds `Text` escaped as written. A backend that cannot read its
-%% markup back has no reader to disagree with.
+%% Whether the page holds `Text` escaped as written.
 escape_keeps(Backend, Text) ->
-    case erlang:function_exported(Backend, markup_text, 2) of
-        true -> Backend:markup_text(Backend:escape(Text), attribute) =:= {text, Text};
-        false -> true
-    end.
-
-attr_markup(Backend, Text, Line) ->
-    case erlang:function_exported(Backend, attr_markup, 1) of
-        true -> Backend:attr_markup(Text);
-        false -> parse_error(local_unsupported, Line)
-    end.
+    Backend:markup_text(Backend:escape(Text), attribute) =:= {text, Text}.
 
 raw_ast(Bin) ->
     {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, raw}}, [ast_binary(Bin)]}.
 
-attr_markup_text(Backend, Markup, Line) ->
-    case erlang:function_exported(Backend, markup_text, 2) of
-        true ->
-            {text, Text} = Backend:markup_text(Markup, attribute),
-            Text;
-        false ->
-            parse_error(local_unsupported, Line)
-    end.
+%% `markup_text/2` and `attr_markup/1` are required of a backend supporting `?local`.
+attr_markup_text(Backend, Markup) ->
+    {text, Text} = Backend:markup_text(Markup, attribute),
+    Text.
 
 local_key({call, _, _, [{atom, _, Atom}, _Init]}, _Line) ->
     atom_to_binary(Atom);
@@ -5522,23 +5509,20 @@ collect_attr_affixes(Backend, Tag, Attrs, Line) ->
             _None -> none
         end,
     maps:from_list([
-        {Name,
-            local_affixes(
-                Backend, attr_key(Backend, Name) =:= ChooserValue, Before, After, Line
-            )}
+        {Name, local_affixes(Backend, attr_key(Backend, Name) =:= ChooserValue, Before, After)}
      || {tuple, _, [NameAST, ValueAST]} <- Attrs,
         {interp, _LC, Before, After} <- [attr_local_spec(ValueAST, Line)],
         Name <- [extract_attr_name(Backend, NameAST)]
     ]).
 
 %% A chooser's parts are one pick each.
-local_affixes(Backend, false, Before, After, Line) ->
-    [affix_text(Backend, Before, Line), affix_text(Backend, After, Line)];
-local_affixes(Backend, true, Before, After, Line) ->
-    [affix_part_texts(Backend, Before, Line), affix_part_texts(Backend, After, Line)].
+local_affixes(Backend, false, Before, After) ->
+    [affix_text(Backend, Before), affix_text(Backend, After)];
+local_affixes(Backend, true, Before, After) ->
+    [affix_part_texts(Backend, Before), affix_part_texts(Backend, After)].
 
-affix_part_texts(Backend, Parts, Line) ->
-    [affix_part_text(Backend, P, Line) || P <- Parts].
+affix_part_texts(Backend, Parts) ->
+    [affix_part_text(Backend, P) || P <- Parts].
 
 local_call({whole, LocalCall}) -> LocalCall;
 local_call({interp, LocalCall, _Before, _After}) -> LocalCall.
@@ -7383,9 +7367,9 @@ local_inits(Backend, Value, Multiple) ->
             L = anno(LocalCall),
             {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, local_choice}}, [
                 {atom, L, Backend},
-                ast_list([ast_binary(T) || T <- affix_part_texts(Backend, Before, L)]),
+                ast_list([ast_binary(T) || T <- affix_part_texts(Backend, Before)]),
                 local_init(LocalCall),
-                ast_list([ast_binary(T) || T <- affix_part_texts(Backend, After, L)]),
+                ast_list([ast_binary(T) || T <- affix_part_texts(Backend, After)]),
                 Multiple
             ]}
     end.
@@ -7398,8 +7382,8 @@ local_inits(Backend, Value, Multiple) ->
 local_text_ast(Backend, LocalCall, Before, After) ->
     L = anno(LocalCall),
     Init = local_init(LocalCall),
-    Prefix = affix_text(Backend, Before, L),
-    Suffix = affix_text(Backend, After, L),
+    Prefix = affix_text(Backend, Before),
+    Suffix = affix_text(Backend, After),
     case literal_text(Init) of
         {ok, Text} ->
             ast_binary(arizona_template:attr_input(<<Prefix/binary, Text/binary, Suffix/binary>>));

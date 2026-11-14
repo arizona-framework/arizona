@@ -1125,8 +1125,10 @@ prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server
 dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). A literal
 `?raw` of literal text is static and may be an affix part: the transform folds it to the
 text its markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
-treats that as static text, which the page holds exactly (the backend's optional
-`attr_markup/1` writes it when escaping would not keep it: HTML writes a CR as `&#13;`).
+treats that as static text, which the page holds exactly (the backend's `attr_markup/1`,
+required with `markup_text/2` of a backend supporting `?local`, writes it when escaping
+would not keep it: HTML writes a CR as `&#13;`). Every affix is the text the page reads
+back, so a static NUL, which no attribute can hold, is the U+FFFD the page shows.
 Spliced verbatim, the value beside it could complete an open reference in it (`&amp`
 before `1` reads `&amp1`) or a `"` could end the attribute, and the page would stop
 holding the affix the client composes with on `set` and strips on `get`. A select's

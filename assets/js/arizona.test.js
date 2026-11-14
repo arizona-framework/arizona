@@ -4167,6 +4167,20 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'id')).toBe('2');
     });
 
+    // An attribute cannot hold a NUL, so a static `<<"a", 0>>` affix is the U+FFFD the
+    // page reads: rendered for `{value, [<<"a", 0>>, ?local(k, ~"x")]}` on a text input.
+    it('strips a static affix the page reads as U+FFFD', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;k&quot;},&quot;ap&quot;:{&quot;value&quot;:[&quot;a�&quot;,&quot;&quot;]}}" type="text" value="a�x" />`,
+        );
+        const input = document.querySelector('input');
+        expect(get('v', 'k')).toBe('x');
+        set('v', 'k', 'y');
+        expect(input.value).toBe('a�y');
+        expect(get('v', 'k')).toBe('y');
+    });
+
     // A select value's parts are read joined, then normalized, as the page reads the
     // value: a CR ending one part and a LF starting the next are one newline. Rendered
     // for `{value, [?raw(~"a&#13;"), <<"\nb">>, ?local(k, <<>>)]}`.

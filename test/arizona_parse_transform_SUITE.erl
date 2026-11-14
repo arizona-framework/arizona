@@ -483,6 +483,7 @@
     local_attr_raw_affix_live_diff_static/1,
     local_attr_dynamic_raw_error/1,
     local_attr_raw_affix_reads_alone/1,
+    local_attr_static_affix_reads_as_page/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -762,6 +763,7 @@ groups() ->
             local_attr_raw_affix_live_diff_static,
             local_attr_dynamic_raw_error,
             local_attr_raw_affix_reads_alone,
+            local_attr_static_affix_reads_as_page,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -1949,6 +1951,30 @@ local_attr_raw_affix_reads_alone(Config) when is_list(Config) ->
                 <<"a\r">>, ~""
             ]}
         ]
+    ).
+
+%% A static affix is the text the page holds, which is not always what it was written
+%% as: an attribute cannot hold a NUL (a byte reads as U+FFFD, as a `&#0;` does), so
+%% the client's affix is U+FFFD too and a read strips it.
+local_attr_static_affix_reads_as_page(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_static_nul). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {input, [{type, <<\"text\">>}, "
+        "            {value, [<<\"a\", 0>>, arizona_template:local(k, <<\"x\">>)]}]}"
+        "    ). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    [_, Rest] = binary:split(SSR, ~" value=\""),
+    [Value | _] = binary:split(Rest, ~"\""),
+    {text, PageText} = arizona_html:markup_text(Value, attribute),
+    ?assertEqual(<<"a", 16#FFFD/utf8, "x">>, PageText),
+    ?assertEqual(
+        #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [<<"a", 16#FFFD/utf8>>, ~""]}},
+        decode_local_descriptor(SSR),
+        SSR
     ).
 
 %% A raw the server computes beside a `?local` has no meaning the client can keep:
