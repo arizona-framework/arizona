@@ -505,6 +505,8 @@ compile_not_code_point(Config) when is_list(Config) ->
         {"be_cp_neg_char_utf8", "{p, [], [<<\"a\", -$a/utf8>>]}", -97},
         {"be_cp_neg_char_tag", "{'div', [], [{<<-$a>>, [], []}]}", -97},
         {"be_cp_body", "<<\"a\", -1>>", -1},
+        {"be_cp_literal_list", "{p, [], [[<<\"a\", -1>>, <<\"b\">>]]}", -1},
+        {"be_cp_literal_list_attr", "{p, [{title, [<<\"a\", -1>>, \"b\"]}], []}", -1},
         {"be_cp_fragment_head", "[<<\"a\", -1>>, {p, [], []}]", -1},
         {"be_cp_fragment_tail", "[{p, [], []}, <<\"a\", 55296>>]", 55296}
     ],
@@ -539,6 +541,20 @@ compile_not_code_point(Config) when is_list(Config) ->
             "arizona_template:raw(<<\"b\", -1>>)]}"
         )
     ),
+    %% A list holding a value read at runtime is one runtime value too.
+    ValueList = compile(
+        "be_cp_value_list",
+        html(
+            "{p, [{title, [<<\"a\", -1>>, arizona_template:get(x, Bindings)]}], "
+            "[[<<\"a\", -1>>, arizona_template:get(x, Bindings)]]}"
+        )
+    ),
+    ?assertMatch(#{}, ValueList:render(#{x => ~"a"})),
+    JsonValueList = compile(
+        "be_cp_value_list_json",
+        json("{'Text', [{label, [<<\"a\", -1>>, arizona_template:get(x, Bindings)]}], []}")
+    ),
+    ?assertMatch(#{}, JsonValueList:render(#{x => ~"a"})),
     ?assertMatch(#{}, Runtime:render(#{x => ~"a"})).
 
 %% The message quotes the tag as written, an atom as an atom, and bytes that are not
@@ -550,7 +566,7 @@ compile_tag_not_text_message(Config) when is_list(Config) ->
     Msg = arizona_parse_transform:format_error(Reason),
     ?assert(contains(Msg, ~"'a")),
     ?assertNot(contains(Msg, ~"<<97")),
-    ?assert(contains(Msg, ~"without a space or control character")),
+    ?assert(contains(Msg, ~"without an ASCII space or control character")),
     ?assert(contains(arizona_parse_transform:format_error({tag_not_text, <<255>>}), ~"<<255>>")).
 
 %% An attribute name is written as text, as a tag is: the forms that fold compile, the
@@ -601,7 +617,7 @@ compile_name_breaks_markup(Config) when is_list(Config) ->
     [
         begin
             {arizona_parse_transform, {Reason, _} = Error} = compile_error(Name, Target(Body)),
-            ?assert(contains(arizona_parse_transform:format_error(Error), ~"space"), Name)
+            ?assert(contains(arizona_parse_transform:format_error(Error), ~"ASCII space"), Name)
         end
      || {Name, Target, Body, Reason} <- [
             {"be_ws_tag", fun html/1, "{'div', [], [{<<\"a b\">>, [], []}]}", tag_not_text},

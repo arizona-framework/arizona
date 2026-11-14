@@ -1288,8 +1288,8 @@ format_error({tag_not_text, Tag}) ->
     lists:flatten(
         io_lib:format(
             "the tag ~ts is not text: every render target writes a tag as UTF-8 text "
-            "without a space or control character, and this one holds a space, a control "
-            "character, or is not UTF-8. Write the tag as text without a space or control "
+            "without an ASCII space or control character, and this one holds one, or is "
+            "not UTF-8. Write the tag as text without an ASCII space or control "
             "character: an atom, ~~\"...\" or <<\"...\">>",
             [quote_name(Tag)]
         )
@@ -1304,7 +1304,8 @@ format_error({not_code_point, N}) ->
         io_lib:format(
             "the binary segment ~w is not a Unicode code point (a surrogate, a negative "
             "number, or past 16#10FFFF). A literal binary written as a tag, an attribute "
-            "name or value, content, or a template body folds into the template's text, "
+            "name or value, content, or a template body, alone or in a list of literal "
+            "text, folds into the template's text, "
             "each integer segment read as the character it names, and this one names "
             "none. Write the character you mean; for raw bytes give the segment a size, "
             "e.g. <<255:8>>",
@@ -1322,9 +1323,9 @@ format_error({attr_name_not_text, Name}) ->
     lists:flatten(
         io_lib:format(
             "the attribute name ~ts is not text: every render target writes it as UTF-8 "
-            "text without a space or control character, and this one holds a space, a "
-            "control character, or is not UTF-8. Write the name as text without a space "
-            "or control character: an atom, ~~\"...\" or <<\"...\">>",
+            "text without an ASCII space or control character, and this one holds one, or "
+            "is not UTF-8. Write the name as text without an ASCII space or control "
+            "character: an atom, ~~\"...\" or <<\"...\">>",
             [quote_name(Name)]
         )
     );
@@ -6890,7 +6891,7 @@ is_code_point(N) -> N >= 0 andalso N =< 16#10FFFF andalso not (N >= 16#D800 anda
 %% content or a template body into its text, reading an integer or `$x` segment as the
 %% character it names, so one that names none (a surrogate, a negative number, past
 %% U+10FFFF) there is a mistake, not a byte to render. Only the literal written at the
-%% position itself (or in a literal list there) folds: one with any other segment (a
+%% position itself (or in a list of literal text there) folds: one with any other segment (a
 %% size, a type, a value read at runtime), one a conditional returns and one a `?raw`
 %% wraps are runtime values whose bytes Erlang builds, an integer segment a byte.
 assert_code_points({bin, _, Elements}) ->
@@ -6898,9 +6899,11 @@ assert_code_points({bin, _, Elements}) ->
         true -> lists:foreach(fun assert_code_point/1, Elements);
         false -> ok
     end;
-assert_code_points({cons, _, Head, Tail}) ->
-    ok = assert_code_points(Head),
-    assert_code_points(Tail);
+assert_code_points({cons, _, _, _} = List) ->
+    case is_literal_text_list(List) of
+        true -> assert_list_code_points(List);
+        false -> ok
+    end;
 assert_code_points(_NotALiteral) ->
     ok.
 
@@ -6926,6 +6929,35 @@ is_fold_shaped({bin_element, _, Value, default, Type}) when Type =:= default; Ty
 is_fold_shaped(_Element) ->
     false.
 
+%% A list folds only when every item is literal text; one holding a value read at
+%% runtime is one runtime value, its binaries Erlang bytes. (A list holding a block is
+%% compiled item by item, each checked where it compiles.)
+is_literal_text_list({nil, _}) ->
+    true;
+is_literal_text_list({cons, _, Head, Tail}) ->
+    is_literal_text_item(Head) andalso is_literal_text_list(Tail);
+is_literal_text_list(_Tail) ->
+    false.
+
+is_literal_text_item({bin, _, Elements}) ->
+    lists:all(fun is_fold_shaped/1, Elements);
+is_literal_text_item({Literal, _, _}) when
+    Literal =:= string; Literal =:= char; Literal =:= integer
+->
+    true;
+is_literal_text_item({nil, _}) ->
+    true;
+is_literal_text_item({cons, _, _, _} = List) ->
+    is_literal_text_list(List);
+is_literal_text_item(_Value) ->
+    false.
+
+assert_list_code_points({cons, _, Head, Tail}) ->
+    ok = assert_code_points(Head),
+    assert_list_code_points(Tail);
+assert_list_code_points({nil, _}) ->
+    ok.
+
 code_point_literal({integer, _, N}) -> {ok, N};
 code_point_literal({char, _, N}) -> {ok, N};
 code_point_literal({op, _, '-', {integer, _, N}}) -> {ok, -N};
@@ -6942,8 +6974,9 @@ quote_name(Name) ->
         _NotUtf8 -> io_lib:format("~W", [Name, 20])
     end.
 
-%% UTF-8 text without a C0 control, a space or DEL: no target has a name with
-%% whitespace in it (the other ASCII whitespace is C0).
+%% UTF-8 text without a C0 control, an ASCII space or DEL: no target has a name with
+%% ASCII whitespace in it (the other ASCII whitespace is C0). C1 controls and U+00A0
+%% are allowed: they break no target's markup.
 is_name_text(Bytes) ->
     case unicode:characters_to_list(Bytes) of
         Chars when is_list(Chars) ->
