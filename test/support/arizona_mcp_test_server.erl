@@ -114,12 +114,17 @@ handle_tool(~"progress", _Args, Ctx, State) ->
     {reply, ~"done", State};
 handle_tool(~"block", Args, _Ctx, State) ->
     %% Never returns: a streaming `block` holds its worker until cancelled. When
-    %% Args carries a `watch` pid (tests pass one directly), report the worker
-    %% pid first so the test can assert it is killed on teardown.
+    %% Args carries a `watch` pid (tests pass one directly), or a `notify`
+    %% registered name (over HTTP, where args are JSON), report the worker pid
+    %% first: a test can then act once the request is in flight, and assert the
+    %% worker is killed on teardown.
     ok =
         case Args of
             #{watch := Watcher} ->
                 Watcher ! {block_started, self()},
+                ok;
+            #{~"notify" := Name} ->
+                binary_to_existing_atom(Name) ! {block_started, self()},
                 ok;
             _ ->
                 ok

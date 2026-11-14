@@ -54,6 +54,7 @@
 
 -define(LISTENER, arizona_mcp_e2e).
 -define(ALLOWED_ORIGIN, ~"http://localhost:3000").
+-define(BLOCK_WATCH, arizona_mcp_e2e_block_watch).
 
 %% Every case runs on each adapter, through its conformance driver.
 all() ->
@@ -712,11 +713,25 @@ session_buffered_cancel_frees_request(Config) ->
     %% session stays responsive: a notifications/cancelled on another connection
     %% frees the held request with a -32603 (proving it wasn't blocking the
     %% session process).
+    %%
+    %% A buffered POST sends no byte until it is answered, so the tool reports
+    %% its start instead: a cancel for an id the session does not hold yet is
+    %% ignored, as the spec allows, and the request would then hang to its
+    %% timeout.
+    true = register(?BLOCK_WATCH, self()),
     Body =
         ~"""
-    {"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"block","arguments":{}}}
+    {"jsonrpc":"2.0","id":31,"method":"tools/call",
+     "params":{"name":"block","arguments":{"notify":"arizona_mcp_e2e_block_watch"}}}
     """,
     Sock = stream_post(Config, "/mcp-session", session_header(SessionId), Body),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(block_not_started)
+        end,
+    true = unregister(?BLOCK_WATCH),
+    Mon = erlang:monitor(process, Worker),
     Cancel =
         ~"""
     {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":31}}
@@ -725,6 +740,10 @@ session_buffered_cancel_frees_request(Config) ->
     ?assertEqual(202, status_code(CancelResp)),
     Data = recv_until(Sock, ~"-32603", 5000),
     ?assertNotEqual(nomatch, binary:match(Data, ~"-32603")),
+    receive
+        {'DOWN', Mon, process, Worker, Reason} -> ?assertEqual(killed, Reason)
+    after 5000 -> ct:fail(worker_not_killed)
+    end,
     gen_tcp:close(Sock).
 
 session_max_sessions_503(Config) ->
