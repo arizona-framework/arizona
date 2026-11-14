@@ -621,10 +621,11 @@ rule_opts(_TC) ->
     #{debounce => 20}.
 
 init_dir(Config) ->
+    %% Under the run's priv_dir: a unique_integer is unique per node only, and
+    %% two fresh CT nodes (parallel worktrees) hand out the same ones.
     Dir = filename:join(
-        "/tmp",
-        "arizona_reloader_rule_ct_" ++
-            integer_to_list(erlang:unique_integer([positive]))
+        proplists:get_value(priv_dir, Config),
+        "rule_" ++ integer_to_list(erlang:unique_integer([positive]))
     ),
     ok = file:make_dir(Dir),
     [{tmp_dir, Dir} | Config].

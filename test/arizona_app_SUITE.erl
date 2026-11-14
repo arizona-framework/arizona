@@ -24,8 +24,6 @@
     boot_fails_on_an_adapter_that_is_not_loadable/1
 ]).
 
--define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
-
 all() ->
     [
         boot_with_server_and_reloader,
@@ -45,13 +43,13 @@ all() ->
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
-    ok = ensure_dir(?WATCH_DIR),
+    WatchDir = make_watch_dir(Config),
     ok = application:set_env(arizona, server, server_opts()),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
         watcher => arizona_fake_watcher,
         rules => [
-            #{directory => ?WATCH_DIR, patterns => [".*"], callback => fun(_) -> ok end}
+            #{directory => WatchDir, patterns => [".*"], callback => fun(_) -> ok end}
         ]
     }),
     {ok, _} = application:ensure_all_started(arizona),
@@ -78,31 +76,31 @@ init_per_testcase(prep_stop_stops_listener_before_tree, Config) ->
 %% The two boot-log tests start the app in the test body, AFTER installing the
 %% log capture handler -- the line under test fires in arizona_sup:init/1.
 init_per_testcase(boot_logs_reloader_enabled, Config) ->
-    ok = ensure_dir(?WATCH_DIR),
+    WatchDir = make_watch_dir(Config),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
         watcher => arizona_fake_watcher,
         rules => [
-            #{directory => ?WATCH_DIR, patterns => [".*\\.erl$"], callback => fun(_) -> ok end}
+            #{directory => WatchDir, patterns => [".*\\.erl$"], callback => fun(_) -> ok end}
         ]
     }),
     Config;
 init_per_testcase(boot_logs_reloader_disabled, Config) ->
     Config;
 init_per_testcase(crash_looping_watcher_spares_app, Config) ->
-    ok = ensure_dir(?WATCH_DIR),
+    WatchDir = make_watch_dir(Config),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
         watcher => {arizona_fake_watcher, #{notify => self(), link => true}},
-        rules => [#{directory => ?WATCH_DIR, callback => fun(_) -> ok end}]
+        rules => [#{directory => WatchDir, callback => fun(_) -> ok end}]
     }),
     {ok, _} = application:ensure_all_started(arizona),
     Config;
 init_per_testcase(boot_fails_on_rules_without_watcher, Config) ->
-    ok = ensure_dir(?WATCH_DIR),
+    WatchDir = make_watch_dir(Config),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
-        rules => [#{directory => ?WATCH_DIR, callback => fun(_) -> ok end}]
+        rules => [#{directory => WatchDir, callback => fun(_) -> ok end}]
     }),
     Config;
 init_per_testcase(TC, Config) when
@@ -119,12 +117,12 @@ init_per_testcase(TC, Config) when
     {ok, _} = application:ensure_all_started(arizona),
     [{registered, Registered} | Config];
 init_per_testcase(boot_with_only_reloader, Config) ->
-    ok = ensure_dir(?WATCH_DIR),
+    WatchDir = make_watch_dir(Config),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
         watcher => arizona_fake_watcher,
         rules => [
-            #{directory => ?WATCH_DIR, patterns => [".*"], callback => fun(_) -> ok end}
+            #{directory => WatchDir, patterns => [".*"], callback => fun(_) -> ok end}
         ]
     }),
     {ok, _} = application:ensure_all_started(arizona),
@@ -132,7 +130,7 @@ init_per_testcase(boot_with_only_reloader, Config) ->
 
 end_per_testcase(boot_fails_on_rules_without_watcher, Config) ->
     ok = unset_env(reloader),
-    ok = remove_dir(?WATCH_DIR),
+    ok = remove_dir(watch_dir(Config)),
     Config;
 end_per_testcase(TC, Config) when
     TC =:= server_adapter_runs_the_listener_lifecycle;
@@ -155,7 +153,7 @@ end_per_testcase(_TC, Config) ->
     ok = application:stop(arizona),
     ok = unset_env(server),
     ok = unset_env(reloader),
-    ok = remove_dir(?WATCH_DIR),
+    ok = remove_dir(watch_dir(Config)),
     Config.
 
 %% ============================================================================
@@ -279,7 +277,7 @@ boot_logs_reloader_enabled(Config) when is_list(Config) ->
     ?assertEqual(info, Level),
     ?assertMatch({_, _}, binary:match(Text, ~"hot reload enabled")),
     ?assertMatch({_, _}, binary:match(Text, ~"arizona_fake_watcher")),
-    ?assertMatch({_, _}, binary:match(Text, list_to_binary(?WATCH_DIR))),
+    ?assertMatch({_, _}, binary:match(Text, list_to_binary(watch_dir(Config)))),
     ?assertMatch({_, _}, binary:match(Text, ~".erl")).
 
 %% Disabled logs at `notice` -- visible under OTP's default primary level
@@ -386,11 +384,16 @@ server_opts() ->
 unset_env(Key) ->
     application:unset_env(arizona, Key).
 
-ensure_dir(Dir) ->
-    case file:make_dir(Dir) of
-        ok -> ok;
-        {error, eexist} -> ok
-    end.
+%% Under the run's priv_dir, never a fixed /tmp path: two CI runs on one host
+%% (parallel worktrees) would otherwise remove each other's directory between
+%% its creation and the watcher's start.
+make_watch_dir(Config) ->
+    Dir = watch_dir(Config),
+    ok = file:make_dir(Dir),
+    Dir.
+
+watch_dir(Config) ->
+    filename:join(proplists:get_value(priv_dir, Config), "watch").
 
 remove_dir(Dir) ->
     case file:del_dir_r(Dir) of

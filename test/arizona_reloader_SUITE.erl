@@ -211,7 +211,7 @@ init_per_testcase(TC, Config) ->
             Config;
         false ->
             arizona_reloader:clear_error(),
-            Dir = make_tmp_dir(TC),
+            Dir = make_tmp_dir(TC, Config),
             [{tmp_dir, Dir} | Config]
     end.
 
@@ -884,11 +884,10 @@ assert_no_messages() ->
         Msgs -> ct:fail({unexpected_messages, Msgs})
     end.
 
-make_tmp_dir(TC) ->
-    Name =
-        "arizona_reloader_ct_" ++ atom_to_list(TC) ++ "_" ++
-            integer_to_list(erlang:unique_integer([positive])),
-    Dir = filename:join("/tmp", Name),
+%% Under the run's priv_dir: a unique_integer is unique per node only, and two
+%% fresh CT nodes (parallel worktrees) hand out the same ones.
+make_tmp_dir(TC, Config) ->
+    Dir = filename:join(proplists:get_value(priv_dir, Config), atom_to_list(TC)),
     ok = file:make_dir(Dir),
     Dir.
 
