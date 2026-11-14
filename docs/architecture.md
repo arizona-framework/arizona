@@ -2053,9 +2053,10 @@ a round trip after the socket opens, so without the embedded set a click or an H
 `az-submit` in between would find no proof.
 
 Where it goes is read from the document's **end** only: `arizona_html:static_document/2` walks
-the rendered iolist from the right for its last 64 bytes, copying only the spines of the lists on the path to them, and
-when they are `</body>` followed by nothing but whitespace and at most one `</html>` (ASCII
-case-insensitive), inserts the script before that `</body>`, so the document stays valid HTML.
+the rendered iolist from the right for its last 64 bytes, copying only the spines of the lists
+on the path to them, and when they are `</body>` followed by nothing but whitespace and at
+most one `</html>` (ASCII case-insensitive), inserts the script before that `</body>`, so the
+document stays valid HTML.
 Any other ending -- a fragment (a page with no layout), a comment or other content after
 `</body>`, whitespace past the 64 bytes -- gets the script appended after the document, where the
 HTML parser's "after body" recovery still makes it the body's last element. The page is neither

@@ -317,11 +317,12 @@ static_document(Doc, Names) ->
     %% The body's last child when the document ends with `</body>` (then optional
     %% whitespace and `</html>`): inserted before that close tag, so the document
     %% stays valid HTML. Only the document's last bytes are read, from the right of
-    %% the iolist, and only the spines of the lists on the path to them are copied: the page is neither
-    %% flattened nor searched, so a `</body>` before the end -- text, a comment, a
-    %% raw-text element, a data island -- is never read, and escaped content cannot
-    %% produce the one at the end. Any other ending (a fragment, content after
-    %% `</body>`) gets the embed after the document, which the HTML parser moves
+    %% the iolist, and only the spines of the lists on the path to them are
+    %% copied: the page is neither flattened nor searched, so a `</body>` before
+    %% the end -- text, a comment, a raw-text element, a data island -- is never
+    %% read, and escaped content cannot produce the one at the end. Any other
+    %% ending (a fragment, content after `</body>`) gets the embed after the
+    %% document, which the HTML parser moves
     %% into the body as its last element. Either way it is the document's last JSON
     %% script, which is how the client tells it from an element that merely shares
     %% its id. `<` is escaped so no name can close the script element.
