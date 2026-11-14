@@ -42,6 +42,7 @@ identical to the previous inlined emission.
 -export([controlled/2]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
+-export([attr_markup/1]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -496,6 +497,12 @@ markup_text(Markup, text) ->
         nomatch -> {text, Text};
         _Tag -> {markup, Text}
     end.
+
+-spec attr_markup(binary()) -> binary().
+%% Input preprocessing rewrites a CR byte (alone or before a LF) into a LF before any
+%% reference is decoded, so only a reference keeps one in the value.
+attr_markup(Text) ->
+    binary:replace(escape(Text), ~"\r", ~"&#13;", [global]).
 
 -spec mark_choices(iodata(), [binary()]) -> iodata().
 %% `Fragment` is what a child the parse transform could not see into rendered under a

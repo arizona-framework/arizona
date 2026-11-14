@@ -478,6 +478,12 @@
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
     local_attr_interp_multi_static/1,
+    local_attr_raw_affix/1,
+    local_attr_raw_affix_beside_static/1,
+    local_attr_raw_affix_live_diff_static/1,
+    local_attr_dynamic_raw_error/1,
+    local_attr_raw_affix_reads_alone/1,
+    local_attr_static_affix_reads_as_page/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -752,6 +758,12 @@ groups() ->
             local_attr_interp_boolean,
             local_attr_interp_numeric,
             local_attr_interp_multi_static,
+            local_attr_raw_affix,
+            local_attr_raw_affix_beside_static,
+            local_attr_raw_affix_live_diff_static,
+            local_attr_dynamic_raw_error,
+            local_attr_raw_affix_reads_alone,
+            local_attr_static_affix_reads_as_page,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -1412,7 +1424,7 @@ assert_parse_error(Source, MatchFun) ->
 decode_local_descriptor(HTML) ->
     [_, Rest] = binary:split(HTML, <<"az-local=\"">>),
     [DescEsc | _] = binary:split(Rest, <<"\"">>),
-    Desc = binary:replace(DescEsc, <<"&quot;">>, <<"\"">>, [global]),
+    {text, Desc} = arizona_html:markup_text(DescEsc, attribute),
     json:decode(Desc).
 
 %% Scope helpers -- account for fingerprint-prefixed az values
@@ -1812,6 +1824,174 @@ local_attr_interp_numeric(Config) when is_list(Config) ->
         decode_local_descriptor(HTML)
     ).
 
+%% A literal `?raw` beside a `?local` is fixed: folded to the text its markup reads as,
+%% it is a static part like any other -- the client's affix, and escaped on the page --
+%% which is what the browser recomposes on `set` and strips on `get`.
+local_attr_raw_affix(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_affix). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{href, [arizona_template:raw(<<\"&#47;u&#47;\">>), "
+        "            arizona_template:local(<<\"id\">>, <<\"1&2\">>), "
+        "            arizona_template:raw(<<\"?a=1&amp;b=2\">>)]}], [<<\"e\">>]}"
+        "    ). "
+    ),
+    Attr = ~"href=\"/u/1&amp;2?a=1&amp;b=2\"",
+    {Live0, _Snap} = arizona_render:render(Mod:render(#{})),
+    Live = iolist_to_binary(Live0),
+    ?assertNotEqual(nomatch, binary:match(Live, Attr), Live),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertNotEqual(nomatch, binary:match(SSR, Attr), SSR),
+    ?assertEqual(
+        #{~"a" => #{~"href" => ~"id"}, ~"ap" => #{~"href" => [~"/u/", ~"?a=1&b=2"]}},
+        decode_local_descriptor(Live)
+    ).
+
+%% Static text and a raw on one side of the local are one affix, the texts they mean
+%% joined.
+local_attr_raw_affix_beside_static(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_static). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'p', [{title, [<<\"a<\">>, arizona_template:raw(<<\"&lt;b\">>), "
+        "            arizona_template:local(k, <<\"c\">>), <<\"&\">>]}], [<<\"x\">>]}"
+        "    ). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertNotEqual(nomatch, binary:match(SSR, ~"title=\"a&lt;&lt;bc&amp;\""), SSR),
+    ?assertEqual(
+        #{~"a" => #{~"title" => ~"k"}, ~"ap" => #{~"title" => [~"a<<b", ~"&"]}},
+        decode_local_descriptor(SSR)
+    ).
+
+%% The attribute stays the client's: a change to the binding its init reads ships
+%% nothing, the raw affix included, and static generation renders the page as SSR
+%% does.
+local_attr_raw_affix_live_diff_static(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_page). "
+        "-export([mount/1, render/1]). "
+        "mount(Bindings) -> "
+        "    {#{id => <<\"p\">>, n => maps:get(n, Bindings, <<\"1\">>)}, #{}}. "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'div', [{id, arizona_template:get(id, Bindings)}], ["
+        "            {'a', [{href, [arizona_template:raw(<<\"&#47;u&#47;\">>), "
+        "                arizona_template:local(n, arizona_template:get(n, Bindings))]}], "
+        "                [<<\"e\">>]}]}"
+        "    ). "
+    ),
+    B0 = #{id => ~"p", n => ~"1"},
+    {HTML0, Snap0} = arizona_render:render(Mod:render(B0)),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML0), ~"href=\"/u/1\"")),
+    {_Ops0, DepsSnap, _V0} = arizona_diff:diff(Mod:render(B0), Snap0, #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        Mod:render(B0#{n => ~"2"}), DepsSnap, #{}, #{n => true}
+    ),
+    ?assertEqual([], Ops),
+    Dir = filename:join(proplists:get_value(priv_dir, Config), "raw_affix"),
+    {[Out], []} = arizona_static:generate(Dir, [{Mod, ~"index.html"}]),
+    {ok, Page} = file:read_file(Out),
+    ?assertNotEqual(nomatch, binary:match(Page, ~"href=\"/u/1\""), Page),
+    ?assertEqual(
+        #{~"a" => #{~"href" => ~"n"}, ~"ap" => #{~"href" => [~"/u/", ~""]}},
+        decode_local_descriptor(Page)
+    ).
+
+%% Each raw affix part means the text its markup reads as on its own, whatever sits
+%% beside it: an open character reference is not completed by the init, the other
+%% side or a sibling raw, and a quote does not end the attribute. The page holds that
+%% text exactly (a CR, which a raw `&#13;` means and the parser would turn into a LF
+%% as a byte, written as a reference), so it reads back as the descriptor's affix.
+local_attr_raw_affix_reads_alone(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, Value, Attr, Affixes}) ->
+            Mod = compile_module(
+                "-module(pt_local_attr_raw_alone_" ++ integer_to_list(N) ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> "
+                    "    arizona_template:target(arizona_html, "
+                    "        {'a', [{title, [" ++ Value ++
+                    "]}], [<<\"e\">>]}"
+                    "    ). "
+            ),
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+            ?assertNotEqual(nomatch, binary:match(SSR, <<"title=\"", Attr/binary, "\"">>), SSR),
+            {Live, _Snap} = arizona_render:render(Mod:render(#{})),
+            ?assertEqual(SSR, iolist_to_binary(Live)),
+            ?assertEqual(
+                #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => Affixes}},
+                decode_local_descriptor(SSR),
+                SSR
+            )
+        end,
+        [
+            {1, "arizona_template:raw(<<\"x&amp\">>), arizona_template:local(id, <<\"1\">>)",
+                ~"x&amp;1", [~"x&", ~""]},
+            {2, "arizona_template:raw(<<\"q&\">>), arizona_template:local(id, <<\"lt;\">>)",
+                ~"q&amp;lt;", [~"q&", ~""]},
+            {3, "arizona_template:raw(<<\"&#4\">>), arizona_template:local(id, <<\"7\">>)",
+                <<4, "7">>, [<<4>>, ~""]},
+            {4,
+                "arizona_template:raw(<<\"&am\">>), arizona_template:local(id, <<>>), "
+                "arizona_template:raw(<<\"p;\">>)", ~"&amp;amp;", [~"&am", ~"p;"]},
+            {5, "arizona_template:raw(<<\"a\\\"b\">>), arizona_template:local(id, <<\"1\">>)",
+                ~"a&quot;b1", [~"a\"b", ~""]},
+            {6,
+                "arizona_template:raw(<<\"&am\">>), arizona_template:raw(<<\"p;\">>), "
+                "arizona_template:local(id, <<\"c\">>)", ~"&amp;amp;c", [~"&amp;", ~""]},
+            {7, "arizona_template:raw(<<\"a&#13;b\">>), arizona_template:local(id, <<\"1\">>)",
+                ~"a&#13;b1", [<<"a\rb">>, ~""]},
+            {8, "<<\"a\\r\">>, arizona_template:local(id, <<\"1\">>)", ~"a&#13;1", [
+                <<"a\r">>, ~""
+            ]}
+        ]
+    ).
+
+%% A static affix is the text the page holds, which is not always what it was written
+%% as: an attribute cannot hold a NUL (a byte reads as U+FFFD, as a `&#0;` does), so
+%% the client's affix is U+FFFD too and a read strips it.
+local_attr_static_affix_reads_as_page(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_static_nul). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {input, [{type, <<\"text\">>}, "
+        "            {value, [<<\"a\", 0>>, arizona_template:local(k, <<\"x\">>)]}]}"
+        "    ). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    [_, Rest] = binary:split(SSR, ~" value=\""),
+    [Value | _] = binary:split(Rest, ~"\""),
+    {text, PageText} = arizona_html:markup_text(Value, attribute),
+    ?assertEqual(<<"a", 16#FFFD/utf8, "x">>, PageText),
+    ?assertEqual(
+        #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [<<"a", 16#FFFD/utf8>>, ~""]}},
+        decode_local_descriptor(SSR),
+        SSR
+    ).
+
+%% A raw the server computes beside a `?local` has no meaning the client can keep:
+%% the client recomposes the attribute from affixes fixed in the page, so a part that
+%% changes on the server is refused like any other dynamic there.
+local_attr_dynamic_raw_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_attr_dyn_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{href, [arizona_template:raw(arizona_template:get(p, Bindings)), "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>)]}], [<<\"e\">>]}"
+        "    ). ",
+        fun(R) -> R =:= local_attr_mixed end
+    ).
+
 %% Several static segments around the local concatenate into one prefix/suffix.
 local_attr_interp_multi_static(Config) when is_list(Config) ->
     Mod = compile_module(
@@ -1842,6 +2022,17 @@ local_in_json_error(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:target(arizona_json, "
         "        {'Text', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= local_unsupported end
+    ),
+    %% An interpolated attribute local is refused the same way, before its fixed text is
+    %% read through callbacks a backend without `?local` does not implement.
+    assert_parse_error(
+        "-module(pt_local_json_interp). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_json, "
+        "        {'Text', [{text, [<<\"a\">>, arizona_template:local(k, <<\"x\">>)]}], []}"
         "    ). ",
         fun(R) -> R =:= local_unsupported end
     ).

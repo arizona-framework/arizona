@@ -1122,8 +1122,22 @@ A content `?local` does **not** have to be the sole child -- an element can hold
 content slots, freely mixed with static text and other dynamic children. An attribute value
 may also **interpolate** one `?local` with static text around it (the statics become a
 prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server-owned
-dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). Interpolation
-is for **string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
+dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). A literal
+`?raw` of literal text is static and may be an affix part: the transform folds it to the
+text its markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
+treats that as static text, which the page holds exactly (the backend's `attr_markup/1`,
+required with `markup_text/2` of a backend supporting `?local`, writes it when escaping
+would not keep it: HTML writes a CR as `&#13;`). Every affix is the text the page reads
+back, so a static NUL, which no attribute can hold, is the U+FFFD the page shows.
+Spliced verbatim, the value beside it could complete an open reference in it (`&amp`
+before `1` reads `&amp1`) or a `"` could end the attribute, and the page would stop
+holding the affix the client composes with on `set` and strips on `get`. A select's
+value is read as the page reads one: its parts joined, then normalized, so a CR ending
+one part and a LF starting the next are one newline (each part alone under `multiple`).
+A raw of a computed value is still `local_attr_mixed`: the affixes ride on the static
+descriptor and the slot never diffs, so a server-side change could never reach the
+attribute the client owns. Interpolation is for
+**string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
 attribute must use a **whole-value** `?local` (`{disabled, ?local(~"d", false)}`, which
 renders `false` → absent / `true` → bare) -- an interpolated value always renders
 `name="value"`, so an interpolated boolean would be `disabled="false"`, i.e. still present.

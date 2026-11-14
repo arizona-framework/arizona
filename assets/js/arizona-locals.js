@@ -156,12 +156,14 @@ function ownPicks(value) {
 
 /**
  * An affix as one text: a select value's static parts arrive as a list (one pick each
- * under `multiple`), any other attribute's as the text itself.
+ * under `multiple`), any other attribute's as the text itself. A select value is read
+ * as the page reads it, so its joined parts are normalized as one input (a CR ending
+ * one part and a LF starting the next are one newline), as the server compares it.
  * @param {string | string[]} a
  * @returns {string}
  */
 function affix(a) {
-    return Array.isArray(a) ? a.join('') : a;
+    return Array.isArray(a) ? attrInput(a.join('')) : a;
 }
 
 /**

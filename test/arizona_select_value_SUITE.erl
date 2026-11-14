@@ -65,6 +65,8 @@ and the select keeps its value for the client to apply after.
     raw_select_value_reads_as_the_page_holds_it/1,
     interpolated_raw_value_reads_as_one_text/1,
     interpolated_local_value_compiles/1,
+    interpolated_local_value_with_raw_part/1,
+    interpolated_local_value_split_newline/1,
     local_value_names_what_the_page_selects/1,
     multiple_local_value_is_a_json_array/1,
     local_value_parts_follow_runtime_multiple/1
@@ -133,7 +135,9 @@ groups() ->
             raw_option_value_reads_as_the_page_holds_it,
             raw_select_value_reads_as_the_page_holds_it,
             interpolated_raw_value_reads_as_one_text,
-            interpolated_local_value_compiles
+            interpolated_local_value_compiles,
+            interpolated_local_value_with_raw_part,
+            interpolated_local_value_split_newline
         ]}
     ].
 
@@ -1384,6 +1388,135 @@ interpolated_local_value_compiles(Config) when is_list(Config) ->
         [
             {"sel_interp_local", "", ~"ac", [~"ac"]},
             {"sel_interp_local_m", "multiple, ", ~"[\"a\",\"c\"]", [~"a", ~"c"]}
+        ]
+    ).
+
+%% A literal `?raw` part beside the `?local` is a static part like any other, read as
+%% the text the page holds: with the local one text, under `multiple` a pick of its
+%% own, and the descriptor hands the client that text.
+interpolated_local_value_with_raw_part(Config) when is_list(Config) ->
+    Literal =
+        "{option, [{value, ~\"a&\"}], [~\"1\"]}, {option, [{value, ~\"c\"}], [~\"2\"]}, "
+        "{option, [{value, ~\"a&c\"}], [~\"3\"]}",
+    Opaque =
+        "{option, [{value, ~\"a&\"}], [~\"1\"]}, "
+        "arizona_template:raw(~\"<option value='c'>2</option><option value='a&amp;c'>3</option>\")",
+    lists:foreach(
+        fun({Mod, Multiple, Children, Value, Picked}) ->
+            M = compile_module(
+                raw_src(
+                    Mod,
+                    [
+                        Multiple,
+                        "{value, [arizona_template:raw(~\"a&amp;\"), "
+                        "arizona_template:local(k, ~\"c\")]}"
+                    ],
+                    Children
+                )
+            ),
+            HTML = ssr_picked(Picked, M, #{}),
+            ?assertEqual(Value, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[~"a&"], []]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [
+            {"sel_raw_local", "", Literal, ~"a&c", [~"a&amp;c"]},
+            {"sel_raw_local_m", "multiple, ", Literal, ~"[\"a&\",\"c\"]", [~"a&amp;", ~"c"]},
+            {"sel_raw_local_o", "", Opaque, ~"a&c", [~"a&amp;c"]},
+            {"sel_raw_local_om", "multiple, ", Opaque, ~"[\"a&\",\"c\"]", [~"a&amp;", ~"c"]}
+        ]
+    ),
+    %% An init known only at render, and `multiple` decided there too.
+    Runtime = compile_module(
+        raw_src(
+            "sel_raw_local_runtime",
+            "{multiple, arizona_template:get(m, Bindings)}, "
+            "{value, [arizona_template:raw(~\"a&amp;\"), "
+            "arizona_template:local(k, arizona_template:get(x, Bindings))]}",
+            Literal
+        )
+    ),
+    One = ssr_picked([~"a&amp;c"], Runtime, #{m => false, x => ~"c"}),
+    ?assertEqual(~"a&c", select_value(One), One),
+    Many = ssr_picked([~"a&amp;", ~"c"], Runtime, #{m => true, x => ~"c"}),
+    ?assertEqual(~"[\"a&\",\"c\"]", select_value(Many), Many),
+    Single = compile_module(
+        raw_src(
+            "sel_raw_local_runtime_init",
+            "{value, [arizona_template:raw(~\"a&amp;\"), "
+            "arizona_template:local(k, arizona_template:get(x, Bindings))]}",
+            Literal
+        )
+    ),
+    Text = ssr_picked([~"a&amp;c"], Single, #{x => ~"c"}),
+    ?assertEqual(~"a&c", select_value(Text), Text),
+    %% Each raw part is its own text, an open reference not completed by its sibling:
+    %% one text `&amp;c` without `multiple`, the picks `&am` and `p;` with it.
+    lists:foreach(
+        fun({Mod, Multiple, Value, Picked}) ->
+            Open = compile_module(
+                raw_src(
+                    Mod,
+                    [
+                        Multiple,
+                        "{value, [arizona_template:raw(~\"&am\"), arizona_template:raw(~\"p;\"), "
+                        "arizona_template:local(k, ~\"c\")]}"
+                    ],
+                    "{option, [{value, ~\"&amp;c\"}], [~\"1\"]}, "
+                    "{option, [{value, ~\"&am\"}], [~\"2\"]}, "
+                    "{option, [{value, ~\"p;\"}], [~\"3\"]}, "
+                    "{option, [{value, ~\"c\"}], [~\"4\"]}"
+                )
+            ),
+            HTML = ssr_picked(Picked, Open, #{}),
+            ?assertEqual(Value, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[~"&am", ~"p;"], []]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [
+            {"sel_raw_open", "", ~"&amp;c", [~"&amp;amp;c"]},
+            {"sel_raw_open_m", "multiple, ", ~"[\"&am\",\"p;\",\"c\"]", [
+                ~"&amp;am", ~"p;", ~"c"
+            ]}
+        ]
+    ).
+
+%% A select's value is compared and rendered as the text the page holds once parsed, so
+%% the parts beside a `?local` are read joined and then normalized, as the page reads
+%% them: a CR ending one part and a LF starting the next are one newline, whether the
+%% CR is a byte or a raw `&#13;`. The descriptor hands the client each part as it is,
+%% and the client normalizes the joined affix the same way.
+interpolated_local_value_split_newline(Config) when is_list(Config) ->
+    Options =
+        "{option, [{value, ~\"zz\"}], [~\"1\"]}, {option, [{value, <<\"a\\nb\">>}], [~\"2\"]}",
+    lists:foreach(
+        fun({Mod, Attrs, Bindings, CR}) ->
+            M = compile_module(raw_src(Mod, Attrs, Options)),
+            HTML = ssr_picked([<<"a\nb">>], M, Bindings),
+            ?assertEqual(<<"a\nb">>, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[CR, <<"\nb">>], []]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [
+            {"sel_split_raw",
+                "{value, [arizona_template:raw(~\"a&#13;\"), <<\"\\nb\">>, "
+                "arizona_template:local(k, <<>>)]}", #{}, <<"a\r">>},
+            {"sel_split_static",
+                "{value, [<<\"a\\r\">>, <<\"\\nb\">>, arizona_template:local(k, <<>>)]}", #{},
+                <<"a\r">>},
+            {"sel_split_runtime",
+                "{multiple, arizona_template:get(m, Bindings)}, "
+                "{value, [arizona_template:raw(~\"a&#13;\"), <<\"\\nb\">>, "
+                "arizona_template:local(k, <<>>)]}", #{m => false}, <<"a\r">>}
         ]
     ).
 

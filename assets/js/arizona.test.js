@@ -4129,6 +4129,76 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'id')).toBe('42');
     });
 
+    // A literal `?raw` affix is folded to the text its markup reads as on its own and
+    // rendered escaped, so an open reference (`x&amp` before `1`) or a quote cannot
+    // change what the page holds: it reads back as the descriptor's affix. The markup
+    // is what the server renders for `[?raw(~"x&amp"), ?local(id, ~"1")]` and
+    // `[?raw(~"a\"b"), ?local(id, ~"1")]`.
+    it.each([
+        [
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;title&quot;:[&quot;x&amp;&quot;,&quot;&quot;]}}" title="x&amp;1">e</a>`,
+            'x&',
+        ],
+        [
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;title&quot;:[&quot;a\\&quot;b&quot;,&quot;&quot;]}}" title="a&quot;b1">e</a>`,
+            'a"b',
+        ],
+    ])('composes and strips a raw affix as the text it reads as (%#)', (html, prefix) => {
+        setupView('v', html);
+        expect(get('v', 'id')).toBe('1');
+        set('v', 'id', 'amp;<2>');
+        const a = document.querySelector('[az="0"]');
+        expect(a.getAttribute('title')).toBe(`${prefix}amp;<2>`);
+        expect(get('v', 'id')).toBe('amp;<2>');
+    });
+
+    // A raw `&#13;` means a CR, which the page keeps as a reference (a CR byte would
+    // parse as a LF): rendered for `[?raw(~"a&#13;b"), ?local(id, ~"1")]`.
+    it('keeps the CR a raw affix means', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;title&quot;:[&quot;a\\rb&quot;,&quot;&quot;]}}" title="a&#13;b1">e</a>`,
+        );
+        const a = document.querySelector('[az="0"]');
+        expect(a.getAttribute('title')).toBe('a\rb1');
+        expect(get('v', 'id')).toBe('1');
+        set('v', 'id', '2');
+        expect(a.getAttribute('title')).toBe('a\rb2');
+        expect(get('v', 'id')).toBe('2');
+    });
+
+    // An attribute cannot hold a NUL, so a static `<<"a", 0>>` affix is the U+FFFD the
+    // page reads: rendered for `{value, [<<"a", 0>>, ?local(k, ~"x")]}` on a text input.
+    it('strips a static affix the page reads as U+FFFD', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;k&quot;},&quot;ap&quot;:{&quot;value&quot;:[&quot;a�&quot;,&quot;&quot;]}}" type="text" value="a�x" />`,
+        );
+        const input = document.querySelector('input');
+        expect(get('v', 'k')).toBe('x');
+        set('v', 'k', 'y');
+        expect(input.value).toBe('a�y');
+        expect(get('v', 'k')).toBe('y');
+    });
+
+    // A select value's parts are read joined, then normalized, as the page reads the
+    // value: a CR ending one part and a LF starting the next are one newline. Rendered
+    // for `{value, [?raw(~"a&#13;"), <<"\nb">>, ?local(k, <<>>)]}`.
+    it('reads a select value affix split across a CR and a LF as one newline', () => {
+        setupView(
+            'v',
+            `<select az="0" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;k&quot;},&quot;ap&quot;:{&quot;value&quot;:[[&quot;a\\r&quot;,&quot;\\nb&quot;],[]]}}" value="a\nb"><option az="1" value="zz">1</option><option az="2" value="a\nb" selected>2</option></select>`,
+        );
+        const select = document.querySelector('select');
+        expect(get('v', 'k')).toBe('');
+        set('v', 'k', 'x');
+        expect(select.getAttribute('value')).toBe('a\nbx');
+        set('v', 'k', '');
+        expect(select.getAttribute('value')).toBe('a\nb');
+        expect(select.value).toBe('a\nb');
+        expect(get('v', 'k')).toBe('');
+    });
+
     it('coerces a non-string value via String() and reads it back', () => {
         setupView(
             'v',

@@ -297,7 +297,8 @@ that child's output), but a live update renders them unmarked, and HTML ignores 
 the value names it -- the value, or under `multiple` the JSON array of values the server renders (and a `?local`
 `set` writes: a list is the picks, `false`/`null` none, any other value one pick, and beside static
 parts those parts stay picks around the local's own; the descriptor's `ap` for a select value holds
-them as lists, `[[before...], [after...]]`, joined into affixes without `multiple`) --
+them as lists, `[[before...], [after...]]`, each part the text the page reads from it, joined
+into affixes without `multiple`) --
 and when the value itself changes (a `SET_ATTR`/`REM_ATTR` `value` on the select, a `?local` `set`)
 the live selection follows too, the user's pick included. Under a `?local` value the server marks
 only the page, so an option a later batch inserts there arrives unmarked and this pass is the only
@@ -321,7 +322,7 @@ option(s) it names, and removing it names none, which leaves a single select on 
 (the HTML default) and a multiple one on none. A select without a `value` is never touched by a
 batch.
 
-A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. `set`/`setAll` on a missing view or key are silent no-ops.
+A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. The `ap` affixes are attribute **text** (what `getAttribute` returns), never markup: a literal `?raw` affix (`&#47;u&#47;`) is folded at compile time to its text (`/u/`), and the page holds exactly that text (a CR as `&#13;`, since a CR byte parses as a LF), so composing with `setAttribute` and stripping a `getAttribute` read need no decoding here. A select value's affixes arrive as lists of parts, each the text the page reads from it; `affix` joins them and normalizes the result with `attrInput`, as the page and the server read a select value (a CR ending one part and a LF starting the next are one newline), while under `multiple` each part is normalized alone as its own pick. `set`/`setAll` on a missing view or key are silent no-ops.
 
 Every item of an `?each` shares the slot **key** (keys are compile-time literals), so a `set` hits all of them; `?local` cannot hold per-item independent client state.
 
