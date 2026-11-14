@@ -509,7 +509,17 @@ compile_not_code_point(Config) when is_list(Config) ->
         contains(arizona_parse_transform:format_error({not_code_point, 55296}), ~"code point")
     ),
     Sized = compile("be_cp_sized", html("{p, [], [<<255:8>>]}")),
-    ?assertMatch(#{}, Sized:render(#{})).
+    ?assertMatch(#{}, Sized:render(#{})),
+    %% A binary built from a value does not fold: Erlang builds it at runtime, and a
+    %% bare integer segment there is a byte, as in any Erlang code.
+    Built = compile(
+        "be_cp_built",
+        html(
+            "{p, [{title, <<(arizona_template:get(x, Bindings))/binary, -1>>}], "
+            "[<<(arizona_template:get(x, Bindings))/binary, 256>>]}"
+        )
+    ),
+    ?assertMatch(#{}, Built:render(#{x => ~"a"})).
 
 %% The message quotes the tag as written, an atom as an atom, and bytes that are not
 %% UTF-8 as bytes.

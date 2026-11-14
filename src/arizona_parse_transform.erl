@@ -1296,14 +1296,15 @@ format_error({tag_not_text, Tag}) ->
     );
 format_error(tag_not_literal_text) ->
     "this binary tag is not literal text: its segments lay out bytes (a size, a type, "
-    "an operator, a bitstring) instead of spelling characters, and a tag is a name. "
+    "an operator, a bitstring, or an expression that is not a literal) instead of "
+    "spelling characters, and a tag is a name. "
     "Write the tag as text: an atom, ~\"...\" or <<\"...\">>";
 format_error({not_code_point, N}) ->
     lists:flatten(
         io_lib:format(
             "the binary segment ~w is not a Unicode code point (a surrogate, a negative "
-            "number, or past 16#10FFFF): a template reads an integer segment of a binary "
-            "literal as the character it names, and this one names none. Write the "
+            "number, or past 16#10FFFF): a template reads an integer segment of a literal "
+            "binary that folds as the character it names, and this one names none. Write the "
             "character you mean; for raw bytes give the segment a size, e.g. <<255:8>>",
             [N]
         )
@@ -6860,8 +6861,11 @@ is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, default})
     true;
 is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, [utf8]}) ->
     true;
-%% An integer or `$x` segment folds as the code point it names; one that names none
-%% (a surrogate, past U+10FFFF) is the byte layout Erlang gives it, at runtime.
+%% An integer or `$x` segment folds as the code point it names. A literal binary
+%% holding one that names none (a surrogate, past U+10FFFF) is refused where it is a
+%% tag, an attribute name or value, or content (assert_code_points/1); anywhere else
+%% (a `?local` init, an `az_key`) it does not fold, and Erlang builds its bytes at
+%% runtime.
 is_foldable_bin_element({bin_element, _, {Kind, _, N}, default, Type}) when
     (Kind =:= integer orelse Kind =:= char) andalso (Type =:= default orelse Type =:= [utf8])
 ->
@@ -6871,12 +6875,16 @@ is_foldable_bin_element(_) ->
 
 is_code_point(N) -> N >= 0 andalso N =< 16#10FFFF andalso not (N >= 16#D800 andalso N =< 16#DFFF).
 
-%% A template reads an integer or `$x` segment of a binary literal as the character it
-%% names, so one that names none (a surrogate, a negative number, past U+10FFFF) in a
-%% tag, an attribute name or value, or content is a mistake, not a byte to render.
-%% A segment with a size (`<<255:8>>`) lays out bytes and is not checked.
+%% A template reads an integer or `$x` segment of a literal binary that folds as the
+%% character it names, so one that names none (a surrogate, a negative number, past
+%% U+10FFFF) in a tag, an attribute name or value, or content is a mistake, not a byte
+%% to render. A binary with any other segment (a size, a type, a value read at
+%% runtime) does not fold: Erlang builds it, and a bare integer there is a byte.
 assert_code_points({bin, _, Elements}) ->
-    lists:foreach(fun assert_code_point/1, Elements);
+    case lists:all(fun is_fold_shaped/1, Elements) of
+        true -> lists:foreach(fun assert_code_point/1, Elements);
+        false -> ok
+    end;
 assert_code_points({cons, _, Head, Tail}) ->
     ok = assert_code_points(Head),
     assert_code_points(Tail);
@@ -6897,6 +6905,13 @@ assert_code_point({bin_element, Line, Value, default, Type}) when
     end;
 assert_code_point(_Sized) ->
     ok.
+
+%% A segment written as a binary that folds is: text or a code point literal, with no
+%% size and a default or /utf8 type.
+is_fold_shaped({bin_element, _, Value, default, Type}) when Type =:= default; Type =:= [utf8] ->
+    element(1, Value) =:= string orelse code_point_literal(Value) =/= error;
+is_fold_shaped(_Element) ->
+    false.
 
 code_point_literal({integer, _, N}) -> {ok, N};
 code_point_literal({char, _, N}) -> {ok, N};
