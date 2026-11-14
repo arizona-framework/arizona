@@ -66,6 +66,38 @@ describe('static client (no server)', () => {
         expect(document.getElementById('panel')?.hidden).toBe(true);
     });
 
+    // No server owns a control here, so what the user types into one marked
+    // server-owned stays when focus leaves it.
+    it('keeps what the user types into a server-owned control', async () => {
+        const { start } = await fresh();
+        document.body.innerHTML =
+            '<div id="v" az-view az="0"><input id="q" az="1" value="5" az-ctl="value"></div>' +
+            embed([]);
+        stop = start();
+        const q = /** @type {HTMLInputElement} */ (document.querySelector('#q'));
+        q.focus();
+        q.value = '999';
+        q.dispatchEvent(new Event('input', { bubbles: true }));
+        q.blur();
+        expect(q.value).toBe('999');
+    });
+
+    // Nothing holds a write here, so a set_attr reaches what the control shows.
+    it('writes a control a set_attr command names, typed into or not', async () => {
+        const { start } = await fresh();
+        document.body.innerHTML =
+            '<div id="v" az-view az="0"><input id="q" az="1" value="5" az-ctl="value">' +
+            `<button id="b" az-dblclick='${attr([7, '#q', 'value', ''])}'>clear</button></div>` +
+            embed(['az-dblclick']);
+        stop = start();
+        const q = /** @type {HTMLInputElement} */ (document.querySelector('#q'));
+        q.focus();
+        q.value = 'typed';
+        q.dispatchEvent(new Event('input', { bubbles: true }));
+        dblclick('#b');
+        expect(q.value).toBe('');
+    });
+
     it('switches a ?local tab in the browser', async () => {
         const { start, get } = await fresh();
         document.body.innerHTML =
