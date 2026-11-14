@@ -2,6 +2,8 @@
 -include_lib("stdlib/include/assert.hrl").
 %% Feeds generate/2 a spec whose Opts violates opts() on purpose.
 -dialyzer({nowarn_function, collects_non_map_spec_opts/1}).
+%% Hands static_document/2 an improper iolist on purpose, a shape iodata allows.
+-dialyzer({nowarn_function, html_embed_reads_the_end_of_any_iolist/1}).
 
 -export([all/0]).
 -export([groups/0]).
@@ -24,9 +26,19 @@
 -export([page_without_events_embeds_no_attrs/1]).
 -export([page_without_body_gets_the_names_after_it/1]).
 -export([html_embed_never_searches_the_document/1]).
+-export([html_embed_reads_the_end_of_any_iolist/1]).
+-export([layout_dropping_or_repeating_the_page/1]).
 -export([target_decides_how_a_document_carries_names/1]).
 -export([target_without_static_document_embeds_nothing/1]).
 -export([leaves_the_collector_disarmed/1]).
+-export([names_are_the_bodys_last_child/1]).
+-export([body_close_in_content_does_not_move_the_names/1]).
+-export([content_after_the_body_gets_the_names_after_it/1]).
+-export([names_go_before_the_last_of_two_bodies/1]).
+-export([nested_layouts_put_the_names_in_the_outermost_body/1]).
+-export([body_from_a_helper_a_component_or_nodiff/1]).
+-export([document_not_ending_in_body_gets_names_after/1]).
+-export([page_rendering_its_own_body/1]).
 
 all() ->
     [{group, generate}].
@@ -52,9 +64,19 @@ groups() ->
             page_without_events_embeds_no_attrs,
             page_without_body_gets_the_names_after_it,
             html_embed_never_searches_the_document,
+            html_embed_reads_the_end_of_any_iolist,
+            layout_dropping_or_repeating_the_page,
             target_decides_how_a_document_carries_names,
             target_without_static_document_embeds_nothing,
-            leaves_the_collector_disarmed
+            leaves_the_collector_disarmed,
+            names_are_the_bodys_last_child,
+            body_close_in_content_does_not_move_the_names,
+            content_after_the_body_gets_the_names_after_it,
+            names_go_before_the_last_of_two_bodies,
+            nested_layouts_put_the_names_in_the_outermost_body,
+            body_from_a_helper_a_component_or_nodiff,
+            document_not_ending_in_body_gets_names_after,
+            page_rendering_its_own_body
         ]}
     ].
 
@@ -222,14 +244,11 @@ collects_non_map_spec_opts(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 %% The static client delegates exactly the names the page carries: a counter's
-%% `az-click` is proven by the compiler and lands after the document, where the
-%% HTML parser moves it into the body as its last element.
+%% `az-click` is proven by the compiler and lands as the body's last child.
 embeds_compile_time_proven_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "proven_compile", arizona_counter),
     ?assertEqual([~"az-click"], embedded_attrs(Content)),
-    {Script, _} = binary:match(Content, ~"<script type=\"application/json\" id=\"arizona-attrs\">"),
-    {Html, _} = binary:match(Content, ~"</html>"),
-    ?assert(Html < Script).
+    ?assert(ends_with(Content, <<(embed(~"[\"az-click\"]"))/binary, "</body></html>">>)).
 
 %% A command built at render time is invisible to the compiler: only the armed
 %% collector proves `az-dblclick`.
@@ -254,22 +273,69 @@ page_without_body_gets_the_names_after_it(Config) when is_list(Config) ->
     ?assertMatch(<<Page:(byte_size(Page))/binary, "<script", _/binary>>, Content),
     ?assertEqual([~"az-click"], embedded_attrs(Content)).
 
-%% How a document carries the names is its target's: HTML appends a script after
-%% the document; a JSON document is one value, left whole.
+%% How a document carries the names is its target's: HTML puts a script before
+%% the `</body>` that ends the document, else after the document; a JSON document
+%% is one value, left whole.
 target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
     Names = [~"az-click"],
-    Html = iolist_to_binary(
-        arizona_html:static_document(~"<html><body><p>x</p></body></html>", Names)
+    Script = embed(~"[\"az-click\"]"),
+    Html = fun(Doc) -> iolist_to_binary(arizona_html:static_document(Doc, Names)) end,
+    ?assertEqual(
+        <<"<html><body><p>x</p>", Script/binary, "</body></html>">>,
+        Html(~"<html><body><p>x</p></body></html>")
+    ),
+    %% Case and whitespace after `</body>` as the parser reads them.
+    ?assertEqual(
+        <<"<HTML><BODY><p>x</p>", Script/binary, "</BODY>\n</HTML>\n">>,
+        Html(~"<HTML><BODY><p>x</p></BODY>\n</HTML>\n")
     ),
     ?assertEqual(
-        iolist_to_binary([
-            ~"<html><body><p>x</p></body></html>",
-            ~"<script type=\"application/json\" id=\"arizona-attrs\">[\"az-click\"]</script>"
-        ]),
-        Html
+        <<"<body><p>x</p>", Script/binary, "</Body> \t\r\n">>,
+        Html(~"<body><p>x</p></Body> \t\r\n")
     ),
+    %% No `</body>` at the end: a fragment, or content after it.
+    ?assertEqual(<<"<p>x</p>", Script/binary>>, Html(~"<p>x</p>")),
+    ?assertEqual(
+        <<"<body><p>x</p></body><!-- c --></html>", Script/binary>>,
+        Html(~"<body><p>x</p></body><!-- c --></html>")
+    ),
+    ?assertEqual(
+        <<"<body></body></html></html>", Script/binary>>,
+        Html(~"<body></body></html></html>")
+    ),
+    ?assertEqual(<<"<body></body x>", Script/binary>>, Html(~"<body></body x>")),
     Json = ~"{\"type\":\"Text\",\"children\":[\"</body>\"]}",
     ?assertEqual(Json, iolist_to_binary(arizona_json:static_document(Json, Names))).
+
+%% The end of the document is read from the right of the iolist, whatever its
+%% shape: `</body></html>` split across leaves, nested lists, a byte, an improper
+%% tail, a document shorter than the window, and a page longer than it.
+html_embed_reads_the_end_of_any_iolist(Config) when is_list(Config) ->
+    Script = embed(~"[]"),
+    Html = fun(Doc) -> iolist_to_binary(arizona_html:static_document(Doc, [])) end,
+    Expected = <<"<body><p>x</p>", Script/binary, "</body></html>">>,
+    [
+        ?assertEqual(Expected, Html(Doc))
+     || Doc <- [
+            [~"<body><p>x</p></bo", ~"dy></ht", ~"ml>"],
+            [[~"<body>", [~"<p>x</p><", [$/, ~"body>"]]], [], [[~"</html", $>]]],
+            [~"<body><p>x</p></body></ht" | ~"ml>"],
+            [~"<body><p>x</p>", [], ~"</body>", [[]], ~"</html>", []]
+        ]
+    ],
+    Long = binary:copy(~"<p>x</p>", 1000),
+    ?assertEqual(
+        <<"<body>", Long/binary, Script/binary, "</body>">>,
+        Html([~"<body>", Long, ~"</", ~"body>"])
+    ),
+    ?assertEqual(Script, Html(<<>>)),
+    ?assertEqual(<<Script/binary, "</body>">>, Html("</body>")),
+    %% Whitespace past the window: the `</body>` is not at the end it reads.
+    Spaces = binary:copy(~" ", 64),
+    ?assertEqual(
+        <<"<body></body>", Spaces/binary, Script/binary>>,
+        Html([~"<body></body>", Spaces])
+    ).
 
 %% `static_document/2` is optional: a target without it has no client script to
 %% read the names, so its page is written exactly as rendered.
@@ -280,20 +346,19 @@ target_without_static_document_embeds_nothing(Config) when is_list(Config) ->
     Page = iolist_to_binary(arizona_render:render_view_to_iolist(Mod, #{})),
     ?assertEqual(Page, read(Out)).
 
-%% The HTML embed never reads the document: a `</BODY>` the parser takes as
-%% `</body>` still gets the names, and a data island holding the text `</body>`
-%% in a layout with no real one is never cut into.
+%% Only the end of the document is read: a `</body>` anywhere before it -- text,
+%% a data island -- is never cut into.
 html_embed_never_searches_the_document(Config) when is_list(Config) ->
-    Script = ~"<script type=\"application/json\" id=\"arizona-attrs\">[\"az-click\"]</script>",
-    Upper = ~"<HTML><BODY><p>x</p></BODY></HTML>",
-    ?assertEqual(
-        <<Upper/binary, Script/binary>>,
-        iolist_to_binary(arizona_html:static_document(Upper, [~"az-click"]))
-    ),
+    Script = embed(~"[\"az-click\"]"),
     Island = ~"<main></main><script type=\"application/json\">{\"s\":\"</body>\"}</script>",
     ?assertEqual(
         <<Island/binary, Script/binary>>,
         iolist_to_binary(arizona_html:static_document(Island, [~"az-click"]))
+    ),
+    Mid = ~"<body><p></body></p><p>x</p></body></html>",
+    ?assertEqual(
+        <<"<body><p></body></p><p>x</p>", Script/binary, "</body></html>">>,
+        iolist_to_binary(arizona_html:static_document(Mid, [~"az-click"]))
     ).
 
 %% The collector is armed for each page's render only, so the caller's process is
@@ -302,6 +367,133 @@ leaves_the_collector_disarmed(Config) when is_list(Config) ->
     _Content = generate_with_layout(Config, "disarmed", arizona_counter),
     ok = arizona_event_attrs:observe_attr(~"az-later"),
     ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+%% The embed is the body's last child, in a valid document: no parse-error
+%% recovery places it.
+names_are_the_bodys_last_child(Config) when is_list(Config) ->
+    Content = generate_in(Config, "last_child", arizona_counter, [
+        {arizona_doc_tail_layout, plain}
+    ]),
+    ?assertMatch(<<"<!DOCTYPE html><html><head></head><body>", _/binary>>, Content),
+    ?assert(ends_with(Content, <<"</div>", (embed(~"[\"az-click\"]"))/binary, "</body></html>">>)),
+    ?assertEqual(1, embed_count(Content)).
+
+%% `</body>` in text, a comment, a raw-text or RCDATA element or `?raw` markup
+%% before the end is never read: only the document's last bytes are.
+body_close_in_content_does_not_move_the_names(Config) when is_list(Config) ->
+    Content = generate_in(Config, "decoys", arizona_counter, [{arizona_doc_tail_layout, decoys}]),
+    ?assert(ends_with(Content, <<"</div>", (embed(~"[\"az-click\"]"))/binary, "</body></html>">>)),
+    ?assertEqual(1, embed_count(Content)).
+
+%% Content after `</body>` is placed after the embed by the parser, so the embed
+%% goes after the whole document instead and stays the last one -- even when that
+%% content is a forged embed.
+content_after_the_body_gets_the_names_after_it(Config) when is_list(Config) ->
+    Content = generate_in(Config, "after_body", arizona_counter, [
+        {arizona_doc_tail_layout, after_body}
+    ]),
+    ?assert(ends_with(Content, <<"[]</script></html>", (embed(~"[\"az-click\"]"))/binary>>)),
+    ?assertEqual([~"az-click"], last_embedded_attrs(Content)).
+
+%% A second body's content reaches the parser's body after the first one closes,
+%% and the `</body>` ending the document is still the one the names go before:
+%% nothing follows them.
+names_go_before_the_last_of_two_bodies(Config) when is_list(Config) ->
+    Content = generate_in(Config, "two_bodies", arizona_counter, [
+        {arizona_doc_tail_layout, two_bodies}
+    ]),
+    ?assert(
+        ends_with(
+            Content, <<"<body>second", (embed(~"[\"az-click\"]"))/binary, "</body></html>">>
+        )
+    ),
+    ?assertEqual(1, embed_count(Content)).
+
+%% The outermost layout's `</body>` ends the document; an inner layout's own body
+%% is not read.
+nested_layouts_put_the_names_in_the_outermost_body(Config) when is_list(Config) ->
+    Script = embed(~"[\"az-click\"]"),
+    Section = generate_in(Config, "nested_section", arizona_counter, [
+        {arizona_doc_tail_layout, plain}, {arizona_doc_tail_layout, section}
+    ]),
+    ?assert(ends_with(Section, <<"</div></section>", Script/binary, "</body></html>">>)),
+    Inner = generate_in(Config, "nested_body", arizona_counter, [
+        {arizona_doc_tail_layout, plain}, {arizona_doc_tail_layout, inner_body}
+    ]),
+    ?assert(ends_with(Inner, <<"</div></main></body>", Script/binary, "</body></html>">>)),
+    ?assertEqual(1, embed_count(Inner)).
+
+%% However the body was written -- an inlined helper, a `?stateless` component,
+%% an az-nodiff root -- only the bytes it renders are read.
+body_from_a_helper_a_component_or_nodiff(Config) when is_list(Config) ->
+    Script = embed(~"[\"az-click\"]"),
+    [
+        ?assert(
+            ends_with(
+                generate_in(Config, Name, arizona_counter, [Layout]),
+                <<Before/binary, Script/binary, "</body></html>">>
+            )
+        )
+     || {Name, Layout, Before} <- [
+            {"helper_body", {arizona_doc_tail_layout, helper_body}, ~"</div>"},
+            %% The component's page prop is a content slot, so its markers close first.
+            {"stateless_body", {arizona_doc_tail_layout, stateless_body}, ~"</div><!--/az-->"},
+            {"nodiff_body", {arizona_doc_tail_layout, nodiff_body}, ~"</div>"}
+        ]
+    ].
+
+%% A document that does not end with `</body>` gets the names after it, wherever
+%% a `<body>` sits inside it (here in `<svg>`).
+document_not_ending_in_body_gets_names_after(Config) when is_list(Config) ->
+    Content = generate_in(Config, "svg_body", arizona_counter, [
+        {arizona_doc_tail_layout, svg_body}
+    ]),
+    ?assert(ends_with(Content, <<"</div></main>", (embed(~"[\"az-click\"]"))/binary>>)).
+
+%% A page rendering the whole document itself gets the names in its body too.
+page_rendering_its_own_body(Config) when is_list(Config) ->
+    Content = generate_in(Config, "own_body", arizona_doc_tail_page, []),
+    ?assert(
+        ends_with(Content, <<"</button>", (embed(~"[\"az-click\"]"))/binary, "</body></html>">>)
+    ).
+
+%% A layout that drops the page or renders it twice changes nothing: the end of
+%% the document is read, so the names go before the last `</body>` once, or after
+%% a document with none, and the page stays valid UTF-8.
+layout_dropping_or_repeating_the_page(Config) when is_list(Config) ->
+    Script = embed(~"[\"az-click\"]"),
+    Twice = generate_in(Config, "twice", arizona_doc_tail_page, [{arizona_doc_tail_layout, twice}]),
+    ?assert(ends_with(Twice, <<"</button>", Script/binary, "</body></html>">>)),
+    ?assertEqual(1, embed_count(Twice)),
+    ?assertEqual(Twice, unicode:characters_to_binary(Twice)),
+    Ignore = generate_in(Config, "ignore", arizona_doc_tail_page, [
+        {arizona_doc_tail_layout, ignore}
+    ]),
+    ?assertEqual(<<"<p>x</p>", Script/binary>>, Ignore).
+
+generate_in(Config, Name, Handler, Layouts) ->
+    Dir = subdir(Config, Name),
+    {[Out], []} = arizona_static:generate(Dir, [{Handler, ~"index.html", #{layouts => Layouts}}]),
+    read(Out).
+
+embed(Json) ->
+    <<"<script type=\"application/json\" id=\"arizona-attrs\">", Json/binary, "</script>">>.
+
+embed_count(Content) ->
+    length(binary:matches(Content, ~"id=\"arizona-attrs\"")).
+
+last_embedded_attrs(Content) ->
+    {match, Jsons} = re:run(
+        Content,
+        ~"<script type=\"application/json\" id=\"arizona-attrs\">(.*?)</script>",
+        [global, {capture, all_but_first, binary}]
+    ),
+    [Json] = lists:last(Jsons),
+    json:decode(Json).
+
+ends_with(Bin, Suffix) ->
+    Size = byte_size(Bin) - byte_size(Suffix),
+    Size >= 0 andalso binary:part(Bin, Size, byte_size(Suffix)) =:= Suffix.
 
 generate_with_layout(Config, Name, Handler) ->
     Dir = subdir(Config, Name),

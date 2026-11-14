@@ -14,6 +14,8 @@
 -export([render_embeds_the_proven_attrs/1]).
 -export([render_without_static_document_embeds_nothing/1]).
 -export([render_leaves_the_collector_disarmed/1]).
+-export([render_puts_the_names_in_the_body/1]).
+-export([dev_render_puts_the_names_in_the_body/1]).
 -export([error_page_prod_serves_plain_text_500/1]).
 -export([error_page_dev_without_page_serves_plain_text/1]).
 -export([error_page_dev_renders_the_configured_page/1]).
@@ -44,6 +46,7 @@ groups() ->
             render_embeds_the_proven_attrs,
             render_without_static_document_embeds_nothing,
             render_leaves_the_collector_disarmed,
+            render_puts_the_names_in_the_body,
             format_error_names_a_unicode_page
         ]},
         %% Sequential: these toggle the global `arizona_reload_url` persistent_term
@@ -55,7 +58,8 @@ groups() ->
             error_page_without_backend_is_refused,
             error_page_crash_falls_back_to_text,
             error_page_logs_the_crash,
-            error_page_custom_target_type
+            error_page_custom_target_type,
+            dev_render_puts_the_names_in_the_body
         ]}
     ].
 
@@ -148,6 +152,37 @@ render_leaves_the_collector_disarmed(Config) when is_list(Config) ->
     _Page = render_in_layout(arizona_counter),
     ok = arizona_event_attrs:observe_attr(~"az-later"),
     ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+%% The live page's embed is its body's last child -- a layout's body, past
+%% `</body>` text inside it, or a page's own -- so the document is valid HTML.
+render_puts_the_names_in_the_body(Config) when is_list(Config) ->
+    ok = assert_names_in_body().
+
+%% Dev mode renders the page with every value checked, so the document must hold
+%% only what the page rendered: it answers 200 with valid UTF-8.
+dev_render_puts_the_names_in_the_body(Config) when is_list(Config) ->
+    with_dev(fun assert_names_in_body/0).
+
+assert_names_in_body() ->
+    Req = arizona_req_test_adapter:new(#{}),
+    Script = ~"<script type=\"application/json\" id=\"arizona-attrs\">[\"az-click\"]</script>",
+    {ok, 200, _, Decoys, _} = arizona_http:render(arizona_counter, Req, #{
+        layouts => [{arizona_doc_tail_layout, decoys}]
+    }),
+    InLayout = <<"</div>", Script/binary, "</body></html>">>,
+    ?assertEqual(InLayout, suffix(Decoys, byte_size(InLayout))),
+    {ok, 200, _, Own, _} = arizona_http:render(arizona_doc_tail_page, Req, #{}),
+    InPage = <<"</button>", Script/binary, "</body></html>">>,
+    ?assertEqual(InPage, suffix(Own, byte_size(InPage))),
+    [
+        ?assertEqual(iolist_to_binary(Body), unicode:characters_to_binary(Body))
+     || Body <- [Decoys, Own]
+    ],
+    ok.
+
+suffix(IoData, Size) ->
+    Bin = iolist_to_binary(IoData),
+    binary:part(Bin, byte_size(Bin) - Size, Size).
 
 render_in_layout(Handler) ->
     Req = arizona_req_test_adapter:new(#{}),

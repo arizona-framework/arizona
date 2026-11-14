@@ -73,6 +73,8 @@ identical to the previous inlined emission.
 %% Past the first metacharacter, a tail shorter than this has no run long enough
 %% for slicing to pay off, so the plain append loop takes it.
 -define(SHORT_TAIL, 16).
+%% How many of a document's last bytes static_document/2 reads for its `</body>`.
+-define(DOC_END_MAX, 64).
 
 -spec name(arizona_renderer:tag()) -> binary().
 %% An ATOM name is translated `_` -> `-` so `az_click` needs no quoting. A BINARY
@@ -312,15 +314,82 @@ content_context_name(_Other, Parent) ->
 
 -spec static_document(iodata(), [binary()]) -> iodata().
 static_document(Doc, Names) ->
-    %% After the document, not inside it: the HTML parser moves content past
-    %% `</body>`/`</html>` into the body, as its last element, and a fragment's
-    %% content is the body's anyway. So the page is neither flattened nor searched
-    %% (a `</BODY>` or a data island's `</body>` text cannot misplace it), and the
-    %% embed is the document's last JSON script, which is how the client tells it
-    %% from an element that merely shares its id. `<` is escaped so no name can
-    %% close the script element.
+    %% The body's last child when the document ends with `</body>` (then optional
+    %% whitespace and `</html>`): inserted before that close tag, so the document
+    %% stays valid HTML. Only the document's last bytes are read, from the right of
+    %% the iolist, and only the spines of the lists on the path to them are
+    %% copied: the page is neither flattened nor searched, so a `</body>` before
+    %% the end -- text, a comment, a raw-text element, a data island -- is never
+    %% read, and escaped content cannot produce the one at the end. Any other
+    %% ending (a fragment, content after `</body>`) gets the embed after the
+    %% document, which the HTML parser moves
+    %% into the body as its last element. Either way it is the document's last JSON
+    %% script, which is how the client tells it from an element that merely shares
+    %% its id. `<` is escaped so no name can close the script element.
     Json = binary:replace(iolist_to_binary(json:encode(Names)), ~"<", ~"\\u003c", [global]),
-    [Doc, ~"<script type=\"application/json\" id=\"arizona-attrs\">", Json, ~"</script>"].
+    Script = [~"<script type=\"application/json\" id=\"arizona-attrs\">", Json, ~"</script>"],
+    {Head, EndParts, _Left} = last_bytes(Doc, ?DOC_END_MAX),
+    End = iolist_to_binary(EndParts),
+    case body_close(End) of
+        none ->
+            [Doc, Script];
+        Pos ->
+            <<BeforeClose:Pos/binary, Close/binary>> = End,
+            [Head, BeforeClose, Script, Close]
+    end.
+
+%% `{Head, End, Left}`: `End` is the last `N` bytes of `IoData` (all of them when
+%% it is shorter, `Left` saying how many are missing) and `Head` the rest. Walked
+%% from the right; a list is taken apart only as far as those bytes reach.
+last_bytes(Bin, N) when is_binary(Bin) ->
+    case byte_size(Bin) of
+        Size when Size =< N ->
+            {<<>>, [Bin], N - Size};
+        Size ->
+            <<Head:(Size - N)/binary, End/binary>> = Bin,
+            {Head, [End], 0}
+    end;
+last_bytes(Byte, N) when is_integer(Byte) ->
+    {<<>>, [Byte], N - 1};
+last_bytes([], N) ->
+    {[], [], N};
+last_bytes([H | T], N) ->
+    case last_bytes(T, N) of
+        {HeadT, EndT, 0} ->
+            {[H | HeadT], EndT, 0};
+        {_EmptyT, EndT, Left} ->
+            {HeadH, EndH, LeftH} = last_bytes(H, Left),
+            {HeadH, [EndH | EndT], LeftH}
+    end.
+
+%% Where the closing `</body>` starts in `End`, the document's last bytes, when
+%% only whitespace and at most one `</html>` follow it (ASCII case-insensitive, as
+%% the parser reads tags), else `none`.
+body_close(End) ->
+    Trimmed = drop_html(trim_end(ascii_lowercase(End))),
+    Pos = byte_size(Trimmed) - 7,
+    case Trimmed of
+        <<_:Pos/binary, "</body>">> -> Pos;
+        _Other -> none
+    end.
+
+drop_html(Bin) ->
+    Pos = byte_size(Bin) - 7,
+    case Bin of
+        <<Rest:Pos/binary, "</html>">> -> trim_end(Rest);
+        _Other -> Bin
+    end.
+
+trim_end(Bin) ->
+    trim_end(Bin, byte_size(Bin)).
+
+trim_end(_Bin, 0) ->
+    <<>>;
+trim_end(Bin, Size) ->
+    case binary:at(Bin, Size - 1) of
+        C when ?IS_SPACE(C) -> trim_end(Bin, Size - 1);
+        _C -> binary:part(Bin, 0, Size)
+    end.
 
 %% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
 %% transform builds the marker from the id, so the fingerprint is always the

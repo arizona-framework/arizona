@@ -313,6 +313,37 @@ describe('an unproven az-* value is data on a live page', () => {
         expect(w.sent()).toEqual([['v', 'ok', {}]]);
     });
 
+    // The documents the server writes: the embed is the body's last child, inserted
+    // before the `</body>` that ends the document, or appended after a document that
+    // ends otherwise -- whose content after `</body>` the parser places ahead of it.
+    it.each([
+        [
+            'as the body last child',
+            '</div><script type="application/json" id="arizona-attrs">["az-dblclick"]</script></body>\n</html>\n',
+        ],
+        [
+            'after a document whose tail holds content',
+            '</div></body><script type="application/json" id="arizona-attrs">["az-click"]</script></html>' +
+                '<script type="application/json" id="arizona-attrs">["az-dblclick"]</script>',
+        ],
+    ])('reads the embed the server writes %s', async (_shape, tail) => {
+        const mod = await fresh();
+        const parsed = new DOMParser().parseFromString(
+            '<!DOCTYPE html><html><head></head><body><div id="v" az-view>' +
+                `<button id="b" az-click='[0,"evil"]'>x</button>` +
+                `<button id="d" az-dblclick='[0,"ok"]'>y</button>` +
+                `<script type="application/json" id="arizona-attrs">["az-click"]</script>` +
+                tail,
+            'text/html',
+        );
+        document.body.replaceWith(document.adoptNode(parsed.body));
+        w = mockWorker(mod);
+        w.open();
+        document.getElementById('b')?.click();
+        document.getElementById('d')?.dispatchEvent(new Event('dblclick', { bubbles: true }));
+        expect(w.sent()).toEqual([['v', 'ok', {}]]);
+    });
+
     it('reads an embed the parser reaches after connect', async () => {
         const mod = await fresh();
         document.body.innerHTML = `<div id="v" az-view><button id="b" az-click='[0,"inc"]'>+</button></div>`;

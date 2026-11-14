@@ -322,13 +322,14 @@ const ATTRS_ID = 'arizona-attrs';
 /**
  * The names a page embeds for its client before the socket can deliver them
  * (`<script type="application/json" id="arizona-attrs">`, the render target's
- * `static_document/2`, appended after the document, even when empty), or none.
+ * `static_document/2`, the body's last child, even when empty), or none.
  * @returns {string[]}
  */
 function embeddedAttrs() {
     // Not `getElementById`: an id can come from user input, and any earlier element
     // carrying this one would win. Escaped content cannot create a script element,
-    // and the server writes its embed after the page, so the last match is it --
+    // and the server writes its embed last in the document (before the `</body>`
+    // ending it, else after it), so the last match is it --
     // unless untrusted markup spliced through `?raw` (trusted markup) forges one
     // and swallows this one in an unclosed comment or raw-text/RCDATA element.
     const els = document.querySelectorAll(`script[type="application/json"]#${ATTRS_ID}`);
