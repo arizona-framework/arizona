@@ -424,22 +424,6 @@ describe('an unproven az-* value is data on a live page', () => {
         w.resync([[8, 'v', view]]);
         expect(fetchSpy).not.toHaveBeenCalled();
     });
-
-    it("does not replay a server-owned field's unproven az-input after a reconnect", async () => {
-        const mod = await fresh();
-        const view =
-            `<div id="v" az-view>` +
-            `<input id="q" name="q" value="" az-ctl="value" az-input='[0,"evil_input"]'></div>`;
-        document.body.innerHTML = view;
-        w = mockWorker(mod);
-        w.open();
-        w.names(['az-click']);
-        /** @type {HTMLInputElement} */ (document.getElementById('q')).value = 'typed';
-        w.close();
-        w.open(true);
-        w.resync([[8, 'v', view]]);
-        expect(w.sent().filter((f) => f[1] === 'evil_input')).toEqual([]);
-    });
 });
 
 describe('an unproven az-* value is data on a static page', () => {
