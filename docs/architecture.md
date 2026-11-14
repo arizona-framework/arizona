@@ -2886,8 +2886,9 @@ HTML; write the `?each` inside the `<svg>` element for SVG treatment.
 
 A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
 with no call site at compile time, so a `<title>` there is compiled in HTML content
-(`undefined`), classified `escapable`, and its slot comes out markerless. That much is not fixable -- the same child may be used in both contexts, and
-nothing in its own source says which.
+(`undefined`), classified `escapable`, and its slot comes out markerless. That much is not
+fixable -- the same child may be used in both contexts, and nothing in its own source says
+which.
 
 The *update* still lands, though, because the child's own slot in the caller does have markers.
 `make_ops/5` checks whether a markerless slot inside a nested template changed value, and
