@@ -1,8 +1,10 @@
 import {
     executeJS,
     flushTimer,
+    holdSubmit,
+    inGesture,
     maybeResetForm,
-    reserveFetches,
+    newGesture,
     socketNeeds,
 } from './arizona-commands.js';
 import { mountHooks } from './arizona-hooks.js';
@@ -27,6 +29,25 @@ import { warnOnce } from './arizona-util.js';
 export function mountHooksPublic(root) {
     scanEvents(root);
     mountHooks(root);
+}
+
+/**
+ * The last delegated click's gesture, with the node it hit, until the task that
+ * dispatched it ends. A click on a submit button (Enter in a field clicks the
+ * default one) is followed in that task by the form's submit, a separate event of
+ * the same gesture: the submit adopts it, so a fetch the click started does not
+ * make the submit look like a repeat.
+ * @type {{target: Node, g: import('./arizona-commands.js').Gesture}|null}
+ */
+let _clickGesture = null;
+
+/**
+ * The gesture a submit belongs to: the click on its submitter, else its own.
+ * @param {SubmitEvent} e
+ */
+function submitGesture(e) {
+    const c = _clickGesture;
+    return c && e.submitter?.contains(c.target) ? c.g : newGesture();
 }
 
 /**
@@ -77,7 +98,16 @@ function runDelegated(e, attr, sel, capture) {
     // attribute reports once.
     try {
         const cmds = JSON.parse(raw);
-        executeJS(el, e, withTransitionAttr(el, cmds));
+        const g = newGesture();
+        if (e.type === 'click') {
+            const click = { target: t, g };
+            _clickGesture = click;
+            // A task, not a microtask: the submit follows the click's dispatch.
+            setTimeout(() => {
+                if (_clickGesture === click) _clickGesture = null;
+            }, 0);
+        }
+        inGesture(g, () => executeJS(el, e, withTransitionAttr(el, cmds)));
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         // Keyed by the attribute, not the message: a churning bad value would
@@ -491,12 +521,12 @@ export function bindDocumentEvents(target, signal, abort) {
                 // would post it twice, so the repeat is dropped whole (none of its
                 // other commands run, nothing resets). Held from here, not from the
                 // fetch, so a view transition deferring the commands leaves no gap.
-                const unreserve = needs.fetch ? reserveFetches(form, needs.fetch, e) : () => {};
-                if (!unreserve) {
+                const g = submitGesture(/** @type {SubmitEvent} */ (e));
+                if (needs.fetch && !holdSubmit(g, form, needs.fetch)) {
                     dropSubmit(form, 'in_flight');
                     return;
                 }
-                try {
+                inGesture(g, () => {
                     // Flush pending debounced inputs so the server sees them before the
                     // submit. Only while connected: a flush now would send them into a
                     // closed socket, while a still-armed timer can deliver them later.
@@ -513,9 +543,7 @@ export function bindDocumentEvents(target, signal, abort) {
                         for (const el of pending) flushTimer(el);
                     }
                     if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
-                } finally {
-                    unreserve();
-                }
+                });
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 warnOnce(
@@ -583,7 +611,10 @@ export function bindDocumentEvents(target, signal, abort) {
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
             try {
-                executeJS(container, e, withTransitionAttr(container, JSON.parse(raw)));
+                const cmds = JSON.parse(raw);
+                inGesture(newGesture(), () =>
+                    executeJS(container, e, withTransitionAttr(container, cmds)),
+                );
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 warnOnce(`[arizona] az-drop did not run as a command list: ${detail}`, 'az-drop');

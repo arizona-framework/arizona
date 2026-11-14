@@ -37,10 +37,18 @@ export function runTransition(opts, fn) {
         return;
     }
     const types = opts?.types;
-    const vt =
-        types?.length && supportsVTTypes()
-            ? document.startViewTransition({ update: fn, types })
-            : document.startViewTransition(fn);
+    let vt;
+    try {
+        vt =
+            types?.length && supportsVTTypes()
+                ? document.startViewTransition({ update: fn, types })
+                : document.startViewTransition(fn);
+    } catch {
+        // It throws (an InvalidStateError, a hidden document) without calling
+        // `fn`: the change still has to happen, and work waiting on it to run.
+        fn();
+        return;
+    }
     // `ready` rejects when the transition is skipped -- a duplicate
     // view-transition-name, or interruption by a newer transition (rapid nav).
     // The DOM still updates; swallow it so it isn't an unhandled rejection.

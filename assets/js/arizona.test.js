@@ -8164,6 +8164,59 @@ describe('fetch in flight', () => {
         expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/track', '/save']);
     });
 
+    it.each([
+        ['a submit button', 'type="submit"'],
+        // Enter in a field submits through the default button's synthetic click.
+        ['the default button (Enter)', ''],
+    ])('sends both fetches when a click on %s submits its form', async (_label, type) => {
+        await page(
+            `<form id="f" method="post" az-submit='[[22,"/save",{}],[4,"#f","submitted"]]'>
+                <input name="a" value="1" />
+                <button id="b" ${type} az-click='[22,"/autosave",{}]'>Save</button>
+            </form>`,
+        );
+        const form = document.getElementById('f');
+        const dropped = vi.fn();
+        form.addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+        document.getElementById('b').click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/autosave', '/save']);
+        expect(form.classList.contains('submitted')).toBe(true);
+        expect(dropped).not.toHaveBeenCalled();
+        // One gesture: its repeat is dropped until both requests settle.
+        document.getElementById('b').click();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        expect(dropped).toHaveBeenCalledWith({ reason: 'in_flight' });
+        pending[0].resolve(response(200, ''));
+        await new Promise((r) => setTimeout(r, 0));
+        submit('f');
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        pending[1].resolve(response(200, ''));
+        await vi.waitFor(() => {
+            submit('f');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+        });
+    });
+
+    it('runs the commands and releases when startViewTransition throws', async () => {
+        document.startViewTransition = () => {
+            throw new DOMException('busy', 'InvalidStateError');
+        };
+        try {
+            await page(
+                `<form id="f" method="post" az-transition az-submit='[22,"/save",{}]'></form>`,
+            );
+            submit('f');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+            pending[0].resolve(response(200, ''));
+            await vi.waitFor(() => {
+                submit('f');
+                expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+            });
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
     describe('under a deferred view transition', () => {
         /** @type {Function[]} */
         let updates;

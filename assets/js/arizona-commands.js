@@ -309,16 +309,62 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
- * The elements holding a non-GET/HEAD `fetch` a user gesture started that has not
- * settled yet, each with that gesture's event and how many of its requests are out.
- * While one is held, another gesture's fetch on it is dropped: a double click or a
- * second Enter would otherwise post a login or an order twice, and the server cannot
- * tell the repeat from a new request. Dropped rather than queued, since a queued
- * repeat is the duplicate request itself. The same gesture's own fetches all go out
- * (`[fetch(A), fetch(B)]` is two requests the author asked for).
- * @type {WeakMap<Element, {event: Event, n: number}>}
+ * A user gesture (a click, a submit, ...): its commands, the view-transition updates
+ * they defer and the requests they start, counted in `pending`, and the elements it
+ * holds. Its holds are released together once `pending` drops to 0.
+ * @typedef {{pending: number, held: Set<Element>}} Gesture
+ */
+
+/**
+ * The gesture whose commands are running now, if any. A command a server effect, a
+ * response or a replay runs has none, so it holds nothing.
+ * @type {Gesture|null}
+ */
+let _gesture = null;
+
+/**
+ * The elements a gesture's non-GET/HEAD `fetch` holds until its last request has
+ * settled. While one is held, another gesture's fetch on it is dropped: a double
+ * click or a second Enter would otherwise post a login or an order twice, and the
+ * server cannot tell the repeat from a new request. Dropped rather than queued,
+ * since a queued repeat is the duplicate request itself. The same gesture's own
+ * fetches all go out (`[fetch(A), fetch(B)]` is two requests the author asked for).
+ * An element replaced by a re-render is a new element, held by nothing.
+ * @type {WeakMap<Element, Gesture>}
  */
 const _fetchHeld = new WeakMap();
+
+/** @returns {Gesture} */
+export function newGesture() {
+    return { pending: 0, held: new Set() };
+}
+
+/**
+ * Run `fn` as part of gesture `g`.
+ * @param {Gesture} g
+ * @param {() => void} fn
+ */
+export function inGesture(g, fn) {
+    g.pending++;
+    const outer = _gesture;
+    _gesture = g;
+    try {
+        fn();
+    } finally {
+        _gesture = outer;
+        settleGesture(g);
+    }
+}
+
+/**
+ * One piece of `g`'s work is done; the last one releases its holds.
+ * @param {Gesture} g
+ */
+function settleGesture(g) {
+    if (--g.pending > 0) return;
+    for (const h of g.held) if (_fetchHeld.get(h) === g) _fetchHeld.delete(h);
+    g.held.clear();
+}
 
 /**
  * The element a gesture's `fetch` command holds while in flight: the trigger's form
@@ -337,65 +383,29 @@ function fetchHold(el, cmd) {
 }
 
 /**
- * Hold `held` for the gesture `event`, unless another gesture holds it.
- * @param {Element} held
- * @param {Event} event
- * @returns {boolean} whether it is now held for `event`
- */
-function holdFetch(held, event) {
-    const h = _fetchHeld.get(held);
-    if (!h) _fetchHeld.set(held, { event, n: 1 });
-    else if (h.event === event) h.n++;
-    else return false;
-    return true;
-}
-
-/**
- * Let go of one hold on `held`; the element is free once none is left.
- * @param {Element} held
- */
-function releaseFetch(held) {
-    const h = _fetchHeld.get(held);
-    if (h && --h.n === 0) _fetchHeld.delete(held);
-}
-
-/**
- * The gestures whose commands a view transition deferred to its update callback,
- * with the work waiting for them to finish running.
- * @type {WeakMap<Event, {n: number, done: Array<() => void>}>}
- */
-const _deferredRuns = new WeakMap();
-
-/**
- * Hold, for the submit `event`, every element the form's `fetches` will hold, so a
- * repeat submit is dropped whole even while the first one's commands wait in a view
- * transition. Returns null when one is held by another gesture (nothing is held
- * then), else the release, which waits for the gesture's deferred commands: by then
- * every fetch they raised holds on its own.
+ * Hold, for gesture `g`, every element a submit's `fetches` will hold, so a repeat
+ * submit is dropped whole -- none of its commands run -- even while the first one's
+ * commands wait in a view transition. False, holding nothing, when another gesture
+ * holds one.
+ * @param {Gesture} g
  * @param {Element} form
  * @param {Array<*>[]} fetches
- * @param {Event} event
- * @returns {(() => void)|null}
+ * @returns {boolean}
  */
-export function reserveFetches(form, fetches, event) {
-    const held = new Set();
+export function holdSubmit(g, form, fetches) {
+    const held = [];
     for (const c of fetches) {
         const h = fetchHold(form, c);
-        if (h) held.add(h);
+        if (!h) continue;
+        const cur = _fetchHeld.get(h);
+        if (cur && cur !== g) return false;
+        held.push(h);
     }
     for (const h of held) {
-        const cur = _fetchHeld.get(h);
-        if (cur && cur.event !== event) return null;
+        _fetchHeld.set(h, g);
+        g.held.add(h);
     }
-    for (const h of held) holdFetch(h, event);
-    return () => {
-        const release = () => {
-            for (const h of held) releaseFetch(h);
-        };
-        const d = _deferredRuns.get(event);
-        if (d) d.done.push(release);
-        else release();
-    };
+    return true;
 }
 
 /**
@@ -550,16 +560,13 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
                 const later = host.holdReplay();
-                // A submit's reserved fetch holds wait for these commands to run.
-                /** @type {{n: number, done: Array<() => void>}|undefined} */
-                let deferred;
-                if (event) {
-                    deferred = _deferredRuns.get(event) ?? { n: 0, done: [] };
-                    deferred.n++;
-                    _deferredRuns.set(event, deferred);
-                }
+                // The deferred commands are still the gesture's: its holds wait for them.
+                const g = _gesture;
+                if (g) g.pending++;
                 runTransition(opts, () =>
                     later(() => {
+                        const outer = _gesture;
+                        _gesture = g;
                         try {
                             runCommands(el, event, inner, `${prefix}${index}.`);
                         } catch (err) {
@@ -569,10 +576,8 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                                 'az-transition',
                             );
                         } finally {
-                            if (deferred && --deferred.n === 0) {
-                                _deferredRuns.delete(/** @type {Event} */ (event));
-                                for (const done of deferred.done) done();
-                            }
+                            _gesture = outer;
+                            if (g) settleGesture(g);
                         }
                     }),
                 );
@@ -721,11 +726,23 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
-            // Only a gesture holds (a command a server effect or a response runs has
-            // no event): a repeat of one is the double submit.
-            const held = event && el ? fetchHold(el, cmd) : null;
-            if (held && event && !holdFetch(held, event)) break;
-            const release = () => held && releaseFetch(held);
+            // Only a gesture holds: a repeat of one is the double submit.
+            const g = _gesture;
+            const held = g && el ? fetchHold(el, cmd) : null;
+            if (g && held) {
+                const cur = _fetchHeld.get(held);
+                if (cur && cur !== g) break;
+                _fetchHeld.set(held, g);
+                g.held.add(held);
+                g.pending++;
+            }
+            let settled = false;
+            const release = () => {
+                if (g && held && !settled) {
+                    settled = true;
+                    settleGesture(g);
+                }
+            };
             // Every path from the hold to the request releases it: a throw here
             // (fetch() rejecting its init synchronously) would lock the form for good.
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
@@ -764,7 +781,13 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                     );
                 }
                 onError = (/** @type {object} */ detail) => {
-                    if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                    // Still the gesture's, so a retry it posts holds the form again.
+                    const run = () => {
+                        if (opts.on_error)
+                            runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                    };
+                    if (g && held) inGesture(g, run);
+                    else run();
                     document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
                 };
                 req = fetch(target, {
