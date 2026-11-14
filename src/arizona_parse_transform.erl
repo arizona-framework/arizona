@@ -1287,10 +1287,10 @@ format_error({markup_var_in_content_list, Var}) ->
 format_error({tag_not_text, Bytes}) ->
     lists:flatten(
         io_lib:format(
-            "this binary tag lays out the bytes ~w, which are not text: every render "
-            "target writes a tag as UTF-8 text, and a utf16/utf32 type, a size that "
-            "splits a character or a control character makes bytes no target can name "
-            "an element with. Write the tag as text: an atom, ~~\"...\" or <<\"...\">>",
+            "the tag ~0tp is not text: every render target writes a tag as UTF-8 text "
+            "with no control character, and these bytes hold one, or are not UTF-8 (a "
+            "utf16/utf32 type, a size that splits a character). Write the tag as text: "
+            "an atom, ~~\"...\" or <<\"...\">>, of printable characters",
             [Bytes]
         )
     );
@@ -1299,9 +1299,9 @@ format_error(tag_empty) ->
     "client reads as an element. Write the tag as text: an atom, ~\"...\" or "
     "<<\"...\">>";
 format_error(binary_tag_unbuildable) ->
-    "this binary tag cannot be built: its segments fail to construct, as they would at "
-    "runtime (a string typed /binary, a value that does not fit its size). Write the "
-    "tag as text: an atom, ~\"...\" or <<\"...\">>";
+    "this binary tag cannot be built: its literal segments do not construct a binary "
+    "(a string typed /binary, a negative code point typed /utf8). Write the tag as "
+    "text: an atom, ~\"...\" or <<\"...\">>";
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
 format_error(nodiff_call_not_compiled) ->
@@ -4732,52 +4732,49 @@ extract_element(Node, _Backend) ->
 extract_binary_tag_element(TagAST, AttrsAST, ChildrenAST, Node, Backend) ->
     case binary_tag(TagAST) of
         {ok, Tag} -> extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend);
-        {not_text, Bytes} -> parse_error({tag_not_text, Bytes}, anno(Node));
         unbuildable -> parse_error(binary_tag_unbuildable, anno(Node));
         computed -> element_tag_error(TagAST, Node, Backend)
     end.
 
-%% A binary tag that reads no value is a constant, whatever spells it: text that
-%% folds (binary_text/1, which also notes it folded), or segments with sizes or
-%% types, evaluated here to the bytes they lay out. Those bytes must be text, or no
-%% target can write the tag. One that reads a value is chosen at runtime.
+%% A binary tag of literals is a constant, whatever spells it: text that folds
+%% (binary_text/1, which also notes it folded), or segments with sizes, types or
+%% operators on literals, evaluated here to the bytes they lay out. Anything else --
+%% a variable, a call, a send, a receive, a record field -- is code: it must not run
+%% while the module compiles, so the tag is one chosen at runtime.
 binary_tag(TagAST) ->
     case is_static_binary(TagAST) of
         true ->
             {ok, extract_binary_value(TagAST)};
         false ->
-            case reads_value(TagAST) of
-                true -> computed;
-                false -> constant_binary_tag(TagAST)
+            case is_constant(TagAST) of
+                true -> constant_binary_tag(TagAST);
+                false -> computed
             end
     end.
 
-%% Segments the runtime could not build either (a string typed `/binary`) build
-%% no tag.
+%% Literals only, so the evaluation is pure and runs nothing of the module's. A
+%% constant that still fails to build (a string typed `/binary`) builds no tag.
 constant_binary_tag(TagAST) ->
     try erl_eval:expr(TagAST, erl_eval:new_bindings()) of
-        {value, Bytes, _} ->
-            case is_text(Bytes) of
-                true -> {ok, Bytes};
-                false -> {not_text, Bytes}
-            end
+        {value, Bytes, _} -> {ok, Bytes}
     catch
         error:_Unbuildable -> unbuildable
     end.
 
-%% UTF-8 with no C0 control or DEL: a NUL-laden utf16/utf32 layout is valid UTF-8
-%% byte by byte, but not a name.
-is_text(Bytes) ->
-    case unicode:characters_to_list(Bytes) of
-        Chars when is_list(Chars) -> not lists:any(fun(C) -> C < 32 orelse C =:= 127 end, Chars);
-        _NotUtf8 -> false
-    end.
-
-reads_value({var, _, _}) -> true;
-reads_value({call, _, _, _}) -> true;
-reads_value(Node) when is_tuple(Node) -> reads_value(tuple_to_list(Node));
-reads_value(Nodes) when is_list(Nodes) -> lists:any(fun reads_value/1, Nodes);
-reads_value(_Leaf) -> false.
+is_constant({bin, _, Elements}) ->
+    lists:all(fun is_constant/1, Elements);
+is_constant({bin_element, _, Value, Size, _Type}) ->
+    is_constant(Value) andalso (Size =:= default orelse is_constant(Size));
+is_constant({Literal, _, _}) when
+    Literal =:= integer; Literal =:= char; Literal =:= float; Literal =:= string
+->
+    true;
+is_constant({op, _, Op, Operand}) when Op =/= '!' ->
+    is_constant(Operand);
+is_constant({op, _, Op, Left, Right}) when Op =/= '!' ->
+    is_constant(Left) andalso is_constant(Right);
+is_constant(_Code) ->
+    false.
 
 %% The attrs of an element tuple, for a pass that only reads directives ahead of the
 %% compile (prescan_directives/1). A malformed element reads as having none: the
@@ -4805,6 +4802,7 @@ extract_element_parts(Tag, _AttrsAST, _ChildrenAST, Node, _Backend) when
 ->
     parse_error(tag_empty, anno(Node));
 extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend) ->
+    ok = assert_tag_text(tag_bytes(Tag), Node),
     case is_list_ast(AttrsAST) of
         true ->
             {Tag, ast_list_to_list(AttrsAST, Backend), normalize_children(ChildrenAST, Backend),
@@ -4812,6 +4810,22 @@ extract_element_parts(Tag, AttrsAST, ChildrenAST, Node, Backend) ->
         false ->
             parse_error(invalid_element, anno(Node))
     end.
+
+%% A tag is written as UTF-8 text with no C0 control or DEL, however it is spelled: a
+%% NUL-laden utf16/utf32 layout is valid UTF-8 byte by byte, but names no element.
+assert_tag_text(Bytes, Node) ->
+    case unicode:characters_to_list(Bytes) of
+        Chars when is_list(Chars) ->
+            case lists:any(fun(C) -> C < 32 orelse C =:= 127 end, Chars) of
+                true -> parse_error({tag_not_text, Bytes}, anno(Node));
+                false -> ok
+            end;
+        _NotUtf8 ->
+            parse_error({tag_not_text, Bytes}, anno(Node))
+    end.
+
+tag_bytes(Tag) when is_atom(Tag) -> atom_to_binary(Tag);
+tag_bytes(Tag) -> Tag.
 
 %% A computed tag is advised in the target's own elements, so the backend words it.
 -spec element_tag_error(erl_parse:abstract_expr(), erl_parse:abstract_expr(), module()) ->

@@ -36,6 +36,8 @@
 -export([compile_constant_binary_tag/1]).
 -export([compile_binary_tag_not_text/1]).
 -export([compile_empty_tag/1]).
+-export([compile_binary_tag_runs_nothing/1]).
+-export([compile_tag_not_text/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -71,7 +73,9 @@ groups() ->
             compile_computed_binary_tag,
             compile_constant_binary_tag,
             compile_binary_tag_not_text,
-            compile_empty_tag
+            compile_empty_tag,
+            compile_binary_tag_runs_nothing,
+            compile_tag_not_text
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -385,6 +389,63 @@ compile_empty_tag(Config) when is_list(Config) ->
             ?assert(contains(Formatter:format_error(Reason), ~"empty")),
             ?assertEqual(
                 {arizona_parse_transform, tag_empty},
+                compile_error(Name ++ "_json", json("{'Column', [], [{" ++ Tag ++ ", [], []}]}")),
+                Name
+            )
+        end
+     || {Name, Tag} <- Cases
+    ].
+
+%% Only a binary of literals (and operators on them) is a constant the transform
+%% evaluates: a send, a receive or a record field is code, which must not run while
+%% the module compiles, so such a tag is one chosen at runtime.
+compile_binary_tag_runs_nothing(Config) when is_list(Config) ->
+    true = register(be_tag_spy, self()),
+    try
+        Cases = [
+            {"be_tag_send", "<<(be_tag_spy ! 97):8>>", ""},
+            {"be_tag_receive", "<<(receive after 3000 -> 97 end):8>>", ""},
+            {"be_tag_record", "<<\"h\", (#r.b + 46):8>>", "-record(r, {a, b}). "}
+        ],
+        [
+            begin
+                Src =
+                    source(Name, html("{'div', [], [{" ++ Tag ++ ", [], [~\"x\"]}]}")) ++ " " ++
+                        Extra,
+                ?assertEqual(
+                    {arizona_html, computed_element_tag}, compile_error_forms(Src), Name
+                )
+            end
+         || {Name, Tag, Extra} <- Cases
+        ],
+        receive
+            Sent -> ct:fail({ran_at_compile_time, Sent})
+        after 0 -> ok
+        end
+    after
+        true = unregister(be_tag_spy)
+    end.
+
+%% A tag is UTF-8 text with no control character, however it is written.
+compile_tag_not_text(Config) when is_list(Config) ->
+    Cases = [
+        {"be_ctl_sigil", "~\"a\\tb\""},
+        {"be_ctl_bin", "<<\"a\\tb\">>"},
+        {"be_ctl_atom", "'a\\tb'"},
+        {"be_ctl_nul", "<<0>>"},
+        {"be_ctl_sized", "<<\"a\\tb\":8>>"}
+    ],
+    [
+        begin
+            ?assertMatch(
+                {arizona_parse_transform, {tag_not_text, _}},
+                compile_error(
+                    Name ++ "_html", html("{'div', [], [{" ++ Tag ++ ", [], [~\"x\"]}]}")
+                ),
+                Name
+            ),
+            ?assertMatch(
+                {arizona_parse_transform, {tag_not_text, _}},
                 compile_error(Name ++ "_json", json("{'Column', [], [{" ++ Tag ++ ", [], []}]}")),
                 Name
             )
