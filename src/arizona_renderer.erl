@@ -494,10 +494,10 @@ A backend words every reason that can reach it, given its other capability answe
   `nested_nodiff`, `effect_in_content`; at render time: `stream_each_multi_root` and
   `{stateful_in_layout, Layout, Function, Handler}`.
 - `supports_local/0` false: `local_unsupported`.
-- `keyed_item_ops/0` true: `stream_each_keyless` (render time).
+- `supports_keyed_item_ops/0` true: `stream_each_keyless` (render time).
 - A `raw_text_kind/2` other than `none`: `dynamic_in_raw_text`, `local_in_raw_text`,
   `markup_in_raw_text` (compile time) and `{markup_in_raw_text, Element, Value}`
-  (render time, raised by the backend's own `raw_text/4`).
+  (render time, raised by the backend's own `neutralize_raw_text/4`).
 - `selection_role/1`: `{select_value, {option_selected, Tag, Name, Chooser}}`.
 """.
 -callback format_error(Reason :: term()) -> unicode:chardata().

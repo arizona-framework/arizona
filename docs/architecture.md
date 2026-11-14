@@ -275,7 +275,7 @@ other capability answers let reach it: always the `?each` and element-shape advi
 `nodiff_value`, `nested_nodiff`, `effect_in_content`, `stream_each_multi_root` and
 `{stateful_in_layout, Layout, Function, Handler}`; `local_unsupported` when
 `supports_local/0` is `false`; `stream_each_keyless` when
-`keyed_item_ops/0` is `true`; the raw-text family (`dynamic_in_raw_text`,
+`supports_keyed_item_ops/0` is `true`; the raw-text family (`dynamic_in_raw_text`,
 `local_in_raw_text`, `markup_in_raw_text`, `{markup_in_raw_text, Element, Value}`) when a
 tag's `raw_text_kind/2` is not `none`; and `{select_value, {option_selected, Tag, Name,
 Chooser}}` with `selection_role/1`. Errors whose advice needs no element of the target
