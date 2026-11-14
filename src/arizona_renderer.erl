@@ -10,7 +10,7 @@ implementing this behaviour. `arizona_html` emits HTML; other backends emit
 other formats while reusing the same walker, diff engine, and transport.
 """.
 
--doc "Tag or attribute atom -> wire name.".
+-doc "Tag or attribute name (an atom or a binary) -> wire name.".
 -callback name(tag()) -> binary().
 
 -doc "Start of an element's open tag for the given wire tag name.".
@@ -53,7 +53,7 @@ Static prefix emitted before a *dynamic* attribute's value. HTML keeps the name
 in the dynamic (so this is empty); JSON bakes the prop name into the static
 (`,"name":`) so the dynamic carries only the value to stringify.
 """.
--callback attr_dyn_name(Name :: binary()) -> binary().
+-callback attr_dynamic_prefix(Name :: binary()) -> binary().
 
 -doc """
 Separator emitted before each child after the first (HTML needs none; JSON
@@ -73,18 +73,18 @@ between siblings valid.
 -callback text_child(Text :: binary()) -> binary().
 
 -doc """
-The `az` for a dynamic text slot, given the element's `az` and the child slot
-index. HTML reuses the element `az` for slot 0 (the comment marker and the
-element attribute coexist); JSON needs a distinct `az` because every node
-shares one flat registry.
+The `az` for a content slot (any dynamic child of an element), given the
+element's `az` and the child slot index. HTML reuses the element `az` for slot 0
+(the comment marker and the element attribute coexist); JSON needs a distinct
+`az` because every node shares one flat registry.
 """.
--callback text_az(ElemAz :: binary(), Slot :: non_neg_integer()) -> binary().
+-callback content_slot_az(ElemAz :: binary(), Slot :: non_neg_integer()) -> binary().
 
--doc "Open marker for a dynamic text slot with the given `az`.".
--callback text_slot_open(Az :: binary()) -> binary().
+-doc "Open marker for a content slot (any dynamic child) with the given `az`.".
+-callback content_slot_open(Az :: binary()) -> binary().
 
--doc "Close marker for a dynamic text slot.".
--callback text_slot_close() -> binary().
+-doc "Close marker for a content slot (any dynamic child).".
+-callback content_slot_close() -> binary().
 
 -doc "Whether the tag is a void element (no children / self-closing).".
 -callback is_void(Tag :: tag()) -> boolean().
@@ -188,7 +188,7 @@ When `false` (a target whose transport repaints whole frames instead of patching
 addressed nodes), the root compiles like any other template. A backend capability,
 declared by each backend.
 """.
--callback live_root() -> boolean().
+-callback supports_live_root() -> boolean().
 
 -doc """
 The media type of a whole document rendered by this backend, used when a route
@@ -197,9 +197,10 @@ serving one of its views answers an HTTP request.
 -callback content_type() -> binary().
 
 -doc """
-Whether this backend supports the client-owned `?local` slot (a browser/HTML-only
-feature). A backend capability, declared by each backend; the parse transform
-rejects `?local` at compile time when `false`.
+Whether this backend supports the client-owned `?local` slot: one the server
+renders once and the client owns from then on, updating it with no round-trip. A
+backend capability, declared by each backend; the parse transform rejects `?local`
+at compile time when `false`.
 """.
 -callback supports_local() -> boolean().
 
@@ -331,7 +332,7 @@ transform stamps `keyless => true` on a 2-arg `?each` item whose root element ha
 (`stream_each_keyless`). `false` for a backend that redraws whole frames and so never
 addresses an item.
 """.
--callback keyed_item_ops() -> boolean().
+-callback supports_keyed_item_ops() -> boolean().
 
 -doc """
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
@@ -371,13 +372,23 @@ value. The zipped document always uses `escape/1`.
 -callback wire_escape(Value :: binary()) -> binary().
 
 -doc """
-Neutralize a dynamic value spliced into a **raw-text** element (`raw_text_kind/2
-=:= raw` -- HTML `script` and the RAWTEXT elements). Such content is emitted verbatim (the browser
-decodes nothing there), so HTML entity-escaping does not apply, yet a value
-carrying a close-tag sequence (`</script>`) would still break out of the element
-into HTML parsing. The parse transform wraps every raw-text dynamic in this
-callback, so the backend that owns raw-text elements neutralizes the breakout;
-backends without raw-text elements return the value unchanged.
+Make a dynamic value safe to splice into a raw-text element, one whose
+`raw_text_kind/2` is not `none`. Every dynamic content value of such an element
+goes through this callback; a content `?local` there is a compile error
+(`local_in_raw_text`), since raw-text content carries no slot markers. A backend
+without raw-text elements returns the value unchanged. It is called for both kinds:
+
+- `raw` (HTML `script` and the RAWTEXT `style`/`xmp`/`iframe`/`noembed`/`noframes`):
+  the content is emitted verbatim (the browser decodes nothing there), so entity
+  escaping does not apply, yet a value carrying a close-tag sequence (`</script>`)
+  would break out of the element into HTML parsing. Only a `?raw` value reaches it
+  (the transform refuses an unmarked one); the backend splices it with the
+  breakout neutralised.
+- `escapable` (HTML `title`/`textarea`, RCDATA): character references decode
+  there, so a plain value comes marked for escaping and is HTML-escaped, a `?raw`
+  value is spliced with the element's own end tag defused, and a template renders
+  its text when it holds no element and is refused (`markup_in_raw_text`) when it
+  does.
 
 `Tag` is the enclosing element, because the neutralization a value needs is a
 property of *that element's* tokenizer state, not of raw text in general: HTML
@@ -393,8 +404,9 @@ element boundary sits instead. The tokenizer reads static text and value as one
 stream, so a breakout can straddle them -- a static ending in `<` followed by a
 value `/script>` -- and only a backend that sees the neighbours can break it.
 """.
--callback raw_text(Tag :: atom(), Before :: binary(), After :: binary(), Value :: term()) ->
-    term().
+-callback neutralize_raw_text(
+    Tag :: tag(), Before :: binary(), After :: binary(), Value :: term()
+) -> term().
 
 -doc """
 Render a dynamic attribute's evaluated value to this backend's output bytes.
@@ -405,7 +417,7 @@ JSON backend bakes the prop name into the static, so it emits just the value
 as JSON: a string, an effect command's array, or a typed boolean. Escaping is
 governed by the backend (via `escape/1`, through `arizona_template:escape_value/2`,
 so a `?raw` opt-out or effect command is classified out first). A backend that
-rejects dynamic attributes at compile time (`attr_dyn_name/1`) never has this
+rejects dynamic attributes at compile time (`attr_dynamic_prefix/1`) never has this
 callback reached.
 """.
 -callback render_attr(Name :: binary(), Value :: term()) -> binary().
@@ -419,10 +431,11 @@ array.
 -callback wire_attr(Name :: binary(), Value :: term()) -> json:encode_value().
 
 -doc """
-A request-free page render carrying the `az-*` event names proven to hold commands
-(`arizona_event_attrs:embed/2`): a statically generated document (`arizona_static`),
-whose client has no server to ask, and an HTTP-rendered live page, whose client
-must know them before its socket's connect frame delivers the same set. Called
+A request-free page render carrying the `az-*` attribute names (`az-click`, ...)
+proven to hold commands (`arizona_event_attrs:embed/2`): a statically generated
+document (`arizona_static`), whose client has no server to ask, and an
+HTTP-rendered live page, whose client must know them before its socket's connect
+frame delivers the same set. Called
 for every such page, with an empty list too: the client reads the last embed, so
 a page without one would leave it reading an element the page content holds. How
 a document carries them is the target's: HTML embeds them as a JSON script
@@ -434,6 +447,6 @@ connect frame, or `start({attrs})` on a static page). Optional: a target with no
 client script to read them (a terminal) leaves it out, and its document is used
 as rendered.
 """.
--callback embed_attrs(Doc :: iodata(), EventNames :: [binary()]) -> iodata().
+-callback embed_attrs(Doc :: iodata(), AttrNames :: [binary()]) -> iodata().
 
 -optional_callbacks([embed_attrs/2]).

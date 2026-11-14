@@ -33,26 +33,26 @@ the wire value. On the wire itself a value stays raw
 -export([attr/2]).
 -export([attr_bool/2]).
 -export([attr_command/2]).
--export([attr_dyn_name/1]).
+-export([attr_dynamic_prefix/1]).
 -export([children_sep/0]).
 -export([each_items/1]).
 -export([text_child/1]).
--export([text_az/2]).
--export([text_slot_open/1]).
--export([text_slot_close/0]).
+-export([content_slot_az/2]).
+-export([content_slot_open/1]).
+-export([content_slot_close/0]).
 -export([is_void/1]).
 -export([raw_text_kind/2]).
 -export([content_context/2]).
--export([raw_text/4]).
+-export([neutralize_raw_text/4]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
--export([live_root/0]).
+-export([supports_live_root/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
--export([keyed_item_ops/0]).
+-export([supports_keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
@@ -102,8 +102,8 @@ attr_command(Name, Cmd) ->
     %% `[0,"inc"]`), not a string -- the client interprets it directly.
     <<",", (json_str(Name))/binary, ":", (arizona_effect:encode_json(Cmd))/binary>>.
 
--spec attr_dyn_name(binary()) -> binary().
-attr_dyn_name(Name) ->
+-spec attr_dynamic_prefix(binary()) -> binary().
+attr_dynamic_prefix(Name) ->
     %% Bake the prop name into the static; the dynamic supplies just the value
     %% (the client JSON-encodes it like any other dynamic value).
     <<",", (json_str(Name))/binary, ":">>.
@@ -120,15 +120,15 @@ each_items(Items) ->
 text_child(Text) ->
     json_str(Text).
 
--spec text_az(binary(), non_neg_integer()) -> binary().
-text_az(ElemAz, Slot) ->
+-spec content_slot_az(binary(), non_neg_integer()) -> binary().
+content_slot_az(ElemAz, Slot) ->
     %% Distinct from the element's own `az` (which shares `ElemAz`): JSON
     %% nodes live in one flat registry, so a slot node cannot reuse its
     %% parent's id the way an HTML comment marker can.
     <<ElemAz/binary, "t", (integer_to_binary(Slot))/binary>>.
 
--spec text_slot_open(binary()) -> binary().
-text_slot_open(Az) ->
+-spec content_slot_open(binary()) -> binary().
+content_slot_open(Az) ->
     %% A `#slot` is the addressable, transparent (fragment) wrapper for any
     %% dynamic child: its `children` hold the rendered value -- a string for
     %% text, the item widgets for an each, a component object for a child view.
@@ -136,8 +136,8 @@ text_slot_open(Az) ->
     %% (flattening nested arrays). One node per dynamic, like the HTML markers.
     <<"{\"type\":\"#slot\",\"az\":", (json_str(Az))/binary, ",\"children\":[">>.
 
--spec text_slot_close() -> binary().
-text_slot_close() ->
+-spec content_slot_close() -> binary().
+content_slot_close() ->
     ~"]}".
 
 -spec is_void(arizona_renderer:tag()) -> boolean().
@@ -173,7 +173,7 @@ supports_list_patch() -> false.
 
 target() -> json.
 
-live_root() -> true.
+supports_live_root() -> true.
 
 content_type() -> ~"application/json".
 
@@ -183,7 +183,7 @@ single_root_document() -> true.
 
 supports_nodiff_keep() -> false.
 
-keyed_item_ops() -> true.
+supports_keyed_item_ops() -> true.
 
 -spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [].
 implied_attrs(_Tag, _Names) -> [].
@@ -205,11 +205,11 @@ wire_escape(Bin) -> Bin.
 
 %% The JSON wire has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
--spec raw_text(atom(), binary(), binary(), term()) -> term().
-raw_text(_Tag, _Before, _After, Value) -> Value.
+-spec neutralize_raw_text(arizona_renderer:tag(), binary(), binary(), term()) -> term().
+neutralize_raw_text(_Tag, _Before, _After, Value) -> Value.
 
 %% Render a dynamic attribute value: the prop name is baked into the static by
-%% attr_dyn_name/1, so the dynamic is just the value -- the JSON the client builds
+%% attr_dynamic_prefix/1, so the dynamic is just the value -- the JSON the client builds
 %% by encoding the wire value: an array for an effect command, as a folded one
 %% (attr_command/2) is, a boolean for a typed boolean, else a string.
 -spec render_attr(binary(), term()) -> binary().
@@ -253,5 +253,5 @@ json_value(Value) ->
 %% A JSON document is one value, which cannot take extra content; the static
 %% client is handed the names by `start({attrs})` instead.
 -spec embed_attrs(iodata(), [binary()]) -> iodata().
-embed_attrs(Doc, _EventNames) ->
+embed_attrs(Doc, _AttrNames) ->
     Doc.

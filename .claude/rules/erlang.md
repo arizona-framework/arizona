@@ -399,7 +399,7 @@ client finds an item by it, so without one every keyed op on the item would sile
 diffs positionally and needs no key, so this is a render-time check too: the transform stamps a
 single-element body whose root has no literal `az_key` `keyless`, and pairing it with a stream
 raises `stream_each_keyless` (nodiff items exempt again, and `?terminal`, which redraws whole
-frames and so has no keyed op, via the backend's `keyed_item_ops/0`). When that body is a
+frames and so has no keyed op, via the backend's `supports_keyed_item_ops/0`). When that body is a
 **conditional**, the error is `each_stream_body_control_flow` and the fix is different. Every item
 shares ONE compiled per-item template, so an item's **outer tag is fixed at compile time** -- that
 is what makes per-item diffing cheap (statics once, dynamics per item). The branches may be

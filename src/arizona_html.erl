@@ -18,25 +18,25 @@ identical to the previous inlined emission.
 -export([attr/2]).
 -export([attr_bool/2]).
 -export([attr_command/2]).
--export([attr_dyn_name/1]).
+-export([attr_dynamic_prefix/1]).
 -export([children_sep/0]).
 -export([each_items/1]).
 -export([text_child/1]).
--export([text_az/2]).
--export([text_slot_open/1]).
--export([text_slot_close/0]).
+-export([content_slot_az/2]).
+-export([content_slot_open/1]).
+-export([content_slot_close/0]).
 -export([is_void/1]).
 -export([raw_text_kind/2]).
 -export([content_context/2]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
--export([live_root/0]).
+-export([supports_live_root/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
--export([keyed_item_ops/0]).
+-export([supports_keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([selection_role/1]).
 -export([controlled/2]).
@@ -45,7 +45,7 @@ identical to the previous inlined emission.
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
--export([raw_text/4]).
+-export([neutralize_raw_text/4]).
 -export([render_attr/2]).
 -export([wire_escape/1]).
 -export([wire_attr/2]).
@@ -151,8 +151,8 @@ attr_command(Name, Cmd) ->
     %% emitted verbatim so the already-escaped JSON is not escaped twice.
     attr_unescaped(Name, arizona_effect:encode(Cmd)).
 
--spec attr_dyn_name(binary()) -> binary().
-attr_dyn_name(_Name) ->
+-spec attr_dynamic_prefix(binary()) -> binary().
+attr_dynamic_prefix(_Name) ->
     %% HTML keeps the name in the dynamic (rendered by render_attr); nothing
     %% is baked into the static.
     <<>>.
@@ -175,18 +175,18 @@ text_child(Text) ->
     %% `"` would otherwise terminate the attribute with no raw-splice use case.
     Text.
 
--spec text_az(binary(), non_neg_integer()) -> binary().
-text_az(ElemAz, 0) ->
+-spec content_slot_az(binary(), non_neg_integer()) -> binary().
+content_slot_az(ElemAz, 0) ->
     ElemAz;
-text_az(ElemAz, Slot) ->
+content_slot_az(ElemAz, Slot) ->
     <<ElemAz/binary, ":", (integer_to_binary(Slot))/binary>>.
 
--spec text_slot_open(binary()) -> binary().
-text_slot_open(Az) ->
+-spec content_slot_open(binary()) -> binary().
+content_slot_open(Az) ->
     <<"<!--az:", Az/binary, "-->">>.
 
--spec text_slot_close() -> binary().
-text_slot_close() ->
+-spec content_slot_close() -> binary().
+content_slot_close() ->
     ~"<!--/az-->".
 
 %% Every tag classification below matches on this, never on the atom as written:
@@ -201,7 +201,7 @@ text_slot_close() ->
 %% camelCase SVG element intact -- normalizing the output would break those.
 %%
 %% Both callers run in the parse transform, at compile time, so the lowercasing
-%% costs nothing at render. (`raw_text/4`'s own tag test is on the render path and
+%% costs nothing at render. (`neutralize_raw_text/4`'s own tag test is on the render path and
 %% uses a comparison that allocates nothing -- see raw_text_mode/1.)
 tag_name(Tag) when is_binary(Tag) ->
     ascii_lowercase(Tag);
@@ -413,7 +413,7 @@ supports_list_patch() -> true.
 
 target() -> html.
 
-live_root() -> true.
+supports_live_root() -> true.
 
 content_type() -> ~"text/html; charset=utf-8".
 
@@ -423,7 +423,7 @@ single_root_document() -> false.
 
 supports_nodiff_keep() -> true.
 
-keyed_item_ops() -> true.
+supports_keyed_item_ops() -> true.
 
 -spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [{binary(), binary()}].
 %% The client intercepts every `az-submit` submit, but only once arizona.js runs: a
@@ -1214,8 +1214,8 @@ escape_runs(Bin, Acc, _Run) ->
 %% The template's own static text is not checked: it is the author's markup, so
 %% statics that spell a sequence around an EMPTY value (`</scr`, `<<>>`, `ipt>`) are
 %% the author's own close tag, and an empty value has no byte to escape anyway.
--spec raw_text(atom(), binary(), binary(), term()) -> term().
-raw_text(Tag, Before, After, Value) ->
+-spec neutralize_raw_text(arizona_renderer:tag(), binary(), binary(), term()) -> term().
+neutralize_raw_text(Tag, Before, After, Value) ->
     %% Resolve the element's tokenizer state ONCE per slot, then thread the answer
     %% (not the tag) through the byte loop, so the per-character path stays a plain
     %% match and no atom is built at render time.
@@ -1303,7 +1303,7 @@ raw_text_chardata(_Ctx, Value) ->
 neutralize({_Mode, _Lead, _After}, <<>>) ->
     <<>>;
 neutralize({Mode, Lead, After}, Bin) ->
-    Out = neutralize_raw_text(Mode, Bin, After, <<>>),
+    Out = neutralize_bytes(Mode, Bin, After, <<>>),
     case lead_break(Mode, Lead, Bin, After) of
         true ->
             %% The first byte continues a sequence begun after `<`, so it is never a
@@ -1314,13 +1314,13 @@ neutralize({Mode, Lead, After}, Bin) ->
             Out
     end.
 
-neutralize_raw_text(_Mode, <<>>, _After, Acc) ->
+neutralize_bytes(_Mode, <<>>, _After, Acc) ->
     Acc;
-neutralize_raw_text(Mode, <<"<", R/binary>>, After, Acc) ->
+neutralize_bytes(Mode, <<"<", R/binary>>, After, Acc) ->
     Lt = raw_text_breakout(Mode, tail_with(R, After)),
-    neutralize_raw_text(Mode, R, After, <<Acc/binary, Lt/binary>>);
-neutralize_raw_text(Mode, <<C, R/binary>>, After, Acc) ->
-    neutralize_raw_text(Mode, R, After, <<Acc/binary, C>>).
+    neutralize_bytes(Mode, R, After, <<Acc/binary, Lt/binary>>);
+neutralize_bytes(Mode, <<C, R/binary>>, After, Acc) ->
+    neutralize_bytes(Mode, R, After, <<Acc/binary, C>>).
 
 %% A `<` near the value's end reads on into the following static. No sequence after
 %% `<` takes more than 8 bytes, so a farther `<` never reaches it, and 8 bytes of

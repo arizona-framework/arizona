@@ -252,9 +252,9 @@ transform a `target/2` call raises `parse_transform_not_applied`, and a hand-wri
 `html/1` is an `undef`.
 
 Everything else is the backend's capability callbacks, asked at compile time. Whether
-a live handler's root is compiled live is `c:arizona_renderer:live_root/0`: a target
+a live handler's root is compiled live is `c:arizona_renderer:supports_live_root/0`: a target
 whose transport repaints whole frames (`?terminal`) answers `false`, so its root gets no
-view marker. `keyed_item_ops/0` false lets a stream `?each` body skip `az_key`, since
+view marker. `supports_keyed_item_ops/0` false lets a stream `?each` body skip `az_key`, since
 nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
 error. Mentions of `?terminal` elsewhere in this document describe that package's target.
 
@@ -702,7 +702,7 @@ op and the DOM drifts from the stream). A map diffs positionally and needs no ke
 same runtime pairing check: `compile_each` stamps a single-element body whose root has no literal
 `az_key` with `keyless => true`, and `arizona_template:each/2` raises `stream_each_keyless` over a
 stream, again unless the item is nodiff, and only on a backend whose client applies keyed item ops
-(the `keyed_item_ops/0` renderer callback; `?terminal` redraws whole frames). A keyed callback whose
+(the `supports_keyed_item_ops/0` callback; `?terminal` redraws whole frames). A keyed callback whose
 body is a *conditional* raises `each_stream_body_control_flow` instead, because the fix is
 different: "wrap the value in an element" reads as advice to pick a tag, when the real constraint is
 that every item shares ONE compiled per-item template, so an item's **outer tag is fixed at compile
@@ -1139,7 +1139,7 @@ bakes a self-describing `az-local` descriptor attribute (escaped JSON
 its key, and `ap` (present only for interpolated attributes) carries the
 static prefix/suffix. The client scans `[az-local]` live (no persistent index): for a content
 slot it reconstructs the marker `az` from the element's runtime `az` + the slot index
-(mirroring `arizona_html:text_az/2`); for an interpolated attribute it recomposes
+(mirroring `arizona_html:content_slot_az/2`); for an interpolated attribute it recomposes
 `prefix ++ value ++ suffix` on set and strips them on read (from the live property for a
 control's `value` -- what the user typed or picked -- and `null` when it no longer carries
 them). An interpolated attribute's composed initial value is baked into the bind-map's `v`
@@ -2902,8 +2902,11 @@ with no diagnostic. The escalation's granularity is what makes it safe: one raw-
 the enclosing template, so a `<textarea>` is untouched when a sibling `<title>` changes.
 
 Escaping is preserved structurally rather than reimplemented -- the children compile through the
-ordinary `compile_children/3` walk, so each dynamic keeps its own policy (`raw` verbatim through
-`raw_text/4` neutralization, `escapable` HTML-escaped via `esc_spec`).
+ordinary `compile_children/3` walk, so each dynamic keeps its own policy: `raw` goes verbatim through
+`neutralize_raw_text/4` neutralization; `escapable` goes through the same callback, a plain value
+marked by `arizona_template:mark_esc/1` and HTML-escaped, a `?raw` spliced with the element's end
+tag defused, and a template with no element rendered as its text. A content `?local` in either kind
+is a compile error (`local_in_raw_text`), since raw-text content carries no slot markers.
 
 **An executable `<script>` is the one case where updating is questionable, and `az-nodiff` is the
 answer.** A script element carries an "already started" flag, so mutating its text after it has run
@@ -2924,8 +2927,8 @@ position where user data reaches the output unescaped, free to close the JavaScr
 in. Literal script/CSS text is static, not a slot, so it is unaffected; `escapable` elements escape
 and so are not gated. The opt-out marks the value trusted for HTML *escaping*, not for the raw-text
 tokenizer -- a trusted JSON blob's own string data can still spell an element breakout -- so
-`arizona_html:raw_text/4` unwraps the `?raw` and neutralizes the payload anyway. It takes the
-**tag**, because which sequences break out is a property of that element's tokenizer state rather
+`arizona_html:neutralize_raw_text/4` unwraps the `?raw` and neutralizes the payload anyway. It takes
+the **tag**, because which sequences break out is a property of that element's tokenizer state rather
 than of raw text at large. `</script`/`</style` becomes `<\/script` in both elements -- strictly
 only the *appropriate* end tag (the one whose name matches the element being parsed) closes a
 raw-text element, so `</style>` inside a `<script>` is ordinary text, but both names are neutralized
@@ -3089,7 +3092,7 @@ search-and-replace blindly:
 - **Compile time** (`scope_az/4`) is structural. The parse transform accumulates each static as a
   list of segments, with the markers it emits held as tagged `{az_attr, Id}` / `{az_slot, Id}`
   entries rather than bytes; scoping rebuilds exactly those through the backend's `az_attr/1` /
-  `text_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
+  `content_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
   The fingerprint is taken over the *unscoped* segments, so scoping does not change it. Each dynamic
   attribute also leaves a `{dyn_attr, Name, Bytes}` segment carrying its name: HTML renders the name
   inside the dynamic, so without it two templates differing only in a dynamic attribute's name

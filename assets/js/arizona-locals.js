@@ -17,7 +17,7 @@ import {
 
 /**
  * Reconstruct a content slot's comment-marker az from the element's runtime az
- * and the slot index. Mirrors arizona_html:text_az/2 (slot 0 reuses the element
+ * and the slot index. Mirrors arizona_html:content_slot_az/2 (slot 0 reuses the element
  * az; slot N appends ":N") -- a cross-language wire contract.
  * @param {Element} el
  * @param {string} slot
