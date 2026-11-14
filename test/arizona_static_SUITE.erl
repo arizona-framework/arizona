@@ -39,6 +39,7 @@
 -export([body_from_a_helper_a_component_or_nodiff/1]).
 -export([document_not_ending_in_body_gets_names_after/1]).
 -export([page_rendering_its_own_body/1]).
+-export([raw_attr_quote_stays_in_the_value/1]).
 
 all() ->
     [{group, generate}].
@@ -76,9 +77,20 @@ groups() ->
             nested_layouts_put_the_names_in_the_outermost_body,
             body_from_a_helper_a_component_or_nodiff,
             document_not_ending_in_body_gets_names_after,
-            page_rendering_its_own_body
+            page_rendering_its_own_body,
+            raw_attr_quote_stays_in_the_value
         ]}
     ].
+
+%% A `"` in a literal `?raw` attribute value would end the value; the page holds it
+%% as `&quot;`, the author's `"` as text.
+raw_attr_quote_stays_in_the_value(Config) when is_list(Config) ->
+    Dir = subdir(Config, "raw_attr_quote"),
+    {[Out], []} = arizona_static:generate(Dir, [{arizona_static_raw_attr_page, ~"index.html"}]),
+    ?assertMatch(
+        {_, _},
+        binary:match(read(Out), ~"title=\"a&quot;bv\" data-r=\"c&quot;d\"")
+    ).
 
 writes_file_and_returns_path(Config) when is_list(Config) ->
     Dir = subdir(Config, "writes"),

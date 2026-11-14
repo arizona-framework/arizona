@@ -459,7 +459,10 @@ double-quoted context (a bare string would leave `&amp;` literal after the first
 A value holding a literal `?raw`, whole or as a part (`{href, [~"/a?", ?raw(Q)]}`), is
 markup as a whole: the transform wraps it in a `raw_attr` call, which splices the raw parts
 verbatim and escapes every other part, static or dynamic, so SSR and the tagged live update
-carry the same assembled markup. That call is what marks the opt-out (its value is the
+carry the same assembled markup. Inside a double-quoted value only character references
+are markup and a bare `"` would end the value, so the backend writes a raw's `"` as `&quot;`
+on the page and the client does the same before decoding: both show the author's `"` as text.
+That call is what marks the opt-out (its value is the
 internal `{arizona_markup, Bin}`), so a raw any other attribute value returns at runtime --
 a helper's -- is escaped and sent as a bare string, as content escapes one.
 (`?raw` is an HTML-target feature; the
