@@ -38,6 +38,10 @@
 -export([compile_empty_tag/1]).
 -export([compile_binary_tag_runs_nothing/1]).
 -export([compile_tag_not_text/1]).
+-export([compile_bitstring_tag/1]).
+-export([compile_tag_too_long/1]).
+-export([compile_tag_bad_code_point/1]).
+-export([compile_tag_not_text_message/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -75,7 +79,11 @@ groups() ->
             compile_binary_tag_not_text,
             compile_empty_tag,
             compile_binary_tag_runs_nothing,
-            compile_tag_not_text
+            compile_tag_not_text,
+            compile_bitstring_tag,
+            compile_tag_too_long,
+            compile_tag_bad_code_point,
+            compile_tag_not_text_message
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -452,6 +460,57 @@ compile_tag_not_text(Config) when is_list(Config) ->
         end
      || {Name, Tag} <- Cases
     ].
+
+%% A constant that lays out bits, not whole bytes, is no text: refused as such, in
+%% any element and under a select, whose chooser pass reads tags first.
+compile_bitstring_tag(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            {arizona_parse_transform, {tag_not_text, _}},
+            compile_error(Name, html(Body)),
+            Name
+        )
+     || {Name, Body} <- [
+            {"be_bits_div", "{'div', [], [{<<1:1>>, [], [~\"x\"]}]}"},
+            {"be_bits_tail", "{'div', [], [{<<\"a\", 1:7>>, [], []}]}"},
+            {"be_bits_select",
+                "{select, [{value, arizona_template:get(v, Bindings)}], [{<<1:1>>, [], []}]}"}
+        ]
+    ].
+
+%% A tag is a short name: a constant laying out more than 1024 bytes is refused before
+%% it is built, so a size that would exhaust memory costs nothing.
+compile_tag_too_long(Config) when is_list(Config) ->
+    [
+        begin
+            {Micros, Result} = timer:tc(fun() -> compile_error(Name, html(Body)) end),
+            ?assertEqual({arizona_parse_transform, tag_too_long}, Result, Name),
+            ?assert(Micros < 2000000, {Name, Micros})
+        end
+     || {Name, Body} <- [
+            {"be_long_2k", "{'div', [], [{<<0:(1 bsl 14)>>, [], []}]}"},
+            {"be_long_huge", "{'div', [], [{<<0:(1 bsl 40)>>, [], []}]}"},
+            {"be_long_text", "{'div', [], [{<<\"ab\":(1 bsl 40)>>, [], []}]}"}
+        ]
+    ],
+    ?assert(contains(arizona_parse_transform:format_error(tag_too_long), ~"1024")).
+
+%% An integer segment that is no code point (a surrogate) folds to no text.
+compile_tag_bad_code_point(Config) when is_list(Config) ->
+    ?assertMatch(
+        {arizona_parse_transform, {tag_not_text, _}},
+        compile_error("be_surrogate", html("{'div', [], [{<<55296>>, [], []}]}"))
+    ).
+
+%% The message quotes the tag as written, an atom as an atom.
+compile_tag_not_text_message(Config) when is_list(Config) ->
+    {arizona_parse_transform, Reason} = compile_error(
+        "be_ctl_msg", html("{'div', [], [{'a\\x{7f}', [], []}]}")
+    ),
+    Msg = arizona_parse_transform:format_error(Reason),
+    ?assert(contains(Msg, ~"'a")),
+    ?assertNot(contains(Msg, ~"<<97")),
+    ?assert(contains(Msg, ~"without control characters")).
 
 compile_improper_template_list(Config) when is_list(Config) ->
     Improper = fun(Outer, Inner) ->
