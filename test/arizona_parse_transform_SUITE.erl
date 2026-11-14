@@ -482,6 +482,7 @@
     local_attr_raw_affix_beside_static/1,
     local_attr_raw_affix_live_diff_static/1,
     local_attr_dynamic_raw_error/1,
+    local_attr_raw_affix_reads_alone/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -760,6 +761,7 @@ groups() ->
             local_attr_raw_affix_beside_static,
             local_attr_raw_affix_live_diff_static,
             local_attr_dynamic_raw_error,
+            local_attr_raw_affix_reads_alone,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -1820,10 +1822,9 @@ local_attr_interp_numeric(Config) when is_list(Config) ->
         decode_local_descriptor(HTML)
     ).
 
-%% A literal `?raw` beside a `?local` is fixed markup: the page splices it verbatim
-%% (every other part escaped, as in any interpolated attribute holding a raw), and the
-%% client's affix is the text it holds there, references decoded, which is what the
-%% browser recomposes on `set` and strips on `get`.
+%% A literal `?raw` beside a `?local` is fixed: folded to the text its markup reads as,
+%% it is a static part like any other -- the client's affix, and escaped on the page --
+%% which is what the browser recomposes on `set` and strips on `get`.
 local_attr_raw_affix(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_local_attr_raw_affix). "
@@ -1835,7 +1836,7 @@ local_attr_raw_affix(Config) when is_list(Config) ->
         "            arizona_template:raw(<<\"?a=1&amp;b=2\">>)]}], [<<\"e\">>]}"
         "    ). "
     ),
-    Attr = ~"href=\"&#47;u&#47;1&amp;2?a=1&amp;b=2\"",
+    Attr = ~"href=\"/u/1&amp;2?a=1&amp;b=2\"",
     {Live0, _Snap} = arizona_render:render(Mod:render(#{})),
     Live = iolist_to_binary(Live0),
     ?assertNotEqual(nomatch, binary:match(Live, Attr), Live),
@@ -1846,8 +1847,8 @@ local_attr_raw_affix(Config) when is_list(Config) ->
         decode_local_descriptor(Live)
     ).
 
-%% Static text and a raw on one side of the local are one affix: the text escaped,
-%% the raw verbatim, and the affix the text the two hold together.
+%% Static text and a raw on one side of the local are one affix, the texts they mean
+%% joined.
 local_attr_raw_affix_beside_static(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_local_attr_raw_static). "
@@ -1884,7 +1885,7 @@ local_attr_raw_affix_live_diff_static(Config) when is_list(Config) ->
     ),
     B0 = #{id => ~"p", n => ~"1"},
     {HTML0, Snap0} = arizona_render:render(Mod:render(B0)),
-    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML0), ~"href=\"&#47;u&#47;1\"")),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML0), ~"href=\"/u/1\"")),
     {_Ops0, DepsSnap, _V0} = arizona_diff:diff(Mod:render(B0), Snap0, #{}),
     {Ops, _Snap1, _V1} = arizona_diff:diff(
         Mod:render(B0#{n => ~"2"}), DepsSnap, #{}, #{n => true}
@@ -1893,10 +1894,57 @@ local_attr_raw_affix_live_diff_static(Config) when is_list(Config) ->
     Dir = filename:join(proplists:get_value(priv_dir, Config), "raw_affix"),
     {[Out], []} = arizona_static:generate(Dir, [{Mod, ~"index.html"}]),
     {ok, Page} = file:read_file(Out),
-    ?assertNotEqual(nomatch, binary:match(Page, ~"href=\"&#47;u&#47;1\""), Page),
+    ?assertNotEqual(nomatch, binary:match(Page, ~"href=\"/u/1\""), Page),
     ?assertEqual(
         #{~"a" => #{~"href" => ~"n"}, ~"ap" => #{~"href" => [~"/u/", ~""]}},
         decode_local_descriptor(Page)
+    ).
+
+%% Each raw affix part means the text its markup reads as on its own, whatever sits
+%% beside it: an open character reference is not completed by the init, the other
+%% side or a sibling raw, and a quote does not end the attribute. The page holds that
+%% text escaped, so it reads back as the descriptor's affix.
+local_attr_raw_affix_reads_alone(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, Value, Attr, Affixes}) ->
+            Mod = compile_module(
+                "-module(pt_local_attr_raw_alone_" ++ integer_to_list(N) ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> "
+                    "    arizona_template:target(arizona_html, "
+                    "        {'a', [{title, [" ++ Value ++
+                    "]}], [<<\"e\">>]}"
+                    "    ). "
+            ),
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+            ?assertNotEqual(nomatch, binary:match(SSR, <<"title=\"", Attr/binary, "\"">>), SSR),
+            {Live, _Snap} = arizona_render:render(Mod:render(#{})),
+            ?assertEqual(SSR, iolist_to_binary(Live)),
+            ?assertEqual(
+                #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => Affixes}},
+                decode_local_descriptor(SSR),
+                SSR
+            )
+        end,
+        [
+            {1, "arizona_template:raw(<<\"x&amp\">>), arizona_template:local(id, <<\"1\">>)",
+                ~"x&amp;1", [~"x&", ~""]},
+            {2, "arizona_template:raw(<<\"q&\">>), arizona_template:local(id, <<\"lt;\">>)",
+                ~"q&amp;lt;", [~"q&", ~""]},
+            {3, "arizona_template:raw(<<\"&#4\">>), arizona_template:local(id, <<\"7\">>)",
+                <<4, "7">>, [<<4>>, ~""]},
+            {4,
+                "arizona_template:raw(<<\"&am\">>), arizona_template:local(id, <<>>), "
+                "arizona_template:raw(<<\"p;\">>)", ~"&amp;amp;", [~"&am", ~"p;"]},
+            {5, "arizona_template:raw(<<\"a\\\"b\">>), arizona_template:local(id, <<\"1\">>)",
+                ~"a&quot;b1", [~"a\"b", ~""]},
+            {6,
+                "arizona_template:raw(<<\"&am\">>), arizona_template:raw(<<\"p;\">>), "
+                "arizona_template:local(id, <<\"c\">>)", ~"&amp;amp;c", [~"&amp;", ~""]},
+            {7, "arizona_template:raw(<<\"a&#13;b\">>), arizona_template:local(id, <<\"1\">>)",
+                <<"a\nb1">>, [<<"a\nb">>, ~""]}
+        ]
     ).
 
 %% A raw the server computes beside a `?local` has no meaning the client can keep:

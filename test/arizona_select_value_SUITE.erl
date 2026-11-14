@@ -1450,7 +1450,40 @@ interpolated_local_value_with_raw_part(Config) when is_list(Config) ->
         )
     ),
     Text = ssr_picked([~"a&amp;c"], Single, #{x => ~"c"}),
-    ?assertEqual(~"a&c", select_value(Text), Text).
+    ?assertEqual(~"a&c", select_value(Text), Text),
+    %% Each raw part is its own text, an open reference not completed by its sibling:
+    %% one text `&amp;c` without `multiple`, the picks `&am` and `p;` with it.
+    lists:foreach(
+        fun({Mod, Multiple, Value, Picked}) ->
+            Open = compile_module(
+                raw_src(
+                    Mod,
+                    [
+                        Multiple,
+                        "{value, [arizona_template:raw(~\"&am\"), arizona_template:raw(~\"p;\"), "
+                        "arizona_template:local(k, ~\"c\")]}"
+                    ],
+                    "{option, [{value, ~\"&amp;c\"}], [~\"1\"]}, "
+                    "{option, [{value, ~\"&am\"}], [~\"2\"]}, "
+                    "{option, [{value, ~\"p;\"}], [~\"3\"]}, "
+                    "{option, [{value, ~\"c\"}], [~\"4\"]}"
+                )
+            ),
+            HTML = ssr_picked(Picked, Open, #{}),
+            ?assertEqual(Value, select_value(HTML), HTML),
+            ?assertEqual(
+                #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[~"&am", ~"p;"], []]}},
+                local_descriptor(HTML),
+                HTML
+            )
+        end,
+        [
+            {"sel_raw_open", "", ~"&amp;c", [~"&amp;amp;c"]},
+            {"sel_raw_open_m", "multiple, ", ~"[\"&am\",\"p;\",\"c\"]", [
+                ~"&amp;am", ~"p;", ~"c"
+            ]}
+        ]
+    ).
 
 %% `multiple` decided at runtime decides what the parts of a `?local` value are: one
 %% text without it, one pick each with it.

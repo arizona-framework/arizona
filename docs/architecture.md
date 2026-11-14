@@ -1123,14 +1123,14 @@ content slots, freely mixed with static text and other dynamic children. An attr
 may also **interpolate** one `?local` with static text around it (the statics become a
 prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server-owned
 dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). A literal
-`?raw` of literal text is static and may be an affix part: SSR splices it verbatim (the
-other parts and the init escaped, as `raw_attr/2` assembles any interpolated value holding
-a raw), and the descriptor's affix is the text the markup reads as (the backend's
-`markup_text/2`, in `attribute`), which is what the client composes with on `set` and
-strips on `get`. A raw of a computed value is still `local_attr_mixed`: the affixes ride on
-the static descriptor and the slot never diffs, so a server-side change could never reach
-the attribute the client owns. Interpolation
-is for **string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
+`?raw` of literal text is static and may be an affix part: the transform folds it to the
+text its markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
+treats that as static text, escaped on the page like any other. Spliced verbatim, the
+value beside it could complete an open reference in it (`&amp` before `1` reads `&amp1`)
+or a `"` could end the attribute, and the page would stop holding the affix the client
+composes with on `set` and strips on `get`. A raw of a computed value is still
+`local_attr_mixed`: the affixes ride on the static descriptor and the slot never diffs, so
+a server-side change could never reach the attribute the client owns. Interpolation is for **string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
 attribute must use a **whole-value** `?local` (`{disabled, ?local(~"d", false)}`, which
 renders `false` → absent / `true` → bare) -- an interpolated value always renders
 `name="value"`, so an interpolated boolean would be `disabled="false"`, i.e. still present.

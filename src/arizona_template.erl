@@ -553,17 +553,16 @@ The value a chooser's `?local` written in a list with static parts stands for, a
 text: the `Before` parts, the local's `Init` and the `After` parts, assembled as the
 attribute renders them. With it (anything but `false`, as for `chosen/4`) every part is a
 pick: each static part one, and the local its own -- the elements of a list `Init`, none
-for `false`, else `Init` itself. A part is text, or a literal `raw/1` the parse transform
-marked as the markup it renders (`{arizona_markup, Bin}`).
+for `false`, else `Init` itself.
 """.
 -spec local_choice(Backend, Before, Init, After, Multiple) -> binary() | [term()] when
     Backend :: module(),
-    Before :: [binary() | {arizona_markup, binary()}],
+    Before :: [binary()],
     Init :: term(),
-    After :: [binary() | {arizona_markup, binary()}],
+    After :: [binary()],
     Multiple :: term().
 local_choice(Backend, Before, Init, After, false) ->
-    attr_text(Backend, Before ++ [to_bin(Init) | After]);
+    attr_text(Backend, [iolist_to_binary(Before), to_bin(Init), iolist_to_binary(After)]);
 local_choice(_Backend, Before, Init, After, _Multiple) ->
     Before ++ local_picks(Init) ++ After.
 

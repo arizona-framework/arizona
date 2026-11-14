@@ -4129,18 +4129,27 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'id')).toBe('42');
     });
 
-    // A literal `?raw` affix is spliced verbatim, so the page holds its markup while the
-    // descriptor holds the text that markup reads as: the two agree once parsed.
-    it('composes and strips an affix the page holds as raw markup', () => {
-        setupView(
-            'v',
-            `<a az="0" az-local="{&quot;a&quot;:{&quot;href&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;href&quot;:[&quot;/u/&quot;,&quot;?a=1&amp;b=2&quot;]}}" href="&#47;u&#47;1&amp;2?a=1&amp;b=2">e</a>`,
-        );
-        expect(get('v', 'id')).toBe('1&2');
-        set('v', 'id', '<4>');
+    // A literal `?raw` affix is folded to the text its markup reads as on its own and
+    // rendered escaped, so an open reference (`x&amp` before `1`) or a quote cannot
+    // change what the page holds: it reads back as the descriptor's affix. The markup
+    // is what the server renders for `[?raw(~"x&amp"), ?local(id, ~"1")]` and
+    // `[?raw(~"a\"b"), ?local(id, ~"1")]`.
+    it.each([
+        [
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;title&quot;:[&quot;x&amp;&quot;,&quot;&quot;]}}" title="x&amp;1">e</a>`,
+            'x&',
+        ],
+        [
+            `<a az="0" az-local="{&quot;a&quot;:{&quot;title&quot;:&quot;id&quot;},&quot;ap&quot;:{&quot;title&quot;:[&quot;a\\&quot;b&quot;,&quot;&quot;]}}" title="a&quot;b1">e</a>`,
+            'a"b',
+        ],
+    ])('composes and strips a raw affix as the text it reads as (%#)', (html, prefix) => {
+        setupView('v', html);
+        expect(get('v', 'id')).toBe('1');
+        set('v', 'id', 'amp;<2>');
         const a = document.querySelector('[az="0"]');
-        expect(a.getAttribute('href')).toBe('/u/<4>?a=1&b=2');
-        expect(get('v', 'id')).toBe('<4>');
+        expect(a.getAttribute('title')).toBe(`${prefix}amp;<2>`);
+        expect(get('v', 'id')).toBe('amp;<2>');
     });
 
     it('coerces a non-string value via String() and reads it back', () => {
