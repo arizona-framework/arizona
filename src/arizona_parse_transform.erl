@@ -6864,8 +6864,7 @@ is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, [utf8]}) 
 %% An integer or `$x` segment folds as the code point it names. A literal binary
 %% holding one that names none (a surrogate, past U+10FFFF) is refused where it is a
 %% tag, an attribute name or value, or content (assert_code_points/1); anywhere else
-%% (a `?local` init, an `az_key`) it does not fold, and Erlang builds its bytes at
-%% runtime.
+%% (a `?local` init) it does not fold, and Erlang builds its bytes at runtime.
 is_foldable_bin_element({bin_element, _, {Kind, _, N}, default, Type}) when
     (Kind =:= integer orelse Kind =:= char) andalso (Type =:= default orelse Type =:= [utf8])
 ->
@@ -6916,6 +6915,7 @@ is_fold_shaped(_Element) ->
 code_point_literal({integer, _, N}) -> {ok, N};
 code_point_literal({char, _, N}) -> {ok, N};
 code_point_literal({op, _, '-', {integer, _, N}}) -> {ok, -N};
+code_point_literal({op, _, '-', {char, _, N}}) -> {ok, -N};
 code_point_literal(_Other) -> error.
 
 %% A name as written: an atom as an atom, UTF-8 as text, anything else as its bytes,

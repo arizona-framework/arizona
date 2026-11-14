@@ -497,7 +497,11 @@ compile_not_code_point(Config) when is_list(Config) ->
         {"be_cp_content", "{p, [], [<<55296>>]}", 55296},
         {"be_cp_attr_value", "{p, [{class, <<-1>>}], []}", -1},
         {"be_cp_attr_list", "{p, [{class, [<<\"a\">>, <<1114112>>]}], []}", 1114112},
-        {"be_cp_attr_name", "{p, [{<<55296>>, ~\"x\"}], []}", 55296}
+        {"be_cp_attr_name", "{p, [{<<55296>>, ~\"x\"}], []}", 55296},
+        {"be_cp_neg_char_content", "{p, [], [<<\"a\", -$a>>]}", -97},
+        {"be_cp_neg_char_attr", "{p, [{title, <<\"a\", -$a>>}], []}", -97},
+        {"be_cp_neg_char_utf8", "{p, [], [<<\"a\", -$a/utf8>>]}", -97},
+        {"be_cp_neg_char_tag", "{'div', [], [{<<-$a>>, [], []}]}", -97}
     ],
     [
         ?assertEqual(
