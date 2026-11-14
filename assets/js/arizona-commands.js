@@ -839,7 +839,7 @@ function scheduleSend(el, event, prefix, index, send) {
     // A submit is not debounced: a form's `az-debounce` paces the field events it
     // delegates, and a blur debounce would never send the form's submit at all.
     // `az-throttle` still paces a submit: a second one inside the window becomes its
-    // trailing send.
+    // trailing send, and no flush cuts that window short (flushTimer).
     if (!debounceMs && !throttleMs && !debounceEvent) {
         send();
         return;
@@ -931,17 +931,20 @@ function replacePending(slot, send) {
 
 /**
  * Immediately send every pending debounced/throttled message for this element.
- * Used by blur auto-flush and form submit (to capture in-flight input values).
- * `skip` names slots to leave alone by key prefix: the submit flush keeps the
- * submit's own throttle window.
+ * Used by blur auto-flush, an event-name debounce and form submit (to capture
+ * in-flight input values).
+ *
+ * A submit's own slots are never flushed, whichever flush runs: a submit is only
+ * ever throttled, so its pending send is a trailing submission its tick delivers
+ * on time, and a flush would only clear the window -- letting the next submit
+ * out at once. On a form the submit, blur and event-name flushes all reach them.
  * @param {Element} el
- * @param {string} [skip]
  */
-export function flushTimer(el, skip = '') {
+export function flushTimer(el) {
     const rec = _timers.get(el);
     if (!rec) return;
     for (const [k, t] of rec.slots) {
-        if (skip && k.startsWith(skip)) continue;
+        if (k.startsWith('submit ')) continue;
         if (t.id) clearTimeout(t.id);
         const pending = t.pending;
         t.id = undefined;

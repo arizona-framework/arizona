@@ -920,6 +920,75 @@ describe('event pacing (az-debounce)', () => {
         }
     });
 
+    it("an event-name az-debounce on the submit leaves the submit's throttle window", async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form id="f" az-debounce="submit" az-throttle="1000" az-input='[0,"i"]' az-submit='[0,"s"]'><input id="q" name="q" value="" /></form>`,
+            );
+            const f = document.getElementById('f');
+            const q = document.getElementById('q');
+            const submit = () =>
+                f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            q.value = 'a';
+            q.dispatchEvent(new Event('input', { bubbles: true }));
+            submit();
+            submit();
+            expect(mock.sent().map((m) => m[1])).toEqual(['i', 's']);
+            vi.advanceTimersByTime(1000);
+            expect(mock.sent().map((m) => m[1])).toEqual(['i', 's', 's']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("a form's blur debounce flush leaves the submit's throttle window", async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form id="f" tabindex="-1" az-debounce="blur" az-throttle="1000" az-input='[0,"i"]' az-submit='[0,"s"]'><input id="q" name="q" value="" /></form>`,
+            );
+            const f = document.getElementById('f');
+            const q = document.getElementById('q');
+            const submit = () =>
+                f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            q.value = 'a';
+            q.dispatchEvent(new Event('input', { bubbles: true }));
+            submit();
+            f.dispatchEvent(new Event('blur'));
+            submit();
+            expect(mock.sent().map((m) => m[1])).toEqual(['i', 's']);
+            vi.advanceTimersByTime(1000);
+            expect(mock.sent().map((m) => m[1])).toEqual(['i', 's', 's']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("a form's blur auto-flush neither reopens nor hurries the submit's throttle", async () => {
+        vi.useFakeTimers();
+        try {
+            await connect(
+                `<form id="f" tabindex="-1" az-throttle="1000" az-submit='[0,"s"]'><input name="q" value="x" /></form>`,
+            );
+            const f = document.getElementById('f');
+            const submit = () =>
+                f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            const sent = () => mock.sent().filter((m) => m[1] === 's');
+            submit();
+            f.dispatchEvent(new Event('blur'));
+            submit();
+            expect(sent()).toHaveLength(1);
+            // The trailing submit waits for its window, blur or not.
+            f.dispatchEvent(new Event('blur'));
+            expect(sent()).toHaveLength(1);
+            vi.advanceTimersByTime(1000);
+            expect(sent()).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('a form-level debounced input goes out before the submit, once', async () => {
         vi.useFakeTimers();
         try {

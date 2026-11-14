@@ -429,7 +429,7 @@ export function bindDocumentEvents(target, signal, abort) {
                     if (form.matches(sel)) pending.add(form);
                     for (const el of /** @type {HTMLFormElement} */ (form).elements)
                         if (el.matches(sel)) pending.add(el);
-                    for (const el of pending) flushTimer(el, 'submit ');
+                    for (const el of pending) flushTimer(el);
                 }
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
