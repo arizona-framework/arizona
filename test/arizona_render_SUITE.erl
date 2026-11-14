@@ -2765,7 +2765,7 @@ effect_in_content_message_names_fix(Config) when is_list(Config) ->
         ?assertNotEqual(nomatch, binary:match(Msg, Part), Part)
      || Part <- [
             ~"not content",
-            ~"{az_click, Cmd}",
+            ~"event attribute",
             ~"return it from a handler",
             ~"arizona_effect:encode_json(Cmd)",
             iolist_to_binary(["arizona_effect_content:", integer_to_list(effect_line(text))])

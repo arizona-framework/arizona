@@ -39,6 +39,7 @@
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([supports_keyed_item_ops/0]).
+-export([format_error/1]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
@@ -110,6 +111,17 @@ single_root_document() -> false.
 supports_nodiff_keep() -> false.
 
 supports_keyed_item_ops() -> false.
+
+%% The reasons this target's other answers let reach it: no raw text, no `?local`,
+%% no keyed item ops, no selection roles.
+format_error(local_unsupported) -> "text: ?local is not supported";
+format_error(local_orphaned) -> "text: ?local outside an element";
+format_error(nodiff_value) -> "text: az-nodiff takes no value";
+format_error(nested_nodiff) -> "text: az-nodiff on a nested element";
+format_error(effect_in_content) -> "text: a command is not content";
+format_error(each_stream_body_control_flow) -> "text: a stream item must be one element";
+format_error(stream_each_multi_root) -> "text: a stream item has one root";
+format_error({stateful_in_layout, _Mod, _Fun, _Handler}) -> "text: no ?stateful in a layout".
 
 implied_attrs(_Tag, _Names) -> [].
 

@@ -77,7 +77,8 @@ render(Bindings) ->
 -export([mark_esc/1]).
 -export([effect_in_content/1]).
 -export([raw_not_text/1]).
--export([markup_in_raw_text/2]).
+-export([markup_in_raw_text/3]).
+-export([worded_error/2]).
 -export([text_markup/2]).
 -export([text_statics/3]).
 -export([has_tag_open/1]).
@@ -415,11 +416,11 @@ each(#stream{}, #{t := ?EACH, multi_root := true} = Tmpl) when not is_map_key(di
     %% The callback serves maps too, so this pairing cannot be refused at compile time;
     %% see maybe_multi_root_opt/3 in arizona_parse_transform. A nodiff item is never
     %% addressed by a keyed op, so it may keep any number of roots.
-    erlang:error(stream_each_multi_root, none, [{error_info, #{module => ?MODULE}}]);
+    raise(stream_each_multi_root, none, map_get(backend, Tmpl));
 each(#stream{}, #{t := ?EACH, keyless := true} = Tmpl) when not is_map_key(diff, Tmpl) ->
     %% Same pairing, same reason it is decided here; see maybe_keyless_opt/5 in
     %% arizona_parse_transform.
-    erlang:error(stream_each_keyless, none, [{error_info, #{module => ?MODULE}}]);
+    raise(stream_each_keyless, none, map_get(backend, Tmpl));
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
     #{t => ?EACH, source => Source, template => Tmpl};
 each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
@@ -761,38 +762,16 @@ format_error({raw_template, V}) ->
             [V]
         )
     );
-format_error({markup_in_raw_text, Element, V}) ->
-    lists:flatten(
-        io_lib:format(
-            "~0tp cannot render inside <~ts>: its content is raw text, where markup ~ts. "
-            "~ts",
-            [V, Element, raw_text_effect(Element), raw_text_remedy(Element)]
-        )
-    );
 format_error({effect_in_content, V}) ->
     lists:flatten(
         io_lib:format(
             "an effect command is not content, so ~0tp cannot render as text: no client "
-            "runs a command there. Put the command itself in an event attribute's value "
-            "(e.g. {az_click, Cmd}), or return it from a handler. To show a command as "
-            "text, encode it explicitly: arizona_effect:encode_json(Cmd)",
+            "runs a command there. Put the command itself in an event attribute's value, "
+            "or return it from a handler. To show a command as text, encode it "
+            "explicitly: arizona_effect:encode_json(Cmd)",
             [V]
         )
-    );
-format_error(stream_each_multi_root) ->
-    "an ?each over a stream must return ONE element per item, not a list of elements, a "
-    "fragment mixing text and elements, or bare text: a keyed op (insert, remove, move, "
-    "item patch) addresses an item by the single element carrying its az_key, so any other "
-    "root would be left behind on a remove and out of order on a move. Put the parts "
-    "inside one item element, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
-    "The same callback over a map may return several roots";
-format_error(stream_each_keyless) ->
-    "an ?each over a stream must put az_key on each item's root element: a keyed op "
-    "(remove, move, item patch) finds the item by it, so without one every such op is "
-    "skipped and the page drifts from the stream. Key the root with the callback's "
-    "second argument, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
-    "The same callback over a map needs no key".
-
+    ).
 -doc """
 Formats runtime errors raised with an `error_info` annotation pointing at
 this module. Picked up by `erl_error:format_exception/3`.
@@ -824,16 +803,16 @@ format_error({bad_template_value, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error({raw_template, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
-format_error({markup_in_raw_text, _Element, _V} = Reason, _ST) ->
-    #{general => format_error(Reason)};
+format_error({markup_in_raw_text, _Element, _V} = Reason, ST) ->
+    #{general => worded_error(Reason, ST)};
 format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(parse_transform_not_applied = Reason, _ST) ->
     #{general => format_error(Reason)};
-format_error(stream_each_multi_root = Reason, _ST) ->
-    #{general => format_error(Reason)};
-format_error(stream_each_keyless = Reason, _ST) ->
-    #{general => format_error(Reason)}.
+format_error(stream_each_multi_root = Reason, ST) ->
+    #{general => worded_error(Reason, ST)};
+format_error(stream_each_keyless = Reason, ST) ->
+    #{general => worded_error(Reason, ST)}.
 
 -doc """
 Materializes an attribute dynamic into its rendered binary through `Backend`
@@ -1055,26 +1034,31 @@ raw_to_bin(V) -> to_bin(V).
 
 %% Internal: raises `{markup_in_raw_text, Element, Map}` for markup -- a template with
 %% elements, a component, a `?local` -- reaching the content of raw-text `Element`.
+%% `Backend` is the target that owns raw-text elements, which words the error.
 -doc false.
--spec markup_in_raw_text(Element, Value) -> no_return() when
+-spec markup_in_raw_text(Backend, Element, Value) -> no_return() when
+    Backend :: module(),
     Element :: binary(),
     Value :: map().
-markup_in_raw_text(Element, V) ->
-    erlang:error({markup_in_raw_text, Element, V}, [Element, V], [
-        {error_info, #{module => ?MODULE}}
-    ]).
+markup_in_raw_text(Backend, Element, V) ->
+    raise({markup_in_raw_text, Element, V}, [Element, V], Backend).
 
-raw_text_effect(~"script") -> "would run as code";
-raw_text_effect(~"style") -> "would be read as CSS";
-raw_text_effect(_TextElement) -> "would show as text".
+%% Raise `Reason` for `Backend` to word: the backend rides in the `error_info`, where
+%% format_error/2 finds it on the raising frame (an `arizona_loc` relocation keeps
+%% the stacktrace, so the frame survives it).
+raise(Reason, Args, Backend) ->
+    erlang:error(Reason, Args, [{error_info, #{module => ?MODULE, backend => Backend}}]).
 
-raw_text_remedy(~"script") ->
-    "Render the data the script needs as text, e.g. ?raw(json:encode(Data))";
-raw_text_remedy(~"style") ->
-    "Render the CSS as text";
-raw_text_remedy(_TextElement) ->
-    "Pass text: a binary, or a text-only template (text and values, no element), "
-    "which renders its text there".
+%% Internal: the message for a runtime error raised for a backend, which words it
+%% (arizona_renderer:format_error/1). The backend rides in the raising frame's
+%% `error_info` (raise/3, and arizona_render's layout refusal).
+-doc false.
+-spec worded_error(Reason, Stacktrace) -> unicode:chardata() when
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace().
+worded_error(Reason, [{_M, _F, _A, Info} | _]) ->
+    {error_info, #{backend := Backend}} = lists:keyfind(error_info, 1, Info),
+    Backend:format_error(Reason).
 
 %% The text a template with no element reads as, for raw-text content (`<title>`,
 %% `<textarea>`) through `Backend` (an `arizona_renderer`): its statics with the slot

@@ -292,7 +292,7 @@ parse_transform(Forms, Options) ->
     catch
         throw:{arizona_parse_error, ErrorFile, Anno, Reason} ->
             _ = erase(?FOLDED_KEY),
-            {error, [{ErrorFile, [{erl_anno:location(Anno), ?MODULE, Reason}]}], []}
+            {error, [{ErrorFile, [error_descriptor(erl_anno:location(Anno), Reason)]}], []}
     after
         ok = erase_module_state()
     end.
@@ -1299,43 +1299,13 @@ format_error(local_key_not_literal) ->
 format_error(nodiff_call_not_compiled) ->
     "internal: a template constructor inside an az-nodiff template was not compiled "
     "-- please report this as an Arizona bug";
-format_error(local_unsupported) ->
-    "?local is not supported by this render target";
-format_error(dynamic_in_raw_text) ->
-    "a dynamic content slot inside <script>/<style> (or another raw-text element: <xmp>, "
-    "<iframe>, <noembed>, <noframes>) is spliced verbatim -- the browser "
-    "decodes no character references in raw text, so HTML-escaping cannot apply there and "
-    "the value can close the JavaScript string it sits in, or the element itself (XSS). "
-    "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
-    "the script/CSS context, and only then -- serialize data first, e.g. "
-    "{script, [], [?raw(json:encode(Data))]}. The ?raw has to sit at the slot itself: a "
-    "variable holding one reaches the slot only when its expression reads a binding, so "
-    "compute the value into a variable and wrap it here (Json = json:encode(Data), then "
-    "{script, [], [?raw(Json)]}), not the other way round. Literal script/CSS text is "
-    "static, not a slot, and needs no wrapper";
-format_error(local_in_raw_text) ->
-    "a content ?local cannot be used inside a raw-text element "
-    "(script/style/textarea/title/xmp/iframe/noembed/noframes) -- raw-text content "
-    "carries no slot markers "
-    "for the client to address, so the value would never update";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
-format_error(local_orphaned) ->
-    "?local must sit inside an element -- as a content child or an attribute "
-    "value. At a fragment top level, as a whole template body, or as a bare "
-    "conditional-branch value there is no enclosing element to carry the "
-    "az-local descriptor, so the client could never bind the key and "
-    "set/set_all would be silent no-ops";
 %% The helper_* rejection reasons and template_impure_expr are the only 3-tuple
 %% reasons; dispatch to format_helper_error/3 to keep format_error/1's clause
 %% complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
-format_error(markup_in_raw_text) ->
-    "a <title> or <textarea> holds text only (escapable raw text): the browser shows "
-    "an element, an ?each, a ?stateless/?stateful component or a template holding an "
-    "element there as literal markup. Render text instead: a value, or a text-only "
-    "template (text and values, no element), which renders its text";
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -1346,17 +1316,6 @@ format_error(local_attr_mixed) ->
     "parts the page carries, and the slot is never diffed, so a computed part would "
     "render once and then disagree with its bindings. Compute it into the ?local's "
     "initial value instead, or render it in another attribute";
-format_error(nodiff_value) ->
-    "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
-    "az_nodiff / <<\"az-nodiff\">>) alone in the attribute list. The value it carries "
-    "in the rendered HTML belongs to the compiler: it names the az-nodiff element so the client "
-    "can keep it across a re-render, and an authored one would be read as that name";
-format_error(nested_nodiff) ->
-    "az-nodiff is only honored on a template's top-level (root) element -- it is a "
-    "whole-template directive, not a per-element one, so on a nested element it cannot "
-    "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
-    "element, or split the subtree into its own ?html/?stateless template whose root "
-    "carries az-nodiff";
 %% Render-target errors: nesting one target in another, and a `target/2` call
 %% declare_target/2 refused (tagged `target`).
 format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
@@ -1366,7 +1325,6 @@ format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:
 format_error(Reason) when
     Reason =:= each_body_not_element;
     Reason =:= each_stream_body_not_element;
-    Reason =:= each_stream_body_control_flow;
     Reason =:= each_named_fun_multi_clause;
     Reason =:= each_named_fun_undefined;
     Reason =:= each_remote_fun_ref;
@@ -1385,8 +1343,7 @@ format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
 format_error(Reason) when
     Reason =:= tracked_get_on_non_bindings_map;
     Reason =:= latin1_binary_literal;
-    Reason =:= improper_template_list;
-    Reason =:= effect_in_content
+    Reason =:= improper_template_list
 ->
     format_source_error(Reason).
 
@@ -1396,12 +1353,6 @@ format_source_error(latin1_binary_literal) ->
     "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
     "For intended bytes, spell them so they do not warn: integer segments "
     "(<<16#89, \"PNG\">>) or a sized string (<<\"\\351\":8>>)";
-format_source_error(effect_in_content) ->
-    "an effect command (a command builder call, e.g. arizona_js:hide(~\"#x\")) is not "
-    "content: a content slot renders it as text, and no client runs a command there. Put "
-    "the command in an event attribute's value, e.g. {button, [{az_click, Cmd}], "
-    "[~\"Hide\"]}, or return it from a handler. To show a command as text, encode it "
-    "explicitly: arizona_effect:encode_json(Cmd)";
 format_source_error(improper_template_list) ->
     "a template's attribute, child and body lists must be proper list literals: "
     "their items are laid out one slot each at compile time, so a list ending in "
@@ -1442,24 +1393,16 @@ format_attr_error(duplicate_attr, Name) ->
 format_attr_error(select_value, Detail) ->
     format_select_error(Detail).
 
-%% A chooser with a value (`value` on a `<select>`) marks the choice it names
-%% `selected` (see choose/4); an option that marks itself contradicts it.
-format_select_error({option_selected, Tag, Name, Chooser}) ->
-    lists:flatten(
-        io_lib:format(
-            "the ~ts attribute on an <~ts> under a <~ts> with a value: the value already "
-            "decides which option is selected. Drop one of the two",
-            [Name, Tag, Chooser]
-        )
-    );
+%% Raised for a backend that lacks a callback, so the core words it: an
+%% `option_selected` is the backend's (parse_error/3).
 format_select_error({no_markup_text, Backend, Tag}) ->
     lists:flatten(
         io_lib:format(
-            "an <~ts> without a value attribute is valued by its text, and a value in "
+            "a ~ts without a value attribute is valued by its text, and a value in "
             "this one's text may render markup, whose text the render target ~ts cannot "
             "read: it names the selection roles (selection_role/1) but does not export "
-            "markup_text/2. Implement it, or give the option a value attribute",
-            [Tag, Backend]
+            "markup_text/2. Implement it, or give the ~ts a value attribute",
+            [Tag, Backend, Tag]
         )
     ).
 
@@ -1493,19 +1436,6 @@ format_each_error(each_stream_body_not_element) ->
     "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
     "has no stream/keyed semantics): wrap the value in an element, e.g. "
     "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
-format_each_error(each_stream_body_control_flow) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
-    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
-    "compiled per-item template (statics once, dynamics per item), so an item's outer tag "
-    "is fixed at compile time. The branches can still be entirely different elements -- "
-    "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
-    "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
-    "return bare element tuples (<em> vs <strong> vs a whole subtree all work), and a div "
-    "with display: contents keeps the wrapper out of layout. NOT inside table/tr or "
-    "select: the parser foster-parents a wrapper out of a table and Firefox drops one "
-    "inside a select, so the keyed element lands where the client cannot address it. A "
-    "varying sibling tag is legitimate in exactly those two (th/td, option/optgroup) and "
-    "has no workaround today";
 format_each_error(each_named_fun_multi_clause) ->
     "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
     "single clause -- ?each inlines the function's body into one shared per-item template, so "
@@ -1671,6 +1601,19 @@ format_helper_error(helper_param_in_each_guard, Name, Arity) ->
 -spec parse_error(term(), term()) -> no_return().
 parse_error(Reason, Anno) ->
     throw({arizona_parse_error, Anno, Reason}).
+
+%% An error raised while compiling a template of `Backend`, which words it
+%% (arizona_renderer:format_error/1). The compiler formats an error later, calling
+%% `format_error/1` on the module the error names, so it is reported under the
+%% backend.
+-spec parse_error(term(), term(), module()) -> no_return().
+parse_error(Reason, Anno, Backend) ->
+    parse_error({'$arizona_worded', Backend, Reason}, Anno).
+
+error_descriptor(Location, {'$arizona_worded', Backend, Reason}) ->
+    {Location, Backend, Reason};
+error_descriptor(Location, Reason) ->
+    {Location, ?MODULE, Reason}.
 
 %% `arizona_template:get`/`get_lazy`/`with` (and the `az:` aliases) call `track/1`
 %% regardless of which map they read, so reading a sub-map records the inner key
@@ -4283,7 +4226,7 @@ compile_each_clause(Kind, Vars, Guards, Body0, SourceAST, Line, Module, Backend,
         {element, ElemAST0} ->
             ElemAST = unwrap_one_root_list(Kind, ElemAST0),
             Classification = classify_body(ElemAST),
-            ok = validate_each_body(Kind, Classification, ElemAST),
+            ok = validate_each_body(Backend, Kind, Classification, ElemAST),
             %% The per-item template compiles in the content context its `?each`
             %% sits in, so an element the backend classifies differently there
             %% (an SVG `<title>`) is treated the same as if it were written
@@ -4445,21 +4388,30 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
 %% fix advice, since a list has a comprehension fallback and a stream does not. Whether a
 %% 2-arg body must be ONE element depends on the runtime source (see maybe_multi_root_opt/3).
-validate_each_body(Kind, text_dynamic, LastExpr) ->
-    parse_error(each_body_error(Kind, LastExpr), anno(LastExpr));
-validate_each_body(Kind, list_ast, LastExpr) ->
+validate_each_body(Backend, Kind, text_dynamic, LastExpr) ->
+    each_body_parse_error(Backend, Kind, LastExpr);
+validate_each_body(Backend, Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?json/?terminal map literal) or a ?stateful/?stateless descriptor: those land
     %% in a per-item value slot and crash on diff exactly like a bare body. (A component as
     %% an ?each item child is a known limitation -- it crashes on the per-item diff for now.)
-    walk_each_list_items(Kind, LastExpr);
-validate_each_body(_Kind, _Classification, _LastExpr) ->
+    walk_each_list_items(Backend, Kind, LastExpr);
+validate_each_body(_Backend, _Kind, _Classification, _LastExpr) ->
     ok.
 
 %% A control-flow body is a different mistake from a bare value, and only the keyed
 %% path needs telling apart: "wrap the value in an element" reads as advice to pick a
 %% tag, which for branches that already return different elements changes the markup
 %% instead of fixing it. The list message names the conditional case already.
+%% Only the control-flow advice names the target's own elements, so only it is
+%% the backend's to word.
+-spec each_body_parse_error(module(), list | stream, erl_parse:abstract_expr()) -> no_return().
+each_body_parse_error(Backend, Kind, Expr) ->
+    case each_body_error(Kind, Expr) of
+        each_stream_body_control_flow = Reason -> parse_error(Reason, anno(Expr), Backend);
+        Reason -> parse_error(Reason, anno(Expr))
+    end.
+
 each_body_error(list, _LastExpr) ->
     each_body_not_element;
 each_body_error(stream, LastExpr) ->
@@ -4468,12 +4420,12 @@ each_body_error(stream, LastExpr) ->
         false -> each_stream_body_not_element
     end.
 
-walk_each_list_items(Kind, {cons, _, Item, Tail}) ->
+walk_each_list_items(Backend, Kind, {cons, _, Item, Tail}) ->
     case is_fragile_each_item(Item) of
-        true -> parse_error(each_body_error(Kind, Item), anno(Item));
-        false -> walk_each_list_items(Kind, Tail)
+        true -> each_body_parse_error(Backend, Kind, Item);
+        false -> walk_each_list_items(Backend, Kind, Tail)
     end;
-walk_each_list_items(_Kind, _Nil) ->
+walk_each_list_items(_Backend, _Kind, _Nil) ->
     ok.
 
 %% A list item that compiles to a fragile per-item value slot (renders at SSR, crashes on
@@ -4535,7 +4487,7 @@ compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, I
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, true) ->
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
-    ok = reject_orphaned_local(ExprAST),
+    ok = reject_orphaned_local(ExprAST, Backend),
     DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend, CCtx)],
     Statics = [[], []],
     {Statics, DynASTs, generate_fingerprint(Statics), #{diff => false}};
@@ -4543,7 +4495,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
     %% The slot's own markers anchor it (see below), but a marker is not an
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
-    ok = reject_orphaned_local(ExprAST),
+    ok = reject_orphaned_local(ExprAST, Backend),
     %% A whole-template bare dynamic (`?html(case ...)`, `?html(?get(x))`, a
     %% root `?stateless`/`?stateful` descriptor) sits inside no element, so no
     %% content slot would otherwise anchor it: wrap the slot in its own
@@ -4563,9 +4515,9 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
 %% maybe_inject_local_descriptor/7). The client binds keys by scanning that
 %% attribute, so the key would be unreachable and set/set_all silent no-ops.
 %% Reject at compile time.
-reject_orphaned_local(ExprAST) ->
+reject_orphaned_local(ExprAST, Backend) ->
     case is_local_marker(ExprAST) of
-        true -> parse_error(local_orphaned, anno(ExprAST));
+        true -> parse_error(local_orphaned, anno(ExprAST), Backend);
         false -> ok
     end.
 
@@ -4779,7 +4731,7 @@ compile_mixed_non_static(Item, Module, State) ->
             {Attrs, _ElemOpts} = extract_directives(Attrs0),
             compile_element(Tag, Attrs, Children, ElemLine, State);
         false ->
-            ok = reject_orphaned_local(Item),
+            ok = reject_orphaned_local(Item, State#state.backend),
             compile_mixed_dynamic(Item, Module, State)
     end.
 
@@ -5434,7 +5386,7 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
         false ->
             Attrs;
         true ->
-            assert_content_local_not_raw_text(ContentLocals, RawKind, Line),
+            assert_content_local_not_raw_text(Backend, ContentLocals, RawKind, Line),
             assert_local_supported(Backend, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             %% After the support check: the affixes are read through callbacks only a
@@ -5450,16 +5402,16 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
 %% slot markers -- so the client's az-local scan can never resolve the slot and
 %% the value silently never updates. Reject it at compile time. An *attribute*
 %% ?local on the same element is unaffected (the attribute is not raw-text content).
-assert_content_local_not_raw_text(ContentLocals, RawKind, Line) ->
+assert_content_local_not_raw_text(Backend, ContentLocals, RawKind, Line) ->
     case map_size(ContentLocals) > 0 andalso RawKind =/= none of
-        true -> parse_error(local_in_raw_text, Line);
+        true -> parse_error(local_in_raw_text, Line, Backend);
         false -> ok
     end.
 
 assert_local_supported(Backend, Line) ->
     case Backend:supports_local() of
         true -> ok;
-        false -> parse_error(local_unsupported, Line)
+        false -> parse_error(local_unsupported, Line, Backend)
     end.
 
 %% A key must not bind both content and an attribute on one element: a single
@@ -5662,7 +5614,7 @@ compile_non_static_child(Child, ElemAz, State0, Slot) ->
             {Tag, Attrs, Children, ElemLine} = extract_element(Child),
             %% A literal element in title/textarea content shows as literal text.
             case State0#state.raw_text_kind of
-                escapable -> parse_error(markup_in_raw_text, ElemLine);
+                escapable -> parse_error(markup_in_raw_text, ElemLine, State0#state.backend);
                 _ -> ok
             end,
             {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
@@ -5693,7 +5645,7 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             ok = reject_markup_in_raw_text(
                 Child, State0#state.raw_text_kind, State0#state.backend
             ),
-            ok = reject_command_in_content(Child),
+            ok = reject_command_in_content(Child, State0#state.backend),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
@@ -5701,38 +5653,40 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
 %% A builder call with literal arguments folds to a command here, as it does in an
 %% attribute (try_fold_command/1), which proves the slot would hold one; any other
 %% command is refused when it renders (`effect_in_content`).
-reject_command_in_content(Child) ->
-    _Walked = map_tail_exprs(Child, fun reject_command_leaf/1, fun(E) -> E end),
+reject_command_in_content(Child, Backend) ->
+    _Walked = map_tail_exprs(Child, fun(Leaf) -> reject_command_leaf(Leaf, Backend) end, fun(E) ->
+        E
+    end),
     ok.
 
-reject_command_leaf({nil, _} = Leaf) ->
+reject_command_leaf({nil, _} = Leaf, _Backend) ->
     Leaf;
-reject_command_leaf({cons, _, Head, Tail} = Leaf) ->
-    ok = reject_command_in_content(Head),
-    _Tail = reject_command_leaf(Tail),
+reject_command_leaf({cons, _, Head, Tail} = Leaf, Backend) ->
+    ok = reject_command_in_content(Head, Backend),
+    _Tail = reject_command_leaf(Tail, Backend),
     Leaf;
-reject_command_leaf({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, Args} = Leaf) when
+reject_command_leaf({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, Args} = Leaf, Backend) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= raw orelse F =:= local)
 ->
     %% The value a ?raw splices or a content ?local starts with is content too.
-    ok = reject_command_in_content(lists:last(Args)),
+    ok = reject_command_in_content(lists:last(Args), Backend),
     Leaf;
-reject_command_leaf(Leaf) ->
+reject_command_leaf(Leaf, Backend) ->
     case try_fold_command(Leaf) of
-        {ok, _Cmd} -> parse_error(effect_in_content, anno(Leaf));
+        {ok, _Cmd} -> parse_error(effect_in_content, anno(Leaf), Backend);
         error -> Leaf
     end.
 
 %% Escapable raw text (title/textarea) decodes character references but parses no
 %% tags, so markup there -- in the value itself or in any tail it can take -- would
 %% show as literal text (comment markers included). A script/style slot is
-%% already refused unless it is a literal ?raw (assert_raw_text_opt_out/1).
+%% already refused unless it is a literal ?raw (assert_raw_text_opt_out/2).
 reject_markup_in_raw_text(Child, escapable, Backend) ->
     _Walked = map_tail_exprs(
         Child,
         fun(Leaf) ->
             case is_markup_leaf(Leaf, Backend) of
-                true -> parse_error(markup_in_raw_text, anno(Leaf));
+                true -> parse_error(markup_in_raw_text, anno(Leaf), Backend);
                 false -> Leaf
             end
         end,
@@ -5831,7 +5785,7 @@ emit_child_dynamic(
     %% script/CSS (and a module script's HTML-comment tokens are a SyntaxError).
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
-    ok = assert_raw_text_opt_out(Child),
+    ok = assert_raw_text_opt_out(Child, Backend),
     Neighbours = {static_run_before(Buf), After},
     DynAST = make_raw_text_dynamic_ast(
         Child, Tag, Neighbours, Module, line(Child), Backend, State0#state.content_ctx
@@ -5945,10 +5899,10 @@ choices_fun({'fun', L, {clauses, [{clause, CL, [], [], Body}]}}, Picks, Esc) ->
 %% `?raw(...)` at the slot -- the same "literal at the template site" rule the
 %% escape opt-out already follows everywhere else. Static text children never reach
 %% here (compile_child/4 splices them from the template's own bytes).
-assert_raw_text_opt_out(Child) ->
+assert_raw_text_opt_out(Child, Backend) ->
     case is_raw_call(Child) of
         true -> ok;
-        false -> parse_error(dynamic_in_raw_text, anno(Child))
+        false -> parse_error(dynamic_in_raw_text, anno(Child), Backend)
     end.
 
 %% A literal `?raw` part is spliced; any other part is marked for escaping
@@ -6242,9 +6196,9 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff, CCtx) ->
 %% that contains markup, see is_markup_item/1) into a nested template, as a literal ?html
 %% there would; leave plain values (and pure value lists) untouched. A ?local
 %% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
-%% (see reject_orphaned_local/1).
+%% (see reject_orphaned_local/2).
 expand_element_leaf(Expr, Module, Backend, Nodiff, CCtx) ->
-    ok = reject_orphaned_local(Expr),
+    ok = reject_orphaned_local(Expr, Backend),
     case classify_body(Expr) of
         Class when Class =:= element_tuple; Class =:= element_list ->
             compile_template(Expr, line(Expr), Module, false, Backend, Nodiff, CCtx);
@@ -7054,17 +7008,17 @@ directive_opts_1(_Other) -> false.
 %% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
 %% never mistaken for an authored one.
 reject_framework_attrs(Backend, Attrs, Line) ->
-    ok = reject_nested_directives(Attrs, Line),
-    ok = reject_nodiff_value(Attrs, Line),
+    ok = reject_nested_directives(Backend, Attrs, Line),
+    ok = reject_nodiff_value(Backend, Attrs, Line),
     ok = reject_reserved_attrs(Attrs, Line),
     reject_duplicate_attrs(Backend, Attrs, Line).
 
 %% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
 %% token the client keeps the element by), so an authored one -- any value,
 %% `true` included -- is rejected rather than emitted or ignored.
-reject_nodiff_value(Attrs, Line) ->
+reject_nodiff_value(Backend, Attrs, Line) ->
     case lists:any(fun is_nodiff_value_attr/1, Attrs) of
-        true -> parse_error(nodiff_value, Line);
+        true -> parse_error(nodiff_value, Line, Backend);
         false -> ok
     end.
 
@@ -7081,9 +7035,9 @@ is_nodiff_value_attr(_Attr) ->
 %% There is no per-element nodiff scope, and left as an ordinary boolean attribute it
 %% would silently leak the reserved `az-nodiff` into the DOM while keeping the element
 %% diffable. Reject it with a clear error rather than mis-compiling it.
-reject_nested_directives(Attrs, Line) ->
+reject_nested_directives(Backend, Attrs, Line) ->
     case lists:any(fun is_directive_attr/1, Attrs) of
-        true -> parse_error(nested_nodiff, Line);
+        true -> parse_error(nested_nodiff, Line, Backend);
         false -> ok
     end.
 
@@ -7825,7 +7779,9 @@ rewrite_choice({tuple, L, [TagAST, AttrsAST | Rest]} = Child, Tag, Info, Sel) ->
     case take_attr(Backend, Flag, Attrs) of
         {ok, Authored, _Rest} ->
             Name = attr_name(fun Backend:name/1, Authored),
-            parse_error({select_value, {option_selected, Backend:name(Tag), Name, Chooser}}, L);
+            parse_error(
+                {select_value, {option_selected, Backend:name(Tag), Name, Chooser}}, L, Backend
+            );
         error ->
             ok
     end,

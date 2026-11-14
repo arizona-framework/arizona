@@ -1930,10 +1930,12 @@ compile_module(Source) ->
 
 assert_parse_error(Source, MatchFun) ->
     case arizona_parse_transform:parse_transform(parse_forms(Source), []) of
-        {error, [{_File, [{_Line, arizona_parse_transform, Reason}]}], []} ->
+        {error, [{_File, [{_Line, Formatter, Reason}]}], []} ->
             ?assert(MatchFun(Reason), Reason),
-            %% Every refusal reads as a sentence, not a crash in format_error/1.
-            ?assert(is_list(arizona_parse_transform:format_error(Reason)));
+            %% Every refusal reads as a sentence, not a crash in format_error/1: the
+            %% transform's own, or the render target's for a reason it words.
+            ?assert(lists:member(Formatter, [arizona_parse_transform, arizona_html])),
+            ?assert(is_list(Formatter:format_error(Reason)));
         Other ->
             error({expected_parse_error, Source, Other})
     end.

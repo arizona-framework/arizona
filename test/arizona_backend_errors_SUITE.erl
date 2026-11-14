@@ -1,0 +1,362 @@
+-module(arizona_backend_errors_SUITE).
+-moduledoc false.
+-behaviour(ct_suite).
+-include_lib("stdlib/include/assert.hrl").
+
+%% The render target words its own errors: a compile error a backend words is
+%% reported under the backend module (the compiler calls its `format_error/1`), a
+%% runtime one is raised with the backend in its `error_info`, and a backend
+%% without wording for a reason (`arizona_text_backend`, like `arizona_terminal`)
+%% gets the core's neutral message.
+
+-export([all/0]).
+-export([groups/0]).
+
+-export([compile_dynamic_in_raw_text/1]).
+-export([compile_local_in_raw_text/1]).
+-export([compile_markup_in_raw_text/1]).
+-export([compile_local_orphaned/1]).
+-export([compile_nodiff_value/1]).
+-export([compile_nested_nodiff/1]).
+-export([compile_effect_in_content/1]).
+-export([compile_each_stream_body_control_flow/1]).
+-export([compile_option_selected/1]).
+-export([compile_no_markup_text_is_neutral/1]).
+-export([compile_local_unsupported/1]).
+-export([runtime_markup_in_raw_text/1]).
+-export([runtime_stream_each_keyless/1]).
+-export([runtime_stream_each_multi_root/1]).
+-export([runtime_stateful_in_layout/1]).
+-export([runtime_cross_target_child_is_neutral/1]).
+-export([runtime_effect_in_content_is_neutral/1]).
+
+all() ->
+    [{group, compile_time}, {group, runtime}].
+
+groups() ->
+    [
+        {compile_time, [parallel], [
+            compile_dynamic_in_raw_text,
+            compile_local_in_raw_text,
+            compile_markup_in_raw_text,
+            compile_local_orphaned,
+            compile_nodiff_value,
+            compile_nested_nodiff,
+            compile_effect_in_content,
+            compile_each_stream_body_control_flow,
+            compile_option_selected,
+            compile_no_markup_text_is_neutral,
+            compile_local_unsupported
+        ]},
+        {runtime, [], [
+            runtime_markup_in_raw_text,
+            runtime_stream_each_keyless,
+            runtime_stream_each_multi_root,
+            runtime_stateful_in_layout,
+            runtime_cross_target_child_is_neutral,
+            runtime_effect_in_content_is_neutral
+        ]}
+    ].
+
+%% --------------------------------------------------------------------
+%% Compile time
+%% --------------------------------------------------------------------
+
+compile_dynamic_in_raw_text(Config) when is_list(Config) ->
+    {Html, Reason} = compile_error(
+        "be_dyn_raw", html("{script, [], [arizona_template:get(x, Bindings)]}")
+    ),
+    ?assertEqual({arizona_html, dynamic_in_raw_text}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"<script>")).
+
+compile_local_in_raw_text(Config) when is_list(Config) ->
+    {Html, Reason} = compile_error(
+        "be_local_raw", html("{textarea, [], [arizona_template:local(k, <<\"x\">>)]}")
+    ),
+    ?assertEqual({arizona_html, local_in_raw_text}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"textarea")).
+
+compile_markup_in_raw_text(Config) when is_list(Config) ->
+    {Html, Reason} = compile_error(
+        "be_markup_raw", html("{title, [], [{b, [], [arizona_template:get(t, Bindings)]}]}")
+    ),
+    ?assertEqual({arizona_html, markup_in_raw_text}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"<title>")).
+
+compile_local_orphaned(Config) when is_list(Config) ->
+    Orphan = fun(Tag) -> "[{" ++ Tag ++ ", [], []}, arizona_template:local(k, <<\"x\">>)]" end,
+    {Html, Reason} = compile_error("be_local_orphan", html(Orphan("p"))),
+    ?assertEqual({arizona_html, local_orphaned}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"az-local")),
+    ?assertEqual(
+        {arizona_json, local_orphaned},
+        compile_error("be_local_orphan_json", json(Orphan("'Text'")))
+    ),
+    ?assertNot(contains(arizona_json:format_error(Reason), ~"az-local")),
+    ?assertEqual(
+        {arizona_text_backend, local_orphaned},
+        compile_error("be_local_orphan_text", text(Orphan("line")))
+    ).
+
+compile_nodiff_value(Config) when is_list(Config) ->
+    {Html, Reason} = compile_error("be_nodiff_value", html("{'div', [{'az-nodiff', true}], []}")),
+    ?assertEqual({arizona_html, nodiff_value}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"rendered HTML")),
+    %% JSON strips the directive: no value of it reaches the document.
+    ?assertEqual(
+        {arizona_json, nodiff_value},
+        compile_error("be_nodiff_value_json", json("{'Column', [{'az-nodiff', true}], []}"))
+    ),
+    ?assertNot(contains(arizona_json:format_error(Reason), ~"HTML")),
+    ?assertEqual(
+        {arizona_text_backend, nodiff_value},
+        compile_error("be_nodiff_value_text", text("{line, [{'az-nodiff', true}], []}"))
+    ).
+
+compile_nested_nodiff(Config) when is_list(Config) ->
+    Nested = fun(Outer, Inner) ->
+        "{" ++ Outer ++ ", [], [{" ++ Inner ++ ", ['az-nodiff'], []}]}"
+    end,
+    {Html, Reason} = compile_error("be_nested_nodiff", html(Nested("'div'", "span"))),
+    ?assertEqual({arizona_html, nested_nodiff}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"DOM")),
+    ?assertEqual(
+        {arizona_json, nested_nodiff},
+        compile_error("be_nested_nodiff_json", json(Nested("'Column'", "'Text'")))
+    ),
+    ?assertNot(contains(arizona_json:format_error(Reason), ~"DOM")),
+    ?assertEqual(
+        {arizona_text_backend, nested_nodiff},
+        compile_error("be_nested_nodiff_text", text(Nested("line", "span")))
+    ).
+
+compile_effect_in_content(Config) when is_list(Config) ->
+    {Html, Reason} = compile_error(
+        "be_effect_html", html("{'div', [], [arizona_js:hide(<<\"#x\">>)]}")
+    ),
+    ?assertEqual({arizona_html, effect_in_content}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"az_click")),
+    ?assertEqual(
+        {arizona_json, effect_in_content},
+        compile_error(
+            "be_effect_json", json("{'Column', [], [arizona_android:push_event(<<\"x\">>)]}")
+        )
+    ),
+    JsonMsg = arizona_json:format_error(Reason),
+    ?assert(contains(JsonMsg, ~"on_tap")),
+    ?assertNot(contains(JsonMsg, ~"az_click")),
+    ?assertEqual(
+        {arizona_text_backend, effect_in_content},
+        compile_error("be_effect_text", text("{line, [], [arizona_effect:push_event(<<\"x\">>)]}"))
+    ).
+
+compile_each_stream_body_control_flow(Config) when is_list(Config) ->
+    Each = fun(Tag) ->
+        "[arizona_template:each(fun(I, K) -> case I of a -> {" ++ Tag ++
+            ", [{az_key, K}], []}; _ -> {" ++ Tag ++
+            ", [{az_key, K}], [I]} end end, arizona_template:get(s, Bindings))]"
+    end,
+    {Html, Reason} = compile_error("be_each_cf_html", html("{ul, [], " ++ Each("li") ++ "}")),
+    ?assertEqual({arizona_html, each_stream_body_control_flow}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"table/tr")),
+    ?assertEqual(
+        {arizona_json, Reason},
+        compile_error("be_each_cf_json", json("{'Column', [], " ++ Each("'Text'") ++ "}"))
+    ),
+    JsonMsg = arizona_json:format_error(Reason),
+    ?assert(contains(JsonMsg, ~"'Row'")),
+    ?assertNot(contains(JsonMsg, ~"table/tr")),
+    ?assertEqual(
+        {arizona_text_backend, Reason},
+        compile_error("be_each_cf_text", text("{col, [], " ++ Each("line") ++ "}"))
+    ).
+
+compile_option_selected(Config) when is_list(Config) ->
+    {Html, Reason} = compile_error(
+        "be_option_selected",
+        html(
+            "{select, [{value, arizona_template:get(v, Bindings)}], "
+            "[{option, [{value, <<\"a\">>}, selected], [<<\"A\">>]}]}"
+        )
+    ),
+    ?assertMatch({arizona_html, {select_value, {option_selected, _, _, _}}}, {Html, Reason}),
+    ?assert(contains(Html:format_error(Reason), ~"<option>")).
+
+%% Raised for a backend that lacks a callback, so the core words it, naming no
+%% target's syntax.
+compile_no_markup_text_is_neutral(Config) when is_list(Config) ->
+    Msg = core({select_value, {no_markup_text, some_backend, ~"choice"}}),
+    ?assert(contains(Msg, ~"some_backend")),
+    ?assertNot(contains(Msg, ~"<")).
+
+compile_local_unsupported(Config) when is_list(Config) ->
+    {Json, Reason} = compile_error(
+        "be_local_json", json("{'Column', [], [arizona_template:local(k, <<\"x\">>)]}")
+    ),
+    ?assertEqual({arizona_json, local_unsupported}, {Json, Reason}),
+    ?assert(contains(Json:format_error(Reason), ~"native")),
+    ?assertEqual(
+        {arizona_text_backend, local_unsupported},
+        compile_error("be_local_text", text("{line, [], [arizona_template:local(k, <<\"x\">>)]}"))
+    ).
+
+%% --------------------------------------------------------------------
+%% Runtime
+%% --------------------------------------------------------------------
+
+runtime_markup_in_raw_text(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true, name => ~"x"},
+    {Reason, Msg} = raised(fun() ->
+        arizona_render:render_to_iolist(M:script_literal_raw_template(B))
+    end),
+    {arizona_loc, _, {markup_in_raw_text, ~"script", _} = Inner} = Reason,
+    ?assert(contains(Msg, iolist_to_binary(arizona_html:format_error(Inner)))),
+    ?assert(contains(Msg, ~"<script>")).
+
+runtime_stream_each_keyless(Config) when is_list(Config) ->
+    Stream = arizona_stream:new(fun(X) -> X end, [~"a"]),
+    Html = compile(
+        "be_keyless_html",
+        html(
+            "{ul, [], [arizona_template:each(fun(I, _K) -> {li, [], [I]} end, "
+            "arizona_template:get(s, Bindings))]}"
+        )
+    ),
+    {stream_each_keyless, HtmlMsg} = raised_render(Html, #{s => Stream}),
+    ?assert(contains(HtmlMsg, iolist_to_binary(arizona_html:format_error(stream_each_keyless)))),
+    Json = compile(
+        "be_keyless_json",
+        json(
+            "{'Column', [], [arizona_template:each(fun(I, _K) -> {'Text', [], [I]} end, "
+            "arizona_template:get(s, Bindings))]}"
+        )
+    ),
+    {stream_each_keyless, JsonMsg} = raised_render(Json, #{s => Stream}),
+    ?assert(contains(JsonMsg, iolist_to_binary(arizona_json:format_error(stream_each_keyless)))),
+    ?assertNot(contains(JsonMsg, ~"{li,")).
+
+runtime_stream_each_multi_root(Config) when is_list(Config) ->
+    Stream = arizona_stream:new(fun(X) -> X end, [~"a"]),
+    Each = fun(Tag) ->
+        "[arizona_template:each(fun(I, K) -> [{" ++ Tag ++ ", [{az_key, K}], [I]}, {" ++
+            Tag ++ ", [], [I]}] end, arizona_template:get(s, Bindings))]"
+    end,
+    Html = compile("be_multi_html", html("{ul, [], " ++ Each("li") ++ "}")),
+    {stream_each_multi_root, HtmlMsg} = raised_render(Html, #{s => Stream}),
+    ?assert(
+        contains(HtmlMsg, iolist_to_binary(arizona_html:format_error(stream_each_multi_root)))
+    ),
+    Json = compile("be_multi_json", json("{'Column', [], " ++ Each("'Text'") ++ "}")),
+    {stream_each_multi_root, JsonMsg} = raised_render(Json, #{s => Stream}),
+    ?assert(
+        contains(JsonMsg, iolist_to_binary(arizona_json:format_error(stream_each_multi_root)))
+    ),
+    %% This target rejects dynamic attributes, az_key included: it keys nothing.
+    Text = compile(
+        "be_multi_text",
+        text(
+            "{col, [], [arizona_template:each(fun(I, _K) -> [{line, [], [I]}, {line, [], [I]}] "
+            "end, arizona_template:get(s, Bindings))]}"
+        )
+    ),
+    {stream_each_multi_root, TextMsg} = raised_render(Text, #{s => Stream}),
+    ?assert(
+        contains(
+            TextMsg, iolist_to_binary(arizona_text_backend:format_error(stream_each_multi_root))
+        )
+    ),
+    ?assertNot(contains(JsonMsg, ~"{li,")).
+
+runtime_stateful_in_layout(Config) when is_list(Config) ->
+    {Reason, Msg} = raised(fun() ->
+        arizona_render:render_view_to_iolist(arizona_about, #{
+            bindings => #{title => ~"Reject"},
+            layouts => [{arizona_stateful_layout, render}]
+        })
+    end),
+    {arizona_loc, _, {stateful_in_layout, _, _, _} = Inner} = Reason,
+    ?assert(contains(Msg, iolist_to_binary(arizona_html:format_error(Inner)))),
+    ?assert(contains(Msg, ~"az-view")),
+    JsonMsg = arizona_json:format_error(Inner),
+    ?assertNot(contains(JsonMsg, ~"az-view")),
+    ?assertNot(contains(JsonMsg, ~"az_patch")).
+
+runtime_cross_target_child_is_neutral(Config) when is_list(Config) ->
+    #{general := Msg} = arizona_render:format_error(
+        {cross_target_child, arizona_json, arizona_html}, []
+    ),
+    ?assert(contains(Msg, ~"?json")),
+    ?assertNot(contains(Msg, ~"HTML")).
+
+runtime_effect_in_content_is_neutral(Config) when is_list(Config) ->
+    Msg = core_runtime({effect_in_content, {arizona_effect, [0]}}),
+    ?assert(contains(Msg, ~"event attribute")),
+    ?assertNot(contains(Msg, ~"az_click")).
+
+%% --------------------------------------------------------------------
+%% Helpers
+%% --------------------------------------------------------------------
+
+html(Body) -> "arizona_template:target(arizona_html, " ++ Body ++ ")".
+
+json(Body) -> "arizona_template:target(arizona_json, " ++ Body ++ ")".
+
+text(Body) -> "arizona_template:target(arizona_text_backend, " ++ Body ++ ")".
+
+source(Mod, Body) ->
+    "-module(" ++ Mod ++ "). -export([render/1]). render(Bindings) -> _ = Bindings, " ++
+        Body ++ ".".
+
+forms(Source) ->
+    {ok, Tokens, _} = erl_scan:string(Source),
+    [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- split_forms(Tokens, [], [])
+    ].
+
+split_forms([], [], Acc) ->
+    lists:reverse(Acc);
+split_forms([{dot, _} = Dot | Rest], Current, Acc) ->
+    split_forms(Rest, [], [lists:reverse([Dot | Current]) | Acc]);
+split_forms([Token | Rest], Current, Acc) ->
+    split_forms(Rest, [Token | Current], Acc).
+
+%% The module the compiler asks to word the error, and the reason it hands it.
+compile_error(Mod, Body) ->
+    {error, [{_File, [{_Loc, Formatter, Reason}]}], []} =
+        arizona_parse_transform:parse_transform(forms(source(Mod, Body)), []),
+    {Formatter, Reason}.
+
+compile(Mod, Body) ->
+    Forms = arizona_parse_transform:parse_transform(forms(source(Mod, Body)), []),
+    {ok, M, Bin} = compile:forms(Forms, [return_errors]),
+    {module, M} = code:load_binary(M, "", Bin),
+    M.
+
+%% The reason a call raises and the message the shell would print for it.
+raised(Fun) ->
+    try Fun() of
+        Result -> ct:fail({expected_error, Result})
+    catch
+        error:Reason:ST ->
+            {Reason, unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST))}
+    end.
+
+%% A stream pairing is refused where the each renders, so the reason is located.
+raised_render(Mod, Bindings) ->
+    {Reason, Msg} = raised(fun() -> arizona_render:render_to_iolist(Mod:render(Bindings)) end),
+    {arizona_loc, {Mod, _}, Inner} = Reason,
+    {Inner, Msg}.
+
+core(Reason) ->
+    unicode:characters_to_binary(arizona_parse_transform:format_error(Reason)).
+
+core_runtime(Reason) ->
+    unicode:characters_to_binary(arizona_template:format_error(Reason)).
+
+contains(Chardata, Needle) ->
+    binary:match(unicode:characters_to_binary(Chardata), Needle) =/= nomatch.

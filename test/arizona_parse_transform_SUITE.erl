@@ -1413,11 +1413,18 @@ assert_parse_error(Source, MatchFun) ->
      || Toks <- Forms
     ],
     case arizona_parse_transform:parse_transform(ParsedForms, []) of
-        {error, [{_File, [{_Line, arizona_parse_transform, Reason}]}], []} ->
+        {error, [{_File, [{_Line, Formatter, Reason}]}], []} ->
+            %% A reason the render target words is reported under its backend.
+            ?assert(is_formatted(Formatter, Reason)),
             ?assert(MatchFun(Reason));
         _ ->
             error(expected_parse_error)
     end.
+
+is_formatted(Formatter, Reason) ->
+    (Formatter =:= arizona_parse_transform orelse Formatter =:= arizona_html orelse
+        Formatter =:= arizona_json) andalso
+        is_binary(unicode:characters_to_binary(Formatter:format_error(Reason))).
 
 %% Extract and JSON-decode the (HTML-attribute-escaped) `az-local` descriptor
 %% baked onto the element in rendered HTML.
@@ -2860,7 +2867,7 @@ raw_text_az_alias_raw_accepted(Config) when is_list(Config) ->
 %% The rejection reason renders through format_error/1 (what the compiler prints),
 %% and names the ?raw opt-out that unblocks the author.
 raw_text_reject_message_renders(Config) when is_list(Config) ->
-    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    Msg = arizona_html:format_error(dynamic_in_raw_text),
     ?assert(is_list(Msg)),
     ?assertNotEqual(nomatch, string:find(Msg, "?raw")),
     ?assertNotEqual(nomatch, string:find(Msg, "script")).
@@ -2980,7 +2987,7 @@ raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
         fun(R) -> R =:= dynamic_in_raw_text end
     ),
     %% The message must point at the fix that always works: wrap AT the slot.
-    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    Msg = arizona_html:format_error(dynamic_in_raw_text),
     ?assertNotEqual(nomatch, string:find(Msg, "at the slot")),
     ?assertNotEqual(nomatch, string:find(Msg, "variable")).
 
@@ -7843,8 +7850,9 @@ each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
     S2 = arizona_stream:delete(S1, ~"a"),
     {Ops, _, _} = arizona_diff:diff(Fix:render(#{items => S2}), Snap, #{}, #{items => true}),
     ?assertMatch([[?OP_REMOVE, _, ~"a"]], Ops),
-    #{general := Msg} = arizona_template:format_error(stream_each_keyless, []),
-    ?assertNotEqual(nomatch, string:find(Msg, "{az_key, Key}")).
+    ?assertNotEqual(
+        nomatch, string:find(arizona_html:format_error(stream_each_keyless), "{az_key, Key}")
+    ).
 
 assert_stream_each_keyless(Mod, Bindings) ->
     ?assertError(
@@ -8708,7 +8716,7 @@ error_keeps_column(Config) when is_list(Config) ->
 %% body names the file the helper is defined in: an included header here.
 error_in_included_helper_names_its_file(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{"pt_inc.hrl", [{{7, 22}, arizona_parse_transform, dynamic_in_raw_text}]}], []},
+        {error, [{"pt_inc.hrl", [{{7, 22}, arizona_html, dynamic_in_raw_text}]}], []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_helper_inc).\n"
@@ -11780,7 +11788,7 @@ effect_in_content_rejected(Config) when is_list(Config) ->
 
 effect_in_content_names_line(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{_File, [{5, arizona_parse_transform, effect_in_content}]}], []},
+        {error, [{_File, [{5, arizona_html, effect_in_content}]}], []},
         arizona_parse_transform:parse_transform(
             parse_forms(
                 "-module(pt_cmd_line).\n"
@@ -11795,7 +11803,7 @@ effect_in_content_names_line(Config) when is_list(Config) ->
     ).
 
 effect_in_content_message_names_fix(Config) when is_list(Config) ->
-    Msg = unicode:characters_to_binary(arizona_parse_transform:format_error(effect_in_content)),
+    Msg = unicode:characters_to_binary(arizona_html:format_error(effect_in_content)),
     [
         ?assertNotEqual(nomatch, binary:match(Msg, Part), Part)
      || Part <- [

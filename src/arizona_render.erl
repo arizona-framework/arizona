@@ -52,7 +52,7 @@ op-code targets.
 
 -include("arizona.hrl").
 
-%% Set while a layout layer renders (see render_layout/3).
+%% Set while a layout layer renders (see render_layout/4).
 -define(IN_LAYOUT, '$arizona_in_layout').
 
 %% Set while a value renders for its text to be read (see render_markup/2).
@@ -573,12 +573,16 @@ assert_same_target(Parent, Child) ->
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
+format_error({arizona_loc, {Mod, Line}, Reason}, ST) ->
+    %% A slot's located evaluation wraps the reason and keeps the raising frame.
+    #{general := Msg} = format_error(Reason, ST),
+    #{general => io_lib:format("~s:~b: ~ts", [Mod, Line, Msg])};
 format_error({cross_target_child, Parent, Child}, _ST) ->
     #{
         general => io_lib:format(
             "a ~s child was embedded in a ~s template. The render targets emit "
-            "incompatible statics -- HTML bytes spliced into a ~s payload cannot "
-            "be parsed by the client -- so a template tree must use one target "
+            "incompatible statics -- one target's output spliced into a ~s payload "
+            "cannot be parsed by the client -- so a template tree must use one target "
             "throughout. The compile-time check only sees targets nested in ONE "
             "template; reached through a ?stateful/?stateless child module the "
             "mismatch is invisible until render, which is here. Give the child "
@@ -627,18 +631,8 @@ format_error({stateful_in_text, Handler}, _ST) ->
             [Handler]
         )
     };
-format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
-    #{
-        general => io_lib:format(
-            "layout ~s:~s/1 embeds ?stateful(~s, ...), but a layout renders once "
-            "at SSR and never joins the live view tree, so the component would "
-            "emit an az-view marker for a view the server never registers and "
-            "every event under it would be dropped. Use ?stateless for layout "
-            "chrome; chrome that must stay live across navigation belongs in a "
-            "view the routes share, linked with az_patch.",
-            [Mod, Fun, Handler]
-        )
-    }.
+format_error({stateful_in_layout, _Mod, _Fun, _Handler} = Reason, ST) ->
+    #{general => arizona_template:worded_error(Reason, ST)}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -705,11 +699,8 @@ apply_layouts([{Mod, Fun} | Rest], PageBackend, Inner, Bindings) ->
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
     LayoutBackend = backend(Tmpl),
     ok = assert_layout_target(Mod, Fun, LayoutBackend, PageBackend),
-    {
-        layer_backend(LayoutBackend, InnerBackend),
-        layer_root(Mod, Fun, Tmpl, InnerRoot),
-        render_layout(Mod, Fun, Tmpl)
-    }.
+    Backend = layer_backend(LayoutBackend, InnerBackend),
+    {Backend, layer_root(Mod, Fun, Tmpl, InnerRoot), render_layout(Mod, Fun, Backend, Tmpl)}.
 
 %% A layer that records no backend adds no target of its own, so the document is
 %% still what it wraps.
@@ -773,14 +764,18 @@ assert_document_root({multi, Mod, Fun, Backend}) ->
 %% spans a nested layout or the page itself -- only this layer's own dynamics.
 -doc """
 The layout layer currently rendering in this process, or `undefined` outside
-one. The flag spans exactly one layer's own dynamics (see `render_layout/3`).
+one. The flag spans exactly one layer's own dynamics (see `render_layout/4`).
 """.
 -spec current_layout() -> {module(), atom()} | undefined.
 current_layout() ->
-    erlang:get(?IN_LAYOUT).
+    case erlang:get(?IN_LAYOUT) of
+        {Mod, Fun, _Backend} -> {Mod, Fun};
+        undefined -> undefined
+    end.
 
-render_layout(Mod, Fun, Tmpl) ->
-    erlang:put(?IN_LAYOUT, {Mod, Fun}),
+render_layout(Mod, Fun, Backend, Tmpl) ->
+    %% The backend words the refusal (stateful_in_layout), so it rides along.
+    erlang:put(?IN_LAYOUT, {Mod, Fun, Backend}),
     try
         render_to_iolist(Tmpl)
     after
@@ -825,10 +820,10 @@ refuse_stateful_in_layout(H) ->
     case erlang:get(?IN_LAYOUT) of
         undefined ->
             ok;
-        {Mod, Fun} ->
-            erlang:error(
-                {stateful_in_layout, Mod, Fun, H}, none, [{error_info, #{module => ?MODULE}}]
-            )
+        {Mod, Fun, Backend} ->
+            erlang:error({stateful_in_layout, Mod, Fun, H}, none, [
+                {error_info, #{module => ?MODULE, backend => Backend}}
+            ])
     end.
 
 refuse_stateful(H) ->
