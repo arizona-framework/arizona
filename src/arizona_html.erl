@@ -512,7 +512,6 @@ raw_text_remedy(_TextElement) ->
 
 -spec embed_attrs(iodata(), [binary()]) -> iodata().
 embed_attrs(Doc, Names) ->
-
     %% The body's last child when the document ends with `</body>` (then optional
     %% whitespace and `</html>`): inserted before that close tag, so the document
     %% stays valid HTML. Only the document's last bytes are read, from the right of
