@@ -282,7 +282,9 @@ Chooser}}` with `selection_role/1`. Errors whose advice needs no element of the 
 (`duplicate_attr`, `invalid_element`, ...) stay the core's, as does the runtime
 `effect_in_content` a value raises where no backend is known.
 
-One callback is optional, `c:arizona_renderer:selection_role/1`, for a target whose output has no
+A few callbacks are optional, each a capability some targets lack by nature
+(`selection_role/1`, `mark_choices/2`, `markup_text/2`, `attr_markup/1`, `controlled/2`,
+`embed_attrs/2`). `c:arizona_renderer:selection_role/1` is for a target whose output has no
 attribute for an element's chosen value. HTML is that target: `value` on a `<select>` is ignored by
 the parser, which loads on the first option (or the one marked `selected`), while a diff writes the
 `.value` property, so the page and every later update would disagree. The backend names the roles --
