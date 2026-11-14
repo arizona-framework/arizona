@@ -2905,8 +2905,8 @@ Escaping is preserved structurally rather than reimplemented -- the children com
 ordinary `compile_children/3` walk, so each dynamic keeps its own policy: `raw` goes verbatim through
 `neutralize_raw_text/4` neutralization; `escapable` goes through the same callback, a plain value
 marked by `arizona_template:mark_esc/1` and HTML-escaped, a `?raw` spliced with the element's end
-tag defused -- except a content `?local`, which keeps the `esc_spec` value path its client binding
-needs.
+tag defused, and a template with no element rendered as its text. A content `?local` in either kind
+is a compile error (`local_in_raw_text`), since raw-text content carries no slot markers.
 
 **An executable `<script>` is the one case where updating is questionable, and `az-nodiff` is the
 answer.** A script element carries an "already started" flag, so mutating its text after it has run

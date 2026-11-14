@@ -4943,8 +4943,9 @@ needs_elem_az(Children, Line, #state{nodiff = true}) ->
 %% policy -- `raw` (script/style) goes verbatim through `Backend:neutralize_raw_text/4`
 %% breakout neutralization; `escapable` (textarea/title) goes through the same
 %% callback, a plain value marked by `arizona_template:mark_esc/1` and HTML-escaped,
-%% a `?raw` spliced with the end tag defused -- except a content `?local`, which
-%% keeps the `esc_spec` value path.
+%% a `?raw` spliced with the end tag defused, a text-only template as its text. A
+%% content `?local` there is a compile error (`local_in_raw_text`), since raw-text
+%% content carries no slot markers.
 %% Nothing here rewrites that path.
 compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0) ->
     ChildState = State0#state{
@@ -5761,16 +5762,13 @@ emit_child_dynamic(
         Child, Tag, Neighbours, Module, line(Child), Backend, State0#state.content_ctx
     ),
     {flush(State0, DynAST), Slot};
-emit_child_dynamic(Child, ElemAz, #state{raw_text_kind = escapable} = State0, Slot) ->
+emit_child_dynamic(Child, _ElemAz, #state{raw_text_kind = escapable} = State0, Slot) ->
     %% textarea/title: escapable raw text. Comments are literal there, so the slot is
     %% markerless and render-once; the backend renders the value for that context
-    %% (`neutralize_raw_text/4`): a literal `?raw` spliced with the element's end tag defused, any
-    %% other value escaped (marked here, as a content value is), a text-only template
-    %% as its text. A `?local` keeps the value path its own markers need.
-    case is_local_marker(Child) of
-        true -> emit_escapable_local(Child, ElemAz, State0, Slot);
-        false -> emit_escapable_raw_text(Child, State0, Slot)
-    end;
+    %% (`neutralize_raw_text/4`): a literal `?raw` spliced with the element's end tag
+    %% defused, any other value escaped (marked here, as a content value is), a
+    %% text-only template as its text.
+    emit_escapable_raw_text(Child, State0, Slot);
 emit_child_dynamic(
     Child, ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
 ) ->
@@ -5830,14 +5828,6 @@ emit_escapable_raw_text(
         true -> {flush(State0, DynAST), Slot + 1};
         false -> {flush(State0, DynAST), Slot}
     end.
-
-emit_escapable_local(Child, ElemAz, #state{nodiff = true} = State0, Slot) ->
-    emit_marked_child(Child, ElemAz, State0, Slot);
-emit_escapable_local(Child, _ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
-    DynAST = make_nodiff_dynamic_ast(
-        Child, Module, line(Child), Backend, State0#state.content_ctx
-    ),
-    {flush(State0, DynAST), Slot}.
 
 emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),

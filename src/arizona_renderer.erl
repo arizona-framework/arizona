@@ -373,11 +373,10 @@ value. The zipped document always uses `escape/1`.
 
 -doc """
 Make a dynamic value safe to splice into a raw-text element, one whose
-`raw_text_kind/2` is not `none`. The parse transform wraps every dynamic content
-value of such an element in this callback, except a content `?local` in an
-`escapable` one, which keeps the escaped, marker-anchored value path its client
-binding needs (a `?local` in a `raw` one is a compile error). A backend without
-raw-text elements returns the value unchanged. It is called for both kinds:
+`raw_text_kind/2` is not `none`. Every dynamic content value of such an element
+goes through this callback; a content `?local` there is a compile error
+(`local_in_raw_text`), since raw-text content carries no slot markers. A backend
+without raw-text elements returns the value unchanged. It is called for both kinds:
 
 - `raw` (HTML `script` and the RAWTEXT `style`/`xmp`/`iframe`/`noembed`/`noframes`):
   the content is emitted verbatim (the browser decodes nothing there), so entity
