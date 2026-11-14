@@ -5287,7 +5287,7 @@ compile_interp_local_attr(Backend, NameBin, LocalCall, Before, After, ElemAz, St
 %% v => [Prefix, arizona_template:to_bin(Init), Suffix]}`. to_bin wraps Init so a
 %% non-binary init (number/atom) composes as its text -- a bare integer in an
 %% iolist would otherwise be emitted as a byte, not its decimal digits. The affixes
-%% are text (affix_text/3) the page must hold exactly, as the client composes with
+%% are text (affix_text/2) the page must hold exactly, as the client composes with
 %% them: escaped where the attribute renders, unless escaping would not keep them (a
 %% CR, which the parser turns into a LF), when they render as the backend's markup for
 %% them (`attr_markup/1`) and `v` is that markup beside the escaped init.
@@ -5429,7 +5429,6 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% the entities back). No separate escape here -- that would double-escape.
 maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind, Line) ->
     AttrLocals = collect_attr_locals(Backend, LocalAttrs, Line),
-    AttrAffixes = collect_attr_affixes(Backend, Tag, LocalAttrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
     case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
         false ->
@@ -5438,6 +5437,9 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
             assert_content_local_not_raw_text(ContentLocals, RawKind, Line),
             assert_local_supported(Backend, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
+            %% After the support check: the affixes are read through callbacks only a
+            %% backend supporting `?local` implements.
+            AttrAffixes = collect_attr_affixes(Backend, Tag, LocalAttrs, Line),
             Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
             Json = iolist_to_binary(json:encode(Desc)),
             [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Json)]} | Attrs]
@@ -5488,7 +5490,7 @@ build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals) ->
 
 %% Both whole-value and interpolated attribute locals contribute `attrName => Key`
 %% (homogeneous, so the key-reuse check stays simple); interpolated ones also add
-%% their affixes via collect_attr_affixes/3.
+%% their affixes via collect_attr_affixes/4.
 collect_attr_locals(Backend, Attrs, Line) ->
     maps:from_list([
         {extract_attr_name(Backend, NameAST), local_key(local_call(Spec), Line)}

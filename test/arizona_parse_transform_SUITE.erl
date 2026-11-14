@@ -2024,6 +2024,17 @@ local_in_json_error(Config) when is_list(Config) ->
         "        {'Text', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_unsupported end
+    ),
+    %% An interpolated attribute local is refused the same way, before its fixed text is
+    %% read through callbacks a backend without `?local` does not implement.
+    assert_parse_error(
+        "-module(pt_local_json_interp). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_json, "
+        "        {'Text', [{text, [<<\"a\">>, arizona_template:local(k, <<\"x\">>)]}], []}"
+        "    ). ",
+        fun(R) -> R =:= local_unsupported end
     ).
 
 %% A content ?local inside a raw-text element (script/style/textarea/title)
