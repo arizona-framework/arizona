@@ -105,15 +105,21 @@ function runDelegated(e, attr, sel, capture) {
     try {
         const cmds = JSON.parse(raw);
         const g = newGesture();
-        if (e.type === 'click') {
-            const click = { target: t, g };
+        const click = e.type === 'click' ? { target: t, g } : null;
+        if (click) {
             _clickGesture = click;
             // A task, not a microtask: the submit follows the click's dispatch.
             setTimeout(() => {
                 if (_clickGesture === click) _clickGesture = null;
             }, 0);
         }
-        inGesture(g, () => executeJS(el, e, withTransitionAttr(el, cmds)));
+        try {
+            inGesture(g, () => executeJS(el, e, withTransitionAttr(el, cmds)));
+        } finally {
+            // A click this click's own commands dispatched cleared it; this click's
+            // submit has yet to follow.
+            if (click) _clickGesture = click;
+        }
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         // Keyed by the attribute, not the message: a churning bad value would

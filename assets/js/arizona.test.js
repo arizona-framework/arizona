@@ -8212,6 +8212,34 @@ describe('fetch in flight', () => {
         expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/save']);
     });
 
+    it.each([
+        ['dispatches a click', `[[9,"click",{}],[22,"/a",{}]]`, () => {}],
+        [
+            'focuses a field whose listener clicks elsewhere',
+            `[[11,"#i"],[22,"/a",{}]]`,
+            () =>
+                document
+                    .getElementById('i')
+                    .addEventListener('focus', () => document.getElementById('p').click()),
+        ],
+    ])('keeps its click gesture when the click %s', async (_label, cmds, setup) => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/save",{}]'>
+                <p id="p">x</p>
+                <input id="i" name="a" />
+                <button id="b" type="submit" az-click='${cmds}'>Save</button>
+            </form>`,
+        );
+        setup();
+        const dropped = vi.fn();
+        document
+            .getElementById('f')
+            .addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+        document.getElementById('b').click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/a', '/save']);
+        expect(dropped).not.toHaveBeenCalled();
+    });
+
     it('does not adopt a click that submitted nothing', async () => {
         await page(
             `<form id="f" method="post" az-submit='[22,"/save",{}]'>
