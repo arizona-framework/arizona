@@ -2859,8 +2859,8 @@ children. In foreign content an element is ordinary parsed markup -- comments re
 newline after its start tag, no `az-ctl`).
 This matters because an SVG `<title>` is a graphic's accessible name, so a bound one would
 otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -- it would need
-its own integration points to be correct, and leaving it in `html` keeps existing behaviour rather
-than half-handling it.
+its own integration points to be correct, and leaving it in HTML content (`undefined`) keeps
+existing behaviour rather than half-handling it.
 
 The context reaches a construct compiled elsewhere through the top-down marking pass. A **local
 element helper** is spliced into the caller's element AST before that element compiles, so it
@@ -2885,8 +2885,8 @@ bottom-up, or a spliced hoisted one already marked -- keeps the context of the c
 HTML; write the `?each` inside the `<svg>` element for SVG treatment.
 
 A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
-with no call site at compile time, so a `<title>` there is classified `html` and its slot comes
-out markerless. That much is not fixable -- the same child may be used in both contexts, and
+with no call site at compile time, so a `<title>` there is compiled in HTML content
+(`undefined`), classified `escapable`, and its slot comes out markerless. That much is not fixable -- the same child may be used in both contexts, and
 nothing in its own source says which.
 
 The *update* still lands, though, because the child's own slot in the caller does have markers.

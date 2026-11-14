@@ -103,12 +103,14 @@ is emitted.
 target (`<!--az:X-->...<!--/az-->`) and is fully diffable. `raw` for raw-text
 elements (`script`, and the RAWTEXT `style`/`xmp`/`iframe`/`noembed`/`noframes`):
 the browser never decodes character references or HTML comments there, so the
-slot is emitted verbatim, markerless and render-once
-(comment markers would become literal bytes and corrupt the script/CSS).
-`escapable` for escapable-raw-text elements (`textarea`/`title`): character
-references ARE decoded, so a scalar slot is HTML-escaped, but it is still
-markerless and render-once. Non-HTML backends return `none` -- their wire format
-does not use HTML comment markers.
+slot is emitted verbatim and markerless (comment markers would become literal
+bytes and corrupt the script/CSS). `escapable` for escapable-raw-text elements
+(`textarea`/`title`): character references ARE decoded, so a scalar slot is
+HTML-escaped, but it is still markerless. Either way the element carries an `az`
+and its whole content folds into one nested template held there, so a value
+change re-renders that content (an `az-nodiff` element renders it once).
+Non-HTML backends return `none` -- their wire format does not use HTML comment
+markers.
 """.
 -callback raw_text_kind(Tag :: tag(), Context :: content_context()) -> raw_text_kind().
 
