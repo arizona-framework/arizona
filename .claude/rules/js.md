@@ -158,8 +158,14 @@ well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-
 directives rather than events. The flush covers the form's own slots too (a form-level
 `az-debounce` paces the field events it delegates), and a submit is never debounced itself --
 `az-debounce="blur"` on a form would otherwise never send it -- while `az-throttle` still paces
-it (a second submit inside the window becomes its trailing send; the flush leaves the submit's
-own slot alone). A debounce mode the server switches mid-window sends the slot's latest raise in the new
+a `push_event` submit (a second submit inside the window becomes its trailing send). No flush
+touches the submit's own slot -- not the submit flush, nor a blur or event-name flush on the
+form: its only pending send is that trailing submission, which its tick delivers on time, so a
+flush would only reopen the window early. Pacing is a `push_event` mechanism: an
+`arizona_js:fetch` is issued as it is raised, on a submit or any event, and `az-debounce`/
+`az-throttle` do not defer it (a deferred request would need its own answer to the navigate
+epoch and the replay hold, both defined for view events, and a paced double submit still posts
+twice). A debounce mode the server switches mid-window sends the slot's latest raise in the new
 mode: the old timer neither fires a raise the new one replaced nor drops it.
 
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
