@@ -105,4 +105,29 @@ describe('CR and NUL in rendered values', () => {
         applyOps([[1, 'v:0', 'value', '["a\\r\\nb","z\\u0000"]']]);
         expect([...sel.selectedOptions].map((o) => o.text)).toEqual(['rn']);
     });
+
+    // A text-like input's value is sanitized: newlines stripped, and a url or email
+    // value (each of an email multiple's) trimmed. The read strips the affixes as
+    // that sanitization leaves them, so it reads the local's value the input shows.
+    it('reads a ?local beside affixes the input value sanitization rewrites', () => {
+        load(page('i'));
+        const value = (/** @type {string} */ az) =>
+            /** @type {HTMLInputElement} */ (document.querySelector(`[az="${az}"]`)).value;
+        expect([value('YK753W-4'), value('YK753W-5'), value('YK753W-6')]).toEqual([
+            'xy',
+            'x/',
+            'a@b.c,d@e.f,g@h.i',
+        ]);
+        expect(get('q')).toBe('x');
+        expect(get('u')).toBe('x');
+        expect(get('m')).toBe('d@e.f');
+        set('v', 'q', 'a\nb');
+        expect(get('q')).toBe('ab');
+        set('v', 'u', '');
+        expect(get('u')).toBe('');
+        set('v', 'm', ' p@q.r, s@t.u ');
+        expect(get('m')).toBe('p@q.r,s@t.u');
+        set('v', 'm', '');
+        expect(get('m')).toBe('');
+    });
 });
