@@ -205,8 +205,9 @@ Whether this backend supports the client-owned `?local` slot: one the server
 renders once and the client owns from then on, updating it with no round-trip. A
 backend capability, declared by each backend; the parse transform rejects `?local`
 at compile time when `false`. A backend answering `true` must also implement
-`markup_text/2` and `attr_markup/1`, which the transform calls for the fixed text
-beside an attribute `?local`.
+`markup_text/2`, which the transform reads the escaped fixed text beside an attribute
+`?local` back through: that text is what the page holds, and what the client composes
+the attribute with.
 """.
 -callback supports_local() -> boolean().
 
@@ -290,8 +291,8 @@ value `a&b` picks, as it is in the page. For HTML: the value preprocessed (newli
 normalized, NUL replaced) and its character references decoded as an attribute
 value's are.
 
-Optional, except for a backend whose `supports_local/0` is `true`, which needs it (with
-`attr_markup/1`) for the fixed text beside an attribute `?local`. A backend that
+Optional, except for a backend whose `supports_local/0` is `true`, which needs it for
+the fixed text beside an attribute `?local`. A backend that
 implements `selection_role/1` without it cannot compile a
 choice whose text holds a value (a `select_value` compile error), its static text
 holding markup syntax is left for `mark_choices/2`, and a markup value compares as
@@ -299,22 +300,6 @@ written, as an escaped one does.
 """.
 -callback markup_text(Markup :: iodata(), Context :: text | attribute) ->
     {text | markup, binary()}.
-
--doc """
-Markup for an attribute value that the backend's parser reads back as `Text`, except
-for what the parser cannot hold at all (HTML: a NUL, which reads as U+FFFD however it
-is written): the inverse of `markup_text/2` in `attribute`. `escape/1` is not that
-wherever the parser rewrites a character it leaves as is. Used at compile time for the
-fixed text beside an attribute `?local` (a static part, or a literal `raw/1` folded to
-the text it means), which the client recomposes the attribute with and strips on a
-read, so the page must hold that text, and the client's affix is what the page reads
-from it (`markup_text/2`). For HTML: escaped, and a CR written as a reference, since
-the parser turns a CR byte into a LF.
-
-Required, with `markup_text/2`, of a backend whose `supports_local/0` is `true`; one
-without `?local` needs neither.
-""".
--callback attr_markup(Text :: binary()) -> binary().
 
 -doc """
 Whether `Tag`'s `{attr, Name}` (`Name` as `name/1` spells it) or its `content` is a
@@ -335,9 +320,8 @@ Optional. A backend without it marks nothing.
 """.
 -callback controlled(Tag :: tag(), Part :: {attr, binary()} | content) -> boolean().
 
-%% `markup_text/2` and `attr_markup/1` are required of a backend supporting `?local`
-%% (`supports_local/0`); a backend without `?local` needs neither.
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, attr_markup/1, controlled/2]).
+%% `markup_text/2` is required of a backend supporting `?local` (`supports_local/0`).
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/2]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for

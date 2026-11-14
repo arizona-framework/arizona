@@ -1548,7 +1548,8 @@ interpolated_local_value_split_newline(Config) when is_list(Config) ->
     lists:foreach(
         fun({Mod, Attrs, Bindings, CR}) ->
             M = compile_module(raw_src(Mod, Attrs, Options)),
-            HTML = ssr_picked([<<"a\r\nb">>], M, Bindings),
+            %% The picked option's value as markup: the CR written `&#13;`.
+            HTML = ssr_picked([<<"a&#13;\nb">>], M, Bindings),
             ?assertEqual(<<"a\r\nb">>, select_value(HTML), HTML),
             ?assertEqual(
                 #{~"a" => #{~"value" => ~"k"}, ~"ap" => #{~"value" => [[CR, <<"\nb">>], []]}},

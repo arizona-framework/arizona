@@ -5289,29 +5289,15 @@ compile_interp_local_attr(Backend, NameBin, LocalCall, Before, After, ElemAz, St
 %% v => [Prefix, arizona_template:to_bin(Init), Suffix]}`. to_bin wraps Init so a
 %% non-binary init (number/atom) composes as its text -- a bare integer in an
 %% iolist would otherwise be emitted as a byte, not its decimal digits. The affixes
-%% are text (affix_text/2) the page must hold exactly, as the client composes with
-%% them: escaped where the attribute renders, unless escaping would not keep them (a
-%% CR, which the parser turns into a LF), when they render as the backend's markup for
-%% them (`attr_markup/1`) and `v` is that markup beside the escaped init.
+%% are text (affix_text/2) the page holds exactly, as the client composes with them:
+%% escaped where the attribute renders, which the backend's parser reads back as that
+%% text (affix_part_text/2 read it so).
 local_attr_interp_expr_ast(Backend, NameBin, LocalCall, Before, After) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
     Prefix = affix_text(Backend, Before),
     Suffix = affix_text(Backend, After),
     Init = to_bin_ast(local_init(LocalCall)),
-    VAST =
-        case escape_keeps(Backend, Prefix) andalso escape_keeps(Backend, Suffix) of
-            true ->
-                ast_list([ast_binary(Prefix), Init, ast_binary(Suffix)]);
-            false ->
-                {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, raw_attr}}, [
-                    {atom, 0, Backend},
-                    ast_list([
-                        raw_ast(Backend:attr_markup(Prefix)),
-                        Init,
-                        raw_ast(Backend:attr_markup(Suffix))
-                    ])
-                ]}
-        end,
+    VAST = ast_list([ast_binary(Prefix), Init, ast_binary(Suffix)]),
     {map, 0, LocalCall, [
         {map_field_assoc, 0, {atom, 0, target}, TargetAST},
         {map_field_assoc, 0, {atom, 0, v}, VAST}
@@ -5391,26 +5377,19 @@ raw_affix_markup(_Part) ->
 %% beside it at runtime, so a raw left as markup could be completed by them (an open
 %% `&amp` before an init `1` reads `&amp1`) or end the attribute (a `"`), and the
 %% page would stop meaning the affix the client composes with and strips.
-%% A static part is the text the page holds once it is written as markup reading back
-%% as it, which differs where the parser cannot hold a character (a NUL reads U+FFFD).
+%% A static part is the text the page holds once it is escaped, which differs where the
+%% parser cannot hold a character (a NUL reads U+FFFD).
 affix_part_text(Backend, Part) ->
     case raw_affix_markup(Part) of
         {ok, Markup} -> attr_markup_text(Backend, Markup);
-        error -> attr_markup_text(Backend, Backend:attr_markup(extract_binary_value(Part)))
+        error -> attr_markup_text(Backend, Backend:escape(extract_binary_value(Part)))
     end.
 
 %% The text of the parts on one side of the local: the client's affix.
 affix_text(Backend, Parts) ->
     iolist_to_binary([affix_part_text(Backend, P) || P <- Parts]).
 
-%% Whether the page holds `Text` escaped as written.
-escape_keeps(Backend, Text) ->
-    Backend:markup_text(Backend:escape(Text), attribute) =:= {text, Text}.
-
-raw_ast(Bin) ->
-    {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, raw}}, [ast_binary(Bin)]}.
-
-%% `markup_text/2` and `attr_markup/1` are required of a backend supporting `?local`.
+%% `markup_text/2` is required of a backend supporting `?local`.
 attr_markup_text(Backend, Markup) ->
     {text, Text} = Backend:markup_text(Markup, attribute),
     Text.
@@ -7521,9 +7500,9 @@ local_inits(Backend, Value, Multiple) ->
             ]}
     end.
 
-%% The text a chooser's interpolated local value stands for, read as the page reads a
-%% chooser's value (`arizona_template:attr_text/2`: joined, then normalized, so a CR
-%% ending one part and a LF starting the next are one newline): folded for a literal
+%% The text a chooser's interpolated local value stands for, read as the page holds a
+%% chooser's value (`arizona_template:attr_text/2`: the parts joined as exact text, a
+%% NUL as U+FFFD): folded for a literal
 %% init, so the choices still fold at compile time, else
 %% `arizona_template:attr_text(Backend, [Prefix, arizona_template:to_bin(Init), Suffix])`.
 local_text_ast(Backend, LocalCall, Before, After) ->
