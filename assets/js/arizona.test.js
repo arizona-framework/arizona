@@ -8212,6 +8212,64 @@ describe('fetch in flight', () => {
         expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/save']);
     });
 
+    it('does not adopt a click that submitted nothing', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/save",{}]'>
+                <button id="b" type="submit" az-click='[22,"/a",{}]'>Save</button>
+            </form>`,
+        );
+        const form = document.getElementById('f');
+        const b = document.getElementById('b');
+        const dropped = vi.fn();
+        form.addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+        // The app cancels the first click: its /a holds the form, no submit follows.
+        const cancel = (/** @type {Event} */ e) => e.preventDefault();
+        b.addEventListener('click', cancel);
+        b.click();
+        b.removeEventListener('click', cancel);
+        // Disconnected, the second click runs no delegated command of its own.
+        mock.simulateClose();
+        b.click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/a']);
+        expect(dropped).toHaveBeenCalledWith({ reason: 'in_flight' });
+    });
+
+    it('holds the form until a deferred on_error ran', async () => {
+        /** @type {Function[]} */
+        const updates = [];
+        document.startViewTransition = (fn) => {
+            updates.push(typeof fn === 'function' ? fn : fn.update);
+            return { ready: Promise.resolve() };
+        };
+        try {
+            await page(
+                `<form id="f" method="post"
+                    az-submit='[22,"/save",{"on_error":[20,{},[22,"/retry",{}]]}]'></form>`,
+            );
+            const dropped = vi.fn();
+            document
+                .getElementById('f')
+                .addEventListener('arizona:submit-dropped', (e) => dropped(e.detail));
+            submit('f');
+            pending[0].resolve(response(500, '<h1>boom</h1>'));
+            await vi.waitFor(() => expect(updates).toHaveLength(1));
+            submit('f');
+            expect(dropped).toHaveBeenCalledWith({ reason: 'in_flight' });
+            updates[0]();
+            expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/save', '/retry']);
+            // The retry holds it in turn, and lets go when it settles.
+            submit('f');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+            pending[1].resolve(response(200, ''));
+            await vi.waitFor(() => {
+                submit('f');
+                expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+            });
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
     it('runs a throwing on_error once and still reports the failure', async () => {
         await page(
             `<form id="f" method="post"

@@ -69,6 +69,9 @@ function submitGesture(e) {
  * @param {boolean} capture
  */
 function runDelegated(e, attr, sel, capture) {
+    // Before every return: a click that ends up submitting nothing (cancelled,
+    // an invalid form) must not leave its gesture for a later click's submit.
+    if (e.type === 'click') _clickGesture = null;
     const t = /** @type {Element} */ (e.target);
     // Not always an Element: a viewport `scroll`, the page-level `mouseenter`, and
     // a server-sent `dispatch_event` all target the Document, which has no closest().

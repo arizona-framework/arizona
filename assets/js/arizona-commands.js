@@ -812,9 +812,6 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             req.then((resp) =>
                 resp.text().then((text) =>
                     later(() => {
-                        // Settled: released before the effects, so one of them
-                        // (or the user, at once) may post the form again.
-                        release();
                         // Apply the effects body whenever it parses -- even on a 4xx, so
                         // the server can drive inline validation with a real status. The
                         // effects run against a stand-in for the trigger that names the view
@@ -842,6 +839,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         // flow into the .catch would fire on_error/arizona:fetch-error
                         // as a phantom network failure, after effects partially applied.
                         if (effects !== null) {
+                            // Settled: released before the effects, which run outside
+                            // the gesture, so one of them (or the user, at once) may
+                            // post the form again.
+                            release();
                             // A detached stand-in carrying the trigger's target, never
                             // a live element: as a push_event trigger a form or a field
                             // would put what was typed in the payload, and any element
@@ -858,7 +859,13 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             } catch (err) {
                                 console.error('[arizona] fetch response effect threw', err);
                             }
-                        } else onError({ url, status: resp.status });
+                        } else {
+                            // on_error is the gesture's: the form stays held until it
+                            // ran, its deferred view-transition work included, so a
+                            // user submit cannot slip in ahead of its retry.
+                            onError({ url, status: resp.status });
+                            release();
+                        }
                         // Honor az-form-reset only on a 2xx success, so a validation
                         // error (a non-2xx) keeps the typed fields. Same isolation as
                         // the effects above.
@@ -873,8 +880,11 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 ),
             ).catch((error) =>
                 later(() => {
-                    release();
-                    onError({ url, error });
+                    try {
+                        onError({ url, error });
+                    } finally {
+                        release();
+                    }
                 }),
             );
             break;
