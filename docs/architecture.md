@@ -2119,7 +2119,8 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   an HTTP-rendered live page embeds the same way -- through its target's
   `static_document/2` renderer callback: HTML embeds them as
   `<script type="application/json" id="arizona-attrs">` appended after the document, and
-  `start()` delegates exactly those.
+  `start()` delegates exactly those. The callback is optional: a target with no client script
+  to read the names (a terminal) leaves it out and its page is written as rendered.
 
 ## Roadrunner handlers
 

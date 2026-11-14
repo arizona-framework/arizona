@@ -184,7 +184,8 @@ the document the `az-*` names proven for it -- what the walk finds from the
 roots and the modules the render instantiated, plus what the render evaluated to
 a command -- through its render target's `static_document/2`, even when there
 are none: the client reads the last embed, so a page without one would leave it
-reading an element the page content holds.
+reading an element the page content holds. A target that does not implement the
+optional callback gets its document back as rendered.
 """.
 -spec embed(Roots, Render) -> {Backend, iodata()} when
     Roots :: [module()],
@@ -196,9 +197,18 @@ embed(Roots, Render) ->
     try
         {Backend, Doc} = Render(),
         {Rendered, Mods} = drain(),
-        {Backend, Backend:static_document(Doc, lists:usort(Rendered ++ all(Roots ++ Mods)))}
+        {Backend, static_document(Backend, Doc, Rendered, Roots ++ Mods)}
     after
         ok = restore(Saved)
+    end.
+
+%% `static_document/2` is optional: a target without it (a terminal) has no client
+%% script to read the names, so its document is left as rendered and unwalked.
+static_document(Backend, Doc, Rendered, Roots) ->
+    {module, Backend} = code:ensure_loaded(Backend),
+    case erlang:function_exported(Backend, static_document, 2) of
+        true -> Backend:static_document(Doc, lists:usort(Rendered ++ all(Roots)));
+        false -> Doc
     end.
 
 -doc """

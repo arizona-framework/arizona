@@ -25,6 +25,7 @@
 -export([page_without_body_gets_the_names_after_it/1]).
 -export([html_embed_never_searches_the_document/1]).
 -export([target_decides_how_a_document_carries_names/1]).
+-export([target_without_static_document_embeds_nothing/1]).
 -export([leaves_the_collector_disarmed/1]).
 
 all() ->
@@ -52,6 +53,7 @@ groups() ->
             page_without_body_gets_the_names_after_it,
             html_embed_never_searches_the_document,
             target_decides_how_a_document_carries_names,
+            target_without_static_document_embeds_nothing,
             leaves_the_collector_disarmed
         ]}
     ].
@@ -268,6 +270,15 @@ target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
     ),
     Json = ~"{\"type\":\"Text\",\"children\":[\"</body>\"]}",
     ?assertEqual(Json, iolist_to_binary(arizona_json:static_document(Json, Names))).
+
+%% `static_document/2` is optional: a target without it has no client script to
+%% read the names, so its page is written exactly as rendered.
+target_without_static_document_embeds_nothing(Config) when is_list(Config) ->
+    Dir = subdir(Config, "no_static_document"),
+    Mod = arizona_text_page:load(),
+    {[Out], []} = arizona_static:generate(Dir, [{Mod, ~"index.txt"}]),
+    Page = iolist_to_binary(arizona_render:render_view_to_iolist(Mod, #{})),
+    ?assertEqual(Page, read(Out)).
 
 %% The HTML embed never reads the document: a `</BODY>` the parser takes as
 %% `</body>` still gets the names, and a data island holding the text `</body>`

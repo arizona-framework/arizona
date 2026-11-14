@@ -7,7 +7,8 @@
 %% target `text`. It writes elements as `[tag attrs]...[/tag]`,
 %% so its output is told apart from HTML at a glance, and it answers the capability
 %% callbacks the way a frame-repainting target does: no live root, no keyed item
-%% ops, no list patch, no `?local`, repeatable attributes.
+%% ops, no list patch, no `?local`, repeatable attributes. It leaves out the
+%% optional `static_document/2`, as `arizona_terminal` does.
 
 -export([name/1]).
 -export([element_open/1]).
@@ -45,7 +46,6 @@
 -export([render_attr/2]).
 -export([wire_escape/1]).
 -export([wire_attr/2]).
--export([static_document/2]).
 
 name(Bin) when is_binary(Bin) -> Bin;
 name(Atom) -> atom_to_binary(Atom).
@@ -126,8 +126,6 @@ wire_escape(Bin) -> escape(Bin).
 
 -spec wire_attr(binary(), term()) -> no_return().
 wire_attr(Name, _Value) -> reject(Name).
-
-static_document(Doc, _EventNames) -> Doc.
 
 -spec reject(binary()) -> no_return().
 reject(Name) ->

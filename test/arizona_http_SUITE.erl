@@ -12,6 +12,7 @@
 -export([render_refuses_a_cross_target_layout/1]).
 -export([renderers_name_their_content_type/1]).
 -export([render_embeds_the_proven_attrs/1]).
+-export([render_without_static_document_embeds_nothing/1]).
 -export([render_leaves_the_collector_disarmed/1]).
 -export([error_page_prod_serves_plain_text_500/1]).
 -export([error_page_dev_without_page_serves_plain_text/1]).
@@ -41,6 +42,7 @@ groups() ->
             render_refuses_a_cross_target_layout,
             renderers_name_their_content_type,
             render_embeds_the_proven_attrs,
+            render_without_static_document_embeds_nothing,
             render_leaves_the_collector_disarmed,
             format_error_names_a_unicode_page
         ]},
@@ -130,6 +132,15 @@ render_embeds_the_proven_attrs(Config) when is_list(Config) ->
     %% A page with none still carries an empty set: the client reads the last
     %% embed, and without one that is an element the page content holds.
     ?assertEqual([], embedded_attrs(render_in_layout(arizona_static_page))).
+
+%% A target without the optional `static_document/2` has no client script to read
+%% the names, so its page is served exactly as rendered.
+render_without_static_document_embeds_nothing(Config) when is_list(Config) ->
+    Mod = arizona_text_page:load(),
+    Req = arizona_req_test_adapter:new(#{}),
+    {ok, 200, _Type, Body, _Req} = arizona_http:render(Mod, Req, #{}),
+    Page = iolist_to_binary(arizona_render:render_view_to_iolist(Mod, #{})),
+    ?assertEqual(Page, iolist_to_binary(Body)).
 
 %% A request process may serve several requests: the collector is armed for one
 %% page's render only.
