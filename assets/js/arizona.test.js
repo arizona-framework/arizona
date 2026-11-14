@@ -8197,6 +8197,56 @@ describe('fetch in flight', () => {
         });
     });
 
+    it('adopts a click gesture for one submit only', async () => {
+        await page(
+            `<form id="f" method="post" az-submit='[22,"/save",{}]'>
+                <button id="b" type="submit" az-click='[4,"#f","x"]'>Save</button>
+            </form>`,
+        );
+        const b = document.getElementById('b');
+        b.click();
+        // Disconnected, the second click runs no delegated command, so nothing
+        // replaces the first click's record: its submit must not adopt it.
+        mock.simulateClose();
+        b.click();
+        expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/save']);
+    });
+
+    it('runs a throwing on_error once and still reports the failure', async () => {
+        await page(
+            `<form id="f" method="post"
+                az-submit='[22,"/save",{"on_error":[[22,"/retry",{}],[7,"[[[bad","x","y"]]}]'></form>`,
+        );
+        const failed = vi.fn();
+        document.addEventListener('arizona:fetch-error', failed);
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            submit('f');
+            pending[0].resolve(response(500, '<h1>boom</h1>'));
+            await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+            await new Promise((r) => setTimeout(r, 0));
+            expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual(['/save', '/retry']);
+            // The network-failure leg too.
+            pending[1].resolve(response(200, ''));
+            await vi.waitFor(() => {
+                submit('f');
+                expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+            });
+            pending[2].reject(new TypeError('Failed to fetch'));
+            await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(2));
+            await new Promise((r) => setTimeout(r, 0));
+            expect(globalThis.fetch.mock.calls.map(([url]) => url)).toEqual([
+                '/save',
+                '/retry',
+                '/save',
+                '/retry',
+            ]);
+        } finally {
+            document.removeEventListener('arizona:fetch-error', failed);
+            error.mockRestore();
+        }
+    });
+
     it('runs the commands and releases when startViewTransition throws', async () => {
         document.startViewTransition = () => {
             throw new DOMException('busy', 'InvalidStateError');

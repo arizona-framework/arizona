@@ -786,8 +786,15 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         if (opts.on_error)
                             runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
                     };
-                    if (g && held) inGesture(g, run);
-                    else run();
+                    // Contained: a throw from the response leg would fall into the
+                    // network .catch and run on_error a second time, and the DOM
+                    // event must still report the failure.
+                    try {
+                        if (g && held) inGesture(g, run);
+                        else run();
+                    } catch (err) {
+                        console.error('[arizona] fetch on_error threw', err);
+                    }
                     document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
                 };
                 req = fetch(target, {

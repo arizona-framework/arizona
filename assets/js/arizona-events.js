@@ -47,7 +47,10 @@ let _clickGesture = null;
  */
 function submitGesture(e) {
     const c = _clickGesture;
-    return c && e.submitter?.contains(c.target) ? c.g : newGesture();
+    if (!c || !e.submitter?.contains(c.target)) return newGesture();
+    // One click submits once: a later submit in the same task is not its gesture.
+    _clickGesture = null;
+    return c.g;
 }
 
 /**
