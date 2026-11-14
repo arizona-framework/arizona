@@ -4868,7 +4868,8 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
             false -> {none, State1}
         end,
-    TagBin = Backend:name(Tag),
+    %% The backend may refuse a name its markup cannot carry (arizona_render_reject).
+    TagBin = emit_backend(fun() -> Backend:name(Tag) end, Line),
     State3 = buf_append(State2, emit_backend(fun() -> Backend:element_open(TagBin) end, Line)),
     State4 =
         case ElemAz of
@@ -5050,10 +5051,10 @@ implied_attr_name(Backend, {tuple, _, [{atom, _, _} = NameAST, _Value]}) ->
     extract_attr_name(Backend, NameAST);
 implied_attr_name(Backend, {tuple, _, [{bin, _, _} = NameAST, _Value]}) ->
     extract_attr_name(Backend, NameAST);
-implied_attr_name(_Backend, {bin, _, _} = Bin) ->
-    extract_binary_value(Bin);
-implied_attr_name(Backend, {atom, _, Name}) ->
-    Backend:name(Name);
+implied_attr_name(Backend, {bin, _, _} = NameAST) ->
+    extract_attr_name(Backend, NameAST);
+implied_attr_name(Backend, {atom, _, _} = NameAST) ->
+    extract_attr_name(Backend, NameAST);
 implied_attr_name(_Backend, _Other) ->
     undefined.
 
@@ -6787,17 +6788,22 @@ normalize_children(AST, Backend) ->
     end.
 
 %% A name is written as text, as a tag is: an atom, or a binary that folds.
+%% Both forms go through the backend's name/1, which may refuse a name its markup
+%% cannot carry (arizona_render_reject); a binary comes back as written.
 extract_attr_name(Backend, {atom, _, Name} = NameAST) ->
-    checked_attr_name(Name, Backend:name(Name), NameAST);
-extract_attr_name(_Backend, BinAST) ->
+    checked_attr_name(Name, backend_name(Backend, Name, NameAST), NameAST);
+extract_attr_name(Backend, BinAST) ->
     ok = assert_code_points(BinAST),
     case is_static_binary(BinAST) of
         true ->
             Name = extract_binary_value(BinAST),
-            checked_attr_name(Name, Name, BinAST);
+            checked_attr_name(Name, backend_name(Backend, Name, BinAST), BinAST);
         false ->
             parse_error(attr_name_not_literal_text, anno(BinAST))
     end.
+
+backend_name(Backend, Name, NameAST) ->
+    emit_backend(fun() -> Backend:name(Name) end, anno(NameAST)).
 
 checked_attr_name(_Written, <<>>, NameAST) ->
     parse_error(attr_name_empty, anno(NameAST));
@@ -6928,11 +6934,14 @@ quote_name(Name) ->
         _NotUtf8 -> io_lib:format("~W", [Name, 20])
     end.
 
-%% UTF-8 text without a C0 control or DEL.
+%% UTF-8 text without a C0 control, a space or DEL: no target has a name with
+%% whitespace in it (the other ASCII whitespace is C0).
 is_name_text(Bytes) ->
     case unicode:characters_to_list(Bytes) of
-        Chars when is_list(Chars) -> not lists:any(fun(C) -> C < 32 orelse C =:= 127 end, Chars);
-        _NotUtf8 -> false
+        Chars when is_list(Chars) ->
+            not lists:any(fun(C) -> C =< 32 orelse C =:= 127 end, Chars);
+        _NotUtf8 ->
+            false
     end.
 
 %% The text a literal attribute value folds to: a binary literal, or a (possibly
@@ -7196,8 +7205,9 @@ bare_attr_name(Attr) ->
     bare_attr_name(fun directive_attr_name/1, Attr).
 
 %% `AtomName` spells an atom name: the directive normalization, or a backend's `name/1`.
-bare_attr_name(AtomName, {atom, _, Name}) ->
-    {ok, AtomName(Name)};
+bare_attr_name(AtomName, {atom, Anno, Name}) ->
+    %% A backend's name/1 may refuse a name its markup cannot carry.
+    {ok, emit_backend(fun() -> AtomName(Name) end, Anno)};
 bare_attr_name(_AtomName, {bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
         true -> {ok, extract_binary_value(Bin)};

@@ -41,6 +41,7 @@
 -export([compile_binary_tag_not_literal_text/1]).
 -export([compile_not_code_point/1]).
 -export([compile_attr_name/1]).
+-export([compile_name_breaks_markup/1]).
 -export([runtime_markup_in_raw_text/1]).
 -export([runtime_stream_each_keyless/1]).
 -export([runtime_stream_each_multi_root/1]).
@@ -81,7 +82,8 @@ groups() ->
             compile_binary_tag_folds,
             compile_binary_tag_not_literal_text,
             compile_not_code_point,
-            compile_attr_name
+            compile_attr_name,
+            compile_name_breaks_markup
         ]},
         {runtime, [], [
             runtime_markup_in_raw_text,
@@ -577,6 +579,42 @@ compile_attr_name(Config) when is_list(Config) ->
         ?assert(is_list(arizona_parse_transform:format_error(R)))
      || R <- [attr_name_not_literal_text, attr_name_empty, {attr_name_not_text, ~"a"}]
     ].
+
+%% No target has a name with whitespace in it, so the core refuses one; the
+%% characters that end or break a name only in HTML markup are refused by the HTML
+%% target, and JSON, where a key is any string, takes them.
+compile_name_breaks_markup(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            {arizona_parse_transform, {Reason, _}}, compile_error(Name, Target(Body)), Name
+        )
+     || {Name, Target, Body, Reason} <- [
+            {"be_ws_tag", fun html/1, "{'div', [], [{<<\"a b\">>, [], []}]}", tag_not_text},
+            {"be_ws_tag_json", fun json/1, "{'Column', [], [{<<\"a b\">>, [], []}]}", tag_not_text},
+            {"be_ws_attr", fun html/1, "{p, [{<<\"a b\">>, ~\"v\"}], []}", attr_name_not_text},
+            {"be_ws_attr_json", fun json/1, "{'Text', [{<<\"a b\">>, ~\"v\"}], []}",
+                attr_name_not_text}
+        ]
+    ],
+    [
+        begin
+            {arizona_parse_transform, {render_reject, Message}} = compile_error(Name, html(Body)),
+            ?assert(contains(Message, ~"HTML"), Name)
+        end
+     || {Name, Body} <- [
+            {"be_html_tag_slash", "{'div', [], [{<<\"a/b\">>, [], []}]}"},
+            {"be_html_tag_gt", "{'div', [], [{<<\"a>b\">>, [], []}]}"},
+            {"be_html_attr_eq", "{p, [{<<\"a=b\">>, ~\"v\"}], []}"},
+            {"be_html_attr_quote", "{p, [{<<\"a\\\"b\">>, ~\"v\"}], []}"},
+            {"be_html_attr_apos", "{p, [{<<\"a'b\">>, ~\"v\"}], []}"},
+            {"be_html_attr_lt", "{p, [{<<\"a<b\">>, ~\"v\"}], []}"},
+            {"be_html_attr_atom", "{p, [{'a=b', ~\"v\"}], []}"},
+            {"be_html_attr_bare", "{p, [<<\"a/b\">>], []}"},
+            {"be_html_attr_dyn", "{p, [{<<\"a=b\">>, arizona_template:get(v, Bindings)}], []}"}
+        ]
+    ],
+    Json = compile("be_json_key", json("{'Text', [{<<\"a=b\">>, ~\"v\"}], []}")),
+    ?assertMatch(#{}, Json:render(#{})).
 
 compile_improper_template_list(Config) when is_list(Config) ->
     Improper = fun(Outer, Inner) ->
