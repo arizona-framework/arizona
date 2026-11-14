@@ -597,7 +597,10 @@ textarea_keeps_a_leading_newline(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(Empty, ~" az-ctl=\"content\">\n</textarea>"), Empty),
     {_, Snap0, V0} = arizona_render:render(arizona_cr_nul:render(#{t => ~"i"}), #{}),
     {Ops, _, _} = arizona_diff:diff(arizona_cr_nul:render(#{t => ~"\nX"}), Snap0, V0, #{t => true}),
-    ?assertMatch([_, _, _, [?OP_TEXT, _, #{~"d" := [~"\nX"], ~"s" := [<<>>, <<>>]}]], Ops).
+    ?assertMatch([_, _, _, [?OP_TEXT, _, #{~"d" := [~"\nX"], ~"s" := [<<>>, <<>>]}]], Ops),
+    %% An SVG `textArea` is foreign content: the parser drops no newline after it.
+    Svg = render_bin(arizona_cr_nul:svg(#{t => ~"\nX"})),
+    ?assertMatch({match, _}, re:run(Svg, ~"<textArea[^>]*><!--az:[^>]*-->\nX<"), Svg).
 
 %% Seeded values over `Alphabet`, the rand state threaded explicitly so the
 %% process-global state is left alone.

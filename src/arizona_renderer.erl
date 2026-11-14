@@ -21,10 +21,12 @@ other formats while reusing the same walker, diff engine, and transport.
 
 -doc """
 End of an element's open tag (after attributes), before children, for the given wire
-tag name. HTML follows a `textarea` start tag with the newline its parser drops there,
-so content starting with one keeps it on the page, as a live update writes it.
+tag name in `Context`, the content context the element sits in (`content_context/2`
+of its parent). HTML follows a `textarea` start tag in HTML content with the newline
+its parser drops there, so content starting with one keeps it on the page, as a live
+update writes it; foreign content (an SVG `textArea`) drops none.
 """.
--callback element_open_end(TagName :: binary()) -> binary().
+-callback element_open_end(TagName :: binary(), Context :: content_context()) -> binary().
 
 -doc "Self-close for a void (childless) element.".
 -callback element_void_close() -> binary().

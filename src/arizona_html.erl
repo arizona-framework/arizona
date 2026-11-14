@@ -12,7 +12,7 @@ identical to the previous inlined emission.
 -export([name/1]).
 -export([element_open/1]).
 -export([az_attr/1]).
--export([element_open_end/1]).
+-export([element_open_end/2]).
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
@@ -134,15 +134,18 @@ element_open(TagName) ->
 az_attr(Az) ->
     <<" az=\"", Az/binary, "\"">>.
 
--spec element_open_end(binary()) -> binary().
-%% The parser drops a newline right after a `textarea` start tag (a reference to one
-%% too), and a live update writes the content through the DOM, keeping one. So the tag
-%% is followed by the newline the parser drops, and the content keeps its own.
-element_open_end(Tag) ->
+-spec element_open_end(binary(), atom()) -> binary().
+%% The parser drops a newline right after an HTML `textarea` start tag (a reference to
+%% one too), and a live update writes the content through the DOM, keeping one. So the
+%% tag is followed by the newline the parser drops, and the content keeps its own. In
+%% foreign content (an SVG `textArea`) nothing is dropped.
+element_open_end(Tag, undefined) ->
     case ascii_lowercase(Tag) of
         ~"textarea" -> ~">\n";
         _Other -> ~">"
-    end.
+    end;
+element_open_end(_Tag, _Foreign) ->
+    ~">".
 
 -spec element_void_close() -> binary().
 element_void_close() ->

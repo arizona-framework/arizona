@@ -10,6 +10,7 @@ writes. The inputs hold a `?local` beside affixes their value sanitization rewri
 """.
 -include("arizona_stateless.hrl").
 -export([render/1]).
+-export([svg/1]).
 
 render(Bindings) ->
     ?html(
@@ -27,3 +28,7 @@ render(Bindings) ->
             ]}
         ]}
     ).
+
+%% An SVG `textArea`: foreign content, whose start tag the parser drops no newline after.
+svg(Bindings) ->
+    ?html({svg, [], [{~"textArea", [], [?get(t)]}]}).

@@ -4894,7 +4894,9 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
         true ->
             buf_append(State5, Backend:element_void_close());
         false ->
-            State6 = buf_append(State5, Backend:element_open_end(TagBin)),
+            State6 = buf_append(
+                State5, Backend:element_open_end(TagBin, State0#state.content_ctx)
+            ),
             %% Scope the raw-text context to this element's children, then restore
             %% the parent's so a following sibling is not treated as raw text.
             State7 = compile_element_children(

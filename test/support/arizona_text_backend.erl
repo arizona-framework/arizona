@@ -13,7 +13,7 @@
 -export([name/1]).
 -export([element_open/1]).
 -export([az_attr/1]).
--export([element_open_end/1]).
+-export([element_open_end/2]).
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
@@ -55,7 +55,7 @@ element_open(TagName) -> <<"[", TagName/binary>>.
 
 az_attr(_Az) -> <<>>.
 
-element_open_end(_Tag) -> ~"]".
+element_open_end(_Tag, _Context) -> ~"]".
 
 element_void_close() -> ~"/]".
 
