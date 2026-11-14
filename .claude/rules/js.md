@@ -153,8 +153,8 @@ proofs above are what make neither happen. The proof is per **name**, not per el
 proven anywhere on the page runs a same-named data value elsewhere on it (`az-change` proven on one
 form makes another form's `az-change` data a command list), so never render untrusted data under
 an `az-*` name the page also uses for commands. Nor is it per route: proofs accumulate for the life
-of the connection, so a name proven before an SPA `navigate` or `patch` stays proven on the next
-page (compile-time names are app-wide anyway). Per-element marking would be a separate design. The
+of the page, across SPA `navigate`/`patch` and reconnects, so a name proven before a navigate stays
+proven on the next route (compile-time names are app-wide anyway). Per-element marking would be a separate design. The
 delegated dispatch still wraps parse AND execution in a warn-once containment for the same reason
 (a runtime `set_attr`, host markup).
 

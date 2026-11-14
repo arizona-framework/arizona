@@ -80,7 +80,8 @@ delegates the event names proven to hold one, exactly as the live socket's
 connect frame does. `generate/2,3` therefore hands those names to each page --
 the compile-time names of the handler, its layouts and every module
 rendered into the page, plus the names whose command was built at render time --
-through its render target's `static_document/2` callback, an empty set too. An
+through its render target's optional `static_document/2` callback, an empty set too
+(a target without the callback has no client to read them and gets nothing). An
 `?html` page embeds them as `<script type="application/json" id="arizona-attrs">` appended after the
 document, which the HTML parser moves into the body; a `?json` document is
 written as rendered, its client handed the names by `start({attrs})`. A
