@@ -323,8 +323,9 @@ vocabulary of its examples. `local_unsupported` cannot reach it: HTML supports `
 """.
 -spec format_error(term()) -> string().
 format_error(computed_element_tag) ->
-    "an element's tag must be a literal atom. The tag is baked into the template's "
-    "statics at compile time, which is what lets a later change ship only the values, "
+    "an element's tag must be a literal atom or binary. The tag is baked into the "
+    "template's statics at compile time, which is what lets a later change ship only "
+    "the values, "
     "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
     "inside a stable element instead of choosing the element: {'div', [], [case Kind "
     "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "

@@ -227,7 +227,10 @@ compile_computed_element_tag(Config) when is_list(Config) ->
         {"be_tag_html", html(Computed("'div'"))},
         {"be_tag_json", json(Computed("'Column'"))},
         {"be_tag_text", text(Computed("line"))}
-    ).
+    ),
+    %% A literal binary is a tag too.
+    ?assert(contains(arizona_html:format_error(computed_element_tag), ~"atom or binary")),
+    ?assert(contains(arizona_json:format_error(computed_element_tag), ~"atom or binary")).
 
 compile_element_in_comprehension(Config) when is_list(Config) ->
     Lc = fun(Outer, Inner) ->
@@ -400,7 +403,10 @@ runtime_stateful_in_layout(Config) when is_list(Config) ->
     ?assert(contains(Msg, ~"az-view")),
     JsonMsg = arizona_json:format_error(Inner),
     ?assertNot(contains(JsonMsg, ~"az-view")),
-    ?assertNot(contains(JsonMsg, ~"az_patch")).
+    ?assertNot(contains(JsonMsg, ~"az_patch")),
+    %% A ?json client has no patch: no navigation keeps its view live.
+    ?assertNot(contains(JsonMsg, ~"navigating between")),
+    ?assert(contains(JsonMsg, ~"instead of navigating")).
 
 runtime_cross_target_child_is_neutral(Config) when is_list(Config) ->
     #{general := Msg} = arizona_render:format_error(

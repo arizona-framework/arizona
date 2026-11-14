@@ -241,8 +241,9 @@ JSON has no raw-text elements and no selection roles, so those reasons never rea
 """.
 -spec format_error(term()) -> string().
 format_error(computed_element_tag) ->
-    "a node's type must be a literal atom. The type is baked into the template's "
-    "statics at compile time, which is what lets a later change ship only the values, "
+    "a node's type must be a literal atom or binary. The type is baked into the "
+    "template's statics at compile time, which is what lets a later change ship only "
+    "the values, "
     "so a type chosen at runtime has no single set of statics to bake. Put the CHOICE "
     "inside a stable node instead of choosing the node: {'Column', [], [case Kind of "
     "note -> {'Text', [], [X]}; _ -> {'Button', [], [X]} end]} -- a conditional in a "
@@ -344,8 +345,10 @@ format_error({stateful_in_layout, Mod, Fun, Handler}) ->
             "at SSR and never joins the live view tree, so the component would "
             "claim a view node the server never registers, and every event its "
             "native client sends from it would be dropped. Use ?stateless for layout "
-            "chrome; chrome that must stay live across navigation belongs in a "
-            "view the routes share, navigating between them.",
+            "chrome. A ?json client has no navigation that keeps a view live (a navigate "
+            "unmounts the page and mounts the next), so chrome that must stay live "
+            "belongs in one view that changes its content through its state and events "
+            "instead of navigating.",
             [Mod, Fun, Handler]
         )
     ).
