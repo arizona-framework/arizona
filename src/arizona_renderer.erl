@@ -426,8 +426,10 @@ must know them before its socket's connect frame delivers the same set. Called
 for every such page, with an empty list too: the client reads the last embed, so
 a page without one would leave it reading an element the page content holds. How
 a document carries them is the target's: HTML embeds them as a JSON script
-element; a target whose document cannot take extra content (a single JSON value)
-returns `Doc` as it is, and its client is handed the names another way (the
+element, the body's last child when the document ends with `</body>` (only its
+last bytes are read, never the whole page), else after the document; a target
+whose document cannot take extra content (a single JSON value) returns `Doc` as
+it is, and its client is handed the names another way (the
 connect frame, or `start({attrs})` on a static page). Optional: a target with no
 client script to read them (a terminal) leaves it out, and its document is used
 as rendered.

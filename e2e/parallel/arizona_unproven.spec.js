@@ -20,12 +20,18 @@ test('runs no command from a data value under an unproven az-* name', async ({ p
     await page.goto('/unproven');
 
     // The page carries what it proves, so the client knows it before the socket opens.
-    // It is appended after the document, which the parser moves into the body as its
-    // last element: the client reads the last JSON script carrying that id.
+    // It is the body's last child, written before the `</body>` ending the page: the client
+    // reads the last JSON script carrying that id.
     const embed = page.locator('script[type="application/json"]#arizona-attrs');
     expect(
         await embed.evaluate((el) => el.parentElement === document.body && !el.nextElementSibling),
     ).toBe(true);
+    // In the bytes served, not only after the parser's error recovery: the document
+    // ends with the embed inside the body, so nothing follows `</html>`.
+    const served = await (await page.request.get('/unproven')).text();
+    expect(served).toMatch(
+        /<script type="application\/json" id="arizona-attrs">[^<]*<\/script><\/body><\/html>$/,
+    );
     const names = JSON.parse(await embed.textContent());
     expect(names).toContain('az-dblclick');
     for (const name of ['az-change', 'az-submit', 'az-click']) expect(names).not.toContain(name);

@@ -2046,13 +2046,25 @@ type). The transport handler translates the returned result into its native repl
 
 The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
 render target's `static_document/2`: an `?html` page gets `<script type="application/json"
-id="arizona-attrs">` appended after the document, which the HTML parser moves into the body as
-its last element, even when the set is empty, so an element injected ahead of it in the normal
-flow is never the client's last match), the same set the socket's connect frame
-delivers. The client runs a command only under a proven name, and that frame lands a round trip
-after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
-between would find no proof. Appending rather than splicing means the page is neither flattened
-nor searched: no case or data-island text can misplace the embed. It does not stop a forged set:
+id="arizona-attrs">` as its body's last child, even when the set is empty, so an element injected
+ahead of it in the normal flow is never the client's last match), the same set the socket's
+connect frame delivers. The client runs a command only under a proven name, and that frame lands
+a round trip after the socket opens, so without the embedded set a click or an HTTP-form
+`az-submit` in between would find no proof.
+
+Where it goes is read from the document's **end** only: `arizona_html:static_document/2` walks
+the rendered iolist from the right for its last 64 bytes, rebuilding only the path to them, and
+when they are `</body>` followed by nothing but whitespace and at most one `</html>` (ASCII
+case-insensitive), inserts the script before that `</body>`, so the document stays valid HTML.
+Any other ending -- a fragment (a page with no layout), a comment or other content after
+`</body>`, whitespace past the 64 bytes -- gets the script appended after the document, where the
+HTML parser's "after body" recovery still makes it the body's last element. The page is neither
+flattened nor searched: a `</body>` before the end (text, a comment, a raw-text element, a data
+island, `?raw` markup) is never read, and escaped content cannot produce the one at the end. Both
+placements leave the script the document's last element, which is what the client's "last
+match" rule needs. How the body was written does not matter (a layout or the page, nested
+layouts, a helper, a `?stateless` component, a layout dropping or repeating the page): only the
+bytes are read. It does not stop a forged set:
 `?raw` is trusted markup, and untrusted markup spliced through it can inject its own embed
 followed by an unclosed `<!--` (or a raw-text or RCDATA element left unclosed, e.g. `textarea`,
 `title`, `style`, `script`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`, or `noscript`
@@ -2118,7 +2130,7 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   PiP) run with no server. Each page is handed its proven names, an empty set too -- what
   an HTTP-rendered live page embeds the same way -- through its target's
   `static_document/2` renderer callback: HTML embeds them as
-  `<script type="application/json" id="arizona-attrs">` appended after the document, and
+  `<script type="application/json" id="arizona-attrs">`, the body's last child, and
   `start()` delegates exactly those. The callback is optional: a target with no client script
   to read the names (a terminal) leaves it out and its page is written as rendered.
 
