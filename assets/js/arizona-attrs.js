@@ -201,6 +201,51 @@ export function pageText(text) {
     return text.includes('\0') ? text.replace(/\0/g, '\uFFFD') : text;
 }
 
+// The <input> types whose value sanitization strips newlines; a url or email value
+// is also stripped of the whitespace around it, an email multiple's around each
+// comma-separated value.
+const LINE_INPUTS = new Set(['text', 'search', 'url', 'tel', 'email', 'password']);
+const LEAD_WS = /^[\t\n\f\r ]+/;
+const TRAIL_WS = /[\t\n\f\r ]+$/;
+
+/**
+ * `text`, part of an input's value, as the input's value sanitization leaves it.
+ * `keepStart`/`keepEnd`: the text's start/end lies inside a value the rest of the
+ * input's value continues, so no whitespace is stripped there.
+ * @param {Element} el
+ * @param {string} text
+ * @param {boolean} keepStart
+ * @param {boolean} keepEnd
+ * @returns {string}
+ */
+export function sanitized(el, text, keepStart, keepEnd) {
+    const input = /** @type {HTMLInputElement} */ (el);
+    if (el.localName !== 'input' || !LINE_INPUTS.has(input.type)) return text;
+    const line = text.replace(/[\r\n]/g, '');
+    if (input.type !== 'url' && input.type !== 'email') return line;
+    const values = input.type === 'email' && input.multiple ? line.split(',') : [line];
+    const last = values.length - 1;
+    return values
+        .map((t, i) => {
+            const s = i === 0 && keepStart ? t : t.replace(LEAD_WS, '');
+            return i === last && keepEnd ? s : s.replace(TRAIL_WS, '');
+        })
+        .join(',');
+}
+
+/**
+ * What a control's `value` shows once `text`, its default, is written to it: a
+ * textarea's API value reads a CR (alone or before a LF) as a LF, and a text-like
+ * input's value is sanitized. Compared with `value` to tell an edit from the default.
+ * @param {Element} el
+ * @param {string} text
+ * @returns {string}
+ */
+export function shownDefault(el, text) {
+    if (el.localName === 'textarea') return text.replace(/\r\n?/g, '\n');
+    return sanitized(el, text, false, false);
+}
+
 /**
  * `applyChooser` over every select under `root` that carries a value: the page as
  * it loads, and the documents a batch of ops rendered options or selects into.

@@ -3,6 +3,7 @@ import {
     applySetAttrOp,
     isMultipleChooser,
     pageText,
+    sanitized,
     syncsProp,
 } from './arizona-attrs.js';
 import { resolveTarget } from './arizona-commands.js';
@@ -51,13 +52,15 @@ function writeLocalValue(el, target, value) {
         // never puts an element in reach; a hook that renders into the element
         // can, and it would otherwise be detached with its instance left in
         // `_hooks` and `destroyed()` never called.
+        // Held as the page holds the initial: a NUL as U+FFFD.
+        const text = value == null ? '' : pageText(String(value));
         const marker = findMarker(el, localMarkerAz(el, target[1]));
         if (marker) {
             forEachElementBetweenMarkers(marker, destroyHooks);
-            setMarkerText(marker, value);
+            setMarkerText(marker, text);
         } else {
             destroyChildHooks(el);
-            el.textContent = value == null ? '' : String(value);
+            el.textContent = text;
         }
         notifyUpdated(el);
         return;
@@ -157,38 +160,6 @@ function readLocalValue(el, target) {
 function ownPicks(value) {
     if (value === false || value == null) return [];
     return (Array.isArray(value) ? value : [value]).map((p) => (p === true ? '' : String(p)));
-}
-
-// The <input> types whose value sanitization strips newlines; a url or email value
-// is also stripped of the whitespace around it, an email multiple's around each
-// comma-separated value.
-const LINE_INPUTS = new Set(['text', 'search', 'url', 'tel', 'email', 'password']);
-const LEAD_WS = /^[\t\n\f\r ]+/;
-const TRAIL_WS = /[\t\n\f\r ]+$/;
-
-/**
- * `text`, part of an input's value, as the input's value sanitization leaves it.
- * `keepStart`/`keepEnd`: the text's start/end lies inside a value the rest of the
- * input's value continues, so no whitespace is stripped there.
- * @param {Element} el
- * @param {string} text
- * @param {boolean} keepStart
- * @param {boolean} keepEnd
- * @returns {string}
- */
-function sanitized(el, text, keepStart, keepEnd) {
-    const input = /** @type {HTMLInputElement} */ (el);
-    if (el.localName !== 'input' || !LINE_INPUTS.has(input.type)) return text;
-    const line = text.replace(/[\r\n]/g, '');
-    if (input.type !== 'url' && input.type !== 'email') return line;
-    const values = input.type === 'email' && input.multiple ? line.split(',') : [line];
-    const last = values.length - 1;
-    return values
-        .map((t, i) => {
-            const s = i === 0 && keepStart ? t : t.replace(LEAD_WS, '');
-            return i === last && keepEnd ? s : s.replace(TRAIL_WS, '');
-        })
-        .join(',');
 }
 
 /**

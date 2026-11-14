@@ -478,6 +478,35 @@ describe('server-owned controls: textarea content', () => {
         expect(el.value).toBe('hello');
     });
 
+    // The `value` API reads a textarea's CR (alone or before a LF) as a LF, while its
+    // default keeps the CR the server wrote as `&#13;`: an untouched textarea is
+    // not edited, so a later push still shows while it is focused.
+    it('a content update holding a CR leaves the textarea unedited', async () => {
+        await connect(`<textarea az="0" az-ctl="content">x</textarea>`);
+        const el = /** @type {HTMLTextAreaElement} */ (document.querySelector('textarea'));
+        el.focus();
+        mock.reply([[mod.OP.TEXT, 'page:0', 'c&#13;\nd', true]], null);
+        expect(el.value).toBe('c\nd');
+        mock.reply([[mod.OP.TEXT, 'page:0', 'e&#13;\nf', true]], null);
+        expect(el.value).toBe('e\nf');
+    });
+
+    // A text input's value strips the newlines its default holds: once a reply
+    // settles it on that default, it is not edited, so a later push still shows
+    // while it is focused.
+    it('an input whose default holds a newline is not edited once settled', async () => {
+        await connect(`<input az="0" ${CHANGE} value="a&#13;&#10;b" az-ctl="value" />`);
+        const el = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        edit(el, (e) => {
+            e.value = 'typed';
+        });
+        mock.reply(null, mock.lastRef());
+        expect(el.value).toBe('ab');
+        el.focus();
+        mock.reply([setAttr(0, 'value', 'c')], null);
+        expect(el.value).toBe('c');
+    });
+
     it('an unmarked textarea keeps the user text, as before', async () => {
         await connect(`<textarea az="0">a</textarea>`);
         const el = document.querySelector('textarea');

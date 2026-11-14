@@ -131,6 +131,13 @@ describe('CR and NUL in rendered values', () => {
         expect(get('m')).toBe('');
     });
 
+    // A content `?local` write holds a NUL as the page and a live text write do.
+    it('writes a NUL in a content ?local as U+FFFD', () => {
+        load('<p az="0" az-local=\'{"c":{"0":"n"}}\'><!--az:0-->a<!--/az--></p>');
+        set('v', 'n', 'a\0b');
+        expect(document.querySelector('p')?.textContent).toBe(`a${FFFD}b`);
+    });
+
     // The parser drops the newline the server writes after `<textarea>`, so a value
     // starting with one keeps it, as a live write of the content does.
     it('keeps a newline starting a textarea value', () => {

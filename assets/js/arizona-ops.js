@@ -1,4 +1,10 @@
-import { applyChoosers, applyRemAttrOp, applySetAttrOp, pageText } from './arizona-attrs.js';
+import {
+    applyChoosers,
+    applyRemAttrOp,
+    applySetAttrOp,
+    pageText,
+    shownDefault,
+} from './arizona-attrs.js';
 import {
     _pipWindows,
     _viewDocs,
@@ -343,7 +349,7 @@ function applyTextOp(el, az, val, isHtml) {
             }
         }
         const ta = /** @type {HTMLTextAreaElement} */ (el);
-        if (live && ta.value !== ta.defaultValue) ta.value = ta.defaultValue;
+        if (live && ta.value !== shownDefault(ta, ta.defaultValue)) ta.value = ta.defaultValue;
     }
     notifyUpdated(el);
 }
