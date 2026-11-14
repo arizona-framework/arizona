@@ -86,8 +86,9 @@ identical to the previous inlined emission.
 %% tag as for an attribute.
 %%
 %% Asked at compile time only, so it also refuses a name HTML markup cannot carry:
-%% `/`, `>`, `=` and whitespace end a tag or attribute name, and `"`, `'` and `<` are
-%% parse errors in an attribute name. The parse transform reports the rejection at the
+%% whitespace, `/` and `>` end a tag or attribute name, `=` ends an attribute name, and
+%% `"`, `'` and `<` are parse errors in one. One set serves both kinds of name, as no
+%% element name holds those either. The parse transform reports the rejection at the
 %% element's line.
 name(Bin) when is_binary(Bin) ->
     markup_name(Bin);
@@ -103,8 +104,9 @@ markup_name(Name) ->
                 {arizona_render_reject,
                     iolist_to_binary(
                         io_lib:format(
-                            "the name ~ts holds ~ts, which ends or breaks a tag or attribute "
-                            "name in HTML markup. Write the name without / > = \" ' <",
+                            "the name ~ts holds ~ts, which HTML markup cannot carry in a "
+                            "name: / and > end a tag or attribute name, = ends an attribute "
+                            "name, and \" ' < break one. Write the name without / > = \" ' <",
                             [Name, binary:part(Name, Pos, 1)]
                         )
                     )}

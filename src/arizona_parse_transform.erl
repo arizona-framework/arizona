@@ -1288,9 +1288,9 @@ format_error({tag_not_text, Tag}) ->
     lists:flatten(
         io_lib:format(
             "the tag ~ts is not text: every render target writes a tag as UTF-8 text "
-            "without control characters, and this one holds a control character or is "
-            "not UTF-8. Write the tag as text without control characters: an atom, "
-            "~~\"...\" or <<\"...\">>",
+            "without a space or control character, and this one holds a space, a control "
+            "character, or is not UTF-8. Write the tag as text without a space or control "
+            "character: an atom, ~~\"...\" or <<\"...\">>",
             [quote_name(Tag)]
         )
     );
@@ -1303,9 +1303,11 @@ format_error({not_code_point, N}) ->
     lists:flatten(
         io_lib:format(
             "the binary segment ~w is not a Unicode code point (a surrogate, a negative "
-            "number, or past 16#10FFFF): a template reads an integer segment of a literal "
-            "binary that folds as the character it names, and this one names none. Write the "
-            "character you mean; for raw bytes give the segment a size, e.g. <<255:8>>",
+            "number, or past 16#10FFFF). A literal binary written as a tag, an attribute "
+            "name or value, content, or a template body folds into the template's text, "
+            "each integer segment read as the character it names, and this one names "
+            "none. Write the character you mean; for raw bytes give the segment a size, "
+            "e.g. <<255:8>>",
             [N]
         )
     );
@@ -1320,8 +1322,9 @@ format_error({attr_name_not_text, Name}) ->
     lists:flatten(
         io_lib:format(
             "the attribute name ~ts is not text: every render target writes it as UTF-8 "
-            "text without control characters. Write the name as text without control "
-            "characters: an atom, ~~\"...\" or <<\"...\">>",
+            "text without a space or control character, and this one holds a space, a "
+            "control character, or is not UTF-8. Write the name as text without a space "
+            "or control character: an atom, ~~\"...\" or <<\"...\">>",
             [quote_name(Name)]
         )
     );
@@ -6883,34 +6886,23 @@ is_foldable_bin_element(_) ->
 
 is_code_point(N) -> N >= 0 andalso N =< 16#10FFFF andalso not (N >= 16#D800 andalso N =< 16#DFFF).
 
-%% A template reads an integer or `$x` segment of a literal binary that folds as the
+%% A template folds a literal binary written as a tag, an attribute name or value,
+%% content or a template body into its text, reading an integer or `$x` segment as the
 %% character it names, so one that names none (a surrogate, a negative number, past
-%% U+10FFFF) in a tag, an attribute name or value, or content is a mistake, not a byte
-%% to render. A binary with any other segment (a size, a type, a value read at
-%% runtime) does not fold: Erlang builds it, and a bare integer there is a byte.
-%% Checked in every value the expression can take (a conditional's tails) and in the
-%% literal a `?raw` wraps.
-assert_code_points(Expr) ->
-    _Walked = map_tail_exprs(Expr, fun assert_leaf_code_points/1, fun(E) -> E end),
-    ok.
-
-assert_leaf_code_points({bin, _, Elements} = Leaf) ->
+%% U+10FFFF) there is a mistake, not a byte to render. Only the literal written at the
+%% position itself (or in a literal list there) folds: one with any other segment (a
+%% size, a type, a value read at runtime), one a conditional returns and one a `?raw`
+%% wraps are runtime values whose bytes Erlang builds, an integer segment a byte.
+assert_code_points({bin, _, Elements}) ->
     case lists:all(fun is_fold_shaped/1, Elements) of
-        true -> ok = lists:foreach(fun assert_code_point/1, Elements);
+        true -> lists:foreach(fun assert_code_point/1, Elements);
         false -> ok
-    end,
-    Leaf;
-assert_leaf_code_points({cons, _, Head, Tail} = Leaf) ->
+    end;
+assert_code_points({cons, _, Head, Tail}) ->
     ok = assert_code_points(Head),
-    ok = assert_code_points(Tail),
-    Leaf;
-assert_leaf_code_points(
-    {call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [Arg]} = Leaf
-) when Mod =:= arizona_template; Mod =:= az ->
-    ok = assert_code_points(Arg),
-    Leaf;
-assert_leaf_code_points(Leaf) ->
-    Leaf.
+    assert_code_points(Tail);
+assert_code_points(_NotALiteral) ->
+    ok.
 
 assert_code_point({bin_element, Line, Value, default, Type}) when
     Type =:= default; Type =:= [utf8]

@@ -504,15 +504,6 @@ compile_not_code_point(Config) when is_list(Config) ->
         {"be_cp_neg_char_attr", "{p, [{title, <<\"a\", -$a>>}], []}", -97},
         {"be_cp_neg_char_utf8", "{p, [], [<<\"a\", -$a/utf8>>]}", -97},
         {"be_cp_neg_char_tag", "{'div', [], [{<<-$a>>, [], []}]}", -97},
-        {"be_cp_case_content",
-            "{p, [], [case arizona_template:get(x, Bindings) of true -> <<\"a\", -1>>; "
-            "false -> ~\"\" end]}", -1},
-        {"be_cp_case_attr",
-            "{p, [{title, case arizona_template:get(x, Bindings) of true -> <<\"a\", -1>>; "
-            "false -> ~\"\" end}], []}", -1},
-        {"be_cp_begin_content", "{p, [], [begin <<\"a\", 55296>> end]}", 55296},
-        {"be_cp_raw", "{p, [], [arizona_template:raw(<<\"a\", -1>>)]}", -1},
-        {"be_cp_raw_attr", "{p, [{title, arizona_template:raw(<<\"a\", -1>>)}], []}", -1},
         {"be_cp_body", "<<\"a\", -1>>", -1},
         {"be_cp_fragment_head", "[<<\"a\", -1>>, {p, [], []}]", -1},
         {"be_cp_fragment_tail", "[{p, [], []}, <<\"a\", 55296>>]", 55296}
@@ -537,7 +528,18 @@ compile_not_code_point(Config) when is_list(Config) ->
             "[<<(arizona_template:get(x, Bindings))/binary, 256>>]}"
         )
     ),
-    ?assertMatch(#{}, Built:render(#{x => ~"a"})).
+    ?assertMatch(#{}, Built:render(#{x => ~"a"})),
+    %% So is one a conditional returns, or one a ?raw wraps: a runtime value, whose
+    %% bytes Erlang builds (233 renders as that byte, not as e-acute).
+    Runtime = compile(
+        "be_cp_runtime",
+        html(
+            "{p, [{title, case arizona_template:get(x, Bindings) of _ -> <<\"a\", -1>> end}], "
+            "[case arizona_template:get(x, Bindings) of _ -> <<\"a\", 55296>> end, "
+            "arizona_template:raw(<<\"b\", -1>>)]}"
+        )
+    ),
+    ?assertMatch(#{}, Runtime:render(#{x => ~"a"})).
 
 %% The message quotes the tag as written, an atom as an atom, and bytes that are not
 %% UTF-8 as bytes.
@@ -548,7 +550,7 @@ compile_tag_not_text_message(Config) when is_list(Config) ->
     Msg = arizona_parse_transform:format_error(Reason),
     ?assert(contains(Msg, ~"'a")),
     ?assertNot(contains(Msg, ~"<<97")),
-    ?assert(contains(Msg, ~"without control characters")),
+    ?assert(contains(Msg, ~"without a space or control character")),
     ?assert(contains(arizona_parse_transform:format_error({tag_not_text, <<255>>}), ~"<<255>>")).
 
 %% An attribute name is written as text, as a tag is: the forms that fold compile, the
@@ -597,9 +599,10 @@ compile_attr_name(Config) when is_list(Config) ->
 %% target, and JSON, where a key is any string, takes them.
 compile_name_breaks_markup(Config) when is_list(Config) ->
     [
-        ?assertMatch(
-            {arizona_parse_transform, {Reason, _}}, compile_error(Name, Target(Body)), Name
-        )
+        begin
+            {arizona_parse_transform, {Reason, _} = Error} = compile_error(Name, Target(Body)),
+            ?assert(contains(arizona_parse_transform:format_error(Error), ~"space"), Name)
+        end
      || {Name, Target, Body, Reason} <- [
             {"be_ws_tag", fun html/1, "{'div', [], [{<<\"a b\">>, [], []}]}", tag_not_text},
             {"be_ws_tag_json", fun json/1, "{'Column', [], [{<<\"a b\">>, [], []}]}", tag_not_text},
