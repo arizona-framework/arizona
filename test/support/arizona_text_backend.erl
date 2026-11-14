@@ -8,7 +8,7 @@
 %% so its output is told apart from HTML at a glance, and it answers the capability
 %% callbacks the way a frame-repainting target does: no live root, no keyed item
 %% ops, no list patch, no `?local`, repeatable attributes. It leaves out the
-%% optional `static_document/2`, as `arizona_terminal` does.
+%% optional `embed_attrs/2`, as `arizona_terminal` does.
 
 -export([name/1]).
 -export([element_open/1]).

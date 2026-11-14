@@ -322,7 +322,7 @@ const ATTRS_ID = 'arizona-attrs';
 /**
  * The names a page embeds for its client before the socket can deliver them
  * (`<script type="application/json" id="arizona-attrs">`, the render target's
- * `static_document/2`, the body's last child, even when empty), or none.
+ * `embed_attrs/2`, the body's last child, even when empty), or none.
  * @returns {string[]}
  */
 function embeddedAttrs() {

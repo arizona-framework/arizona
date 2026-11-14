@@ -37,7 +37,7 @@ two proofs, one per moment the question is answerable:
 The page itself carries the same set (`embed/2`): an HTTP render or a static
 generation arms the collector for that one render, walks the page's roots plus
 what it observed, and hands the names to the render target's
-`static_document/2`, which embeds them in the document. A live page's client
+`embed_attrs/2`, which embeds them in the document. A live page's client
 therefore knows its proofs before the socket opens -- the connect frame lands a
 round trip after the open, and a click or an HTTP-form submit in between must
 find its proof -- and a static page's client has no socket to ask at all.
@@ -182,7 +182,7 @@ Runs `Render`, a request-free render of a page whose compile-time walk roots are
 `Roots` (its handler and layout modules), with the collector armed, and hands
 the document the `az-*` names proven for it -- what the walk finds from the
 roots and the modules the render instantiated, plus what the render evaluated to
-a command -- through its render target's `static_document/2`, even when there
+a command -- through its render target's `embed_attrs/2`, even when there
 are none: the client reads the last embed, so a page without one would leave it
 reading an element the page content holds. A target that does not implement the
 optional callback gets its document back as rendered.
@@ -197,17 +197,17 @@ embed(Roots, Render) ->
     try
         {Backend, Doc} = Render(),
         {Rendered, Mods} = drain(),
-        {Backend, static_document(Backend, Doc, Rendered, Roots ++ Mods)}
+        {Backend, embed_attrs(Backend, Doc, Rendered, Roots ++ Mods)}
     after
         ok = restore(Saved)
     end.
 
-%% `static_document/2` is optional: a target without it (a terminal) has no client
+%% `embed_attrs/2` is optional: a target without it (a terminal) has no client
 %% script to read the names, so its document is left as rendered and unwalked.
-static_document(Backend, Doc, Rendered, Roots) ->
+embed_attrs(Backend, Doc, Rendered, Roots) ->
     {module, Backend} = code:ensure_loaded(Backend),
-    case erlang:function_exported(Backend, static_document, 2) of
-        true -> Backend:static_document(Doc, lists:usort(Rendered ++ all(Roots)));
+    case erlang:function_exported(Backend, embed_attrs, 2) of
+        true -> Backend:embed_attrs(Doc, lists:usort(Rendered ++ all(Roots)));
         false -> Doc
     end.
 

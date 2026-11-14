@@ -2,7 +2,7 @@
 -moduledoc false.
 
 %% Compiles and loads a page of a render target without the optional
-%% `static_document/2` (`arizona_text_backend`, as `arizona_terminal`). The
+%% `embed_attrs/2` (`arizona_text_backend`, as `arizona_terminal`). The
 %% backend is a test module, so the page cannot be a test module beside it: the
 %% parse transform calls the backend while the page compiles.
 

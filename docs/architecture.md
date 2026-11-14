@@ -2045,14 +2045,14 @@ native request in an `arizona_req:request()`, runs any route middlewares, and ca
 type). The transport handler translates the returned result into its native reply shape.
 
 The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
-render target's `static_document/2`: an `?html` page gets `<script type="application/json"
+render target's `embed_attrs/2`: an `?html` page gets `<script type="application/json"
 id="arizona-attrs">` as its body's last child, even when the set is empty, so an element injected
 ahead of it in the normal flow is never the client's last match), the same set the socket's
 connect frame delivers. The client runs a command only under a proven name, and that frame lands
 a round trip after the socket opens, so without the embedded set a click or an HTTP-form
 `az-submit` in between would find no proof.
 
-Where it goes is read from the document's **end** only: `arizona_html:static_document/2` walks
+Where it goes is read from the document's **end** only: `arizona_html:embed_attrs/2` walks
 the rendered iolist from the right for its last 64 bytes, copying only the spines of the lists
 on the path to them, and when they are `</body>` followed by nothing but whitespace and at
 most one `</html>` (ASCII case-insensitive), inserts the script before that `</body>`, so the
@@ -2130,7 +2130,7 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   `start()` instead of `connect('/ws')`, and browser-side commands (`?local`, toggles, dialogs,
   PiP) run with no server. Each page is handed its proven names, an empty set too -- what
   an HTTP-rendered live page embeds the same way -- through its target's
-  `static_document/2` renderer callback: HTML embeds them as
+  `embed_attrs/2` renderer callback: HTML embeds them as
   `<script type="application/json" id="arizona-attrs">`, the body's last child, and
   `start()` delegates exactly those. The callback is optional: a target with no client script
   to read the names (a terminal) leaves it out and its page is written as rendered.

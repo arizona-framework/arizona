@@ -96,7 +96,7 @@ command-versus-data question is answerable, and the delivery uses both (`arizona
 a round trip after the open, and a click in that window -- or an HTTP-form `az-submit` `fetch`,
 which runs with no socket at all -- must find its proof. So the HTTP render arms the same
 collector for the page and embeds the union (`arizona_event_attrs:embed/2`, the render target's
-`static_document/2`: `<script type="application/json" id="arizona-attrs">` inserted before the
+`embed_attrs/2`: `<script type="application/json" id="arizona-attrs">` inserted before the
 `</body>` that ends the document, read from its last bytes only and never searched for, or
 appended after a document that ends otherwise, which the HTML parser moves into the body as its
 last element), exactly as

@@ -2,7 +2,7 @@
 -include_lib("stdlib/include/assert.hrl").
 %% Feeds generate/2 a spec whose Opts violates opts() on purpose.
 -dialyzer({nowarn_function, collects_non_map_spec_opts/1}).
-%% Hands static_document/2 an improper iolist on purpose, a shape iodata allows.
+%% Hands embed_attrs/2 an improper iolist on purpose, a shape iodata allows.
 -dialyzer({nowarn_function, html_embed_reads_the_end_of_any_iolist/1}).
 
 -export([all/0]).
@@ -29,7 +29,7 @@
 -export([html_embed_reads_the_end_of_any_iolist/1]).
 -export([layout_dropping_or_repeating_the_page/1]).
 -export([target_decides_how_a_document_carries_names/1]).
--export([target_without_static_document_embeds_nothing/1]).
+-export([target_without_embed_attrs_embeds_nothing/1]).
 -export([leaves_the_collector_disarmed/1]).
 -export([names_are_the_bodys_last_child/1]).
 -export([body_close_in_content_does_not_move_the_names/1]).
@@ -67,7 +67,7 @@ groups() ->
             html_embed_reads_the_end_of_any_iolist,
             layout_dropping_or_repeating_the_page,
             target_decides_how_a_document_carries_names,
-            target_without_static_document_embeds_nothing,
+            target_without_embed_attrs_embeds_nothing,
             leaves_the_collector_disarmed,
             names_are_the_bodys_last_child,
             body_close_in_content_does_not_move_the_names,
@@ -279,7 +279,7 @@ page_without_body_gets_the_names_after_it(Config) when is_list(Config) ->
 target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
     Names = [~"az-click"],
     Script = embed(~"[\"az-click\"]"),
-    Html = fun(Doc) -> iolist_to_binary(arizona_html:static_document(Doc, Names)) end,
+    Html = fun(Doc) -> iolist_to_binary(arizona_html:embed_attrs(Doc, Names)) end,
     ?assertEqual(
         <<"<html><body><p>x</p>", Script/binary, "</body></html>">>,
         Html(~"<html><body><p>x</p></body></html>")
@@ -305,14 +305,14 @@ target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
     ),
     ?assertEqual(<<"<body></body x>", Script/binary>>, Html(~"<body></body x>")),
     Json = ~"{\"type\":\"Text\",\"children\":[\"</body>\"]}",
-    ?assertEqual(Json, iolist_to_binary(arizona_json:static_document(Json, Names))).
+    ?assertEqual(Json, iolist_to_binary(arizona_json:embed_attrs(Json, Names))).
 
 %% The end of the document is read from the right of the iolist, whatever its
 %% shape: `</body></html>` split across leaves, nested lists, a byte, an improper
 %% tail, a document shorter than the window, and a page longer than it.
 html_embed_reads_the_end_of_any_iolist(Config) when is_list(Config) ->
     Script = embed(~"[]"),
-    Html = fun(Doc) -> iolist_to_binary(arizona_html:static_document(Doc, [])) end,
+    Html = fun(Doc) -> iolist_to_binary(arizona_html:embed_attrs(Doc, [])) end,
     Expected = <<"<body><p>x</p>", Script/binary, "</body></html>">>,
     [
         ?assertEqual(Expected, Html(Doc))
@@ -337,10 +337,10 @@ html_embed_reads_the_end_of_any_iolist(Config) when is_list(Config) ->
         Html([~"<body></body>", Spaces])
     ).
 
-%% `static_document/2` is optional: a target without it has no client script to
+%% `embed_attrs/2` is optional: a target without it has no client script to
 %% read the names, so its page is written exactly as rendered.
-target_without_static_document_embeds_nothing(Config) when is_list(Config) ->
-    Dir = subdir(Config, "no_static_document"),
+target_without_embed_attrs_embeds_nothing(Config) when is_list(Config) ->
+    Dir = subdir(Config, "no_embed_attrs"),
     Mod = arizona_text_page:load(),
     {[Out], []} = arizona_static:generate(Dir, [{Mod, ~"index.txt"}]),
     Page = iolist_to_binary(arizona_render:render_view_to_iolist(Mod, #{})),
@@ -353,12 +353,12 @@ html_embed_never_searches_the_document(Config) when is_list(Config) ->
     Island = ~"<main></main><script type=\"application/json\">{\"s\":\"</body>\"}</script>",
     ?assertEqual(
         <<Island/binary, Script/binary>>,
-        iolist_to_binary(arizona_html:static_document(Island, [~"az-click"]))
+        iolist_to_binary(arizona_html:embed_attrs(Island, [~"az-click"]))
     ),
     Mid = ~"<body><p></body></p><p>x</p></body></html>",
     ?assertEqual(
         <<"<body><p></body></p><p>x</p>", Script/binary, "</body></html>">>,
-        iolist_to_binary(arizona_html:static_document(Mid, [~"az-click"]))
+        iolist_to_binary(arizona_html:embed_attrs(Mid, [~"az-click"]))
     ).
 
 %% The collector is armed for each page's render only, so the caller's process is
