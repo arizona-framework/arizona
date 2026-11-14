@@ -21,9 +21,11 @@
 -export([collects_non_map_spec_opts/1]).
 -export([embeds_compile_time_proven_attrs/1]).
 -export([embeds_render_time_proven_attrs/1]).
--export([page_without_events_has_no_attrs/1]).
--export([page_without_body_is_left_as_rendered/1]).
+-export([page_without_events_embeds_no_attrs/1]).
+-export([page_without_body_gets_the_names_after_it/1]).
+-export([html_embed_never_searches_the_document/1]).
 -export([target_decides_how_a_document_carries_names/1]).
+-export([target_without_static_document_embeds_nothing/1]).
 -export([leaves_the_collector_disarmed/1]).
 
 all() ->
@@ -47,9 +49,11 @@ groups() ->
             collects_non_map_spec_opts,
             embeds_compile_time_proven_attrs,
             embeds_render_time_proven_attrs,
-            page_without_events_has_no_attrs,
-            page_without_body_is_left_as_rendered,
+            page_without_events_embeds_no_attrs,
+            page_without_body_gets_the_names_after_it,
+            html_embed_never_searches_the_document,
             target_decides_how_a_document_carries_names,
+            target_without_static_document_embeds_nothing,
             leaves_the_collector_disarmed
         ]}
     ].
@@ -218,13 +222,14 @@ collects_non_map_spec_opts(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 %% The static client delegates exactly the names the page carries: a counter's
-%% `az-click` is proven by the compiler and lands before `</body>`.
+%% `az-click` is proven by the compiler and lands after the document, where the
+%% HTML parser moves it into the body as its last element.
 embeds_compile_time_proven_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "proven_compile", arizona_counter),
     ?assertEqual([~"az-click"], embedded_attrs(Content)),
     {Script, _} = binary:match(Content, ~"<script type=\"application/json\" id=\"arizona-attrs\">"),
-    {Body, _} = binary:match(Content, ~"</body>"),
-    ?assert(Script < Body).
+    {Html, _} = binary:match(Content, ~"</html>"),
+    ?assert(Html < Script).
 
 %% A command built at render time is invisible to the compiler: only the armed
 %% collector proves `az-dblclick`.
@@ -232,24 +237,25 @@ embeds_render_time_proven_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "proven_render", arizona_static_runtime_cmd),
     ?assertEqual([~"az-dblclick"], embedded_attrs(Content)).
 
-page_without_events_has_no_attrs(Config) when is_list(Config) ->
+%% A page with no names still carries an empty set: the client reads the last
+%% embed, and without one that is an element the page content holds.
+page_without_events_embeds_no_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "no_events", arizona_static_page),
-    ?assertEqual(nomatch, binary:match(Content, ~"arizona-attrs")).
+    ?assertEqual([], embedded_attrs(Content)).
 
-%% With no `</body>` to anchor it (a fragment, a `?json` document), nothing is
-%% appended: the page stays exactly what rendering produced.
-page_without_body_is_left_as_rendered(Config) when is_list(Config) ->
+%% A page with no `</body>` (no layout) is a body's content to the parser, so the
+%% names follow it like any other page's, which stays exactly what rendering
+%% produced.
+page_without_body_gets_the_names_after_it(Config) when is_list(Config) ->
     Dir = subdir(Config, "no_body"),
     {[Out], []} = arizona_static:generate(Dir, [{arizona_counter, ~"index.html"}]),
     Content = read(Out),
-    ?assertEqual(nomatch, binary:match(Content, ~"arizona-attrs")),
-    ?assertEqual(
-        iolist_to_binary(arizona_render:render_view_to_iolist(arizona_counter, #{})), Content
-    ).
+    Page = iolist_to_binary(arizona_render:render_view_to_iolist(arizona_counter, #{})),
+    ?assertMatch(<<Page:(byte_size(Page))/binary, "<script", _/binary>>, Content),
+    ?assertEqual([~"az-click"], embedded_attrs(Content)).
 
-%% How a document carries the names is its target's: HTML embeds a script before the
-%% last `</body>`; a JSON document is one value, left whole even when its text holds
-%% a `</body>`, which an HTML-shaped splice would have cut into.
+%% How a document carries the names is its target's: HTML appends a script after
+%% the document; a JSON document is one value, left whole.
 target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
     Names = [~"az-click"],
     Html = iolist_to_binary(
@@ -257,13 +263,38 @@ target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
     ),
     ?assertEqual(
         iolist_to_binary([
-            ~"<html><body><p>x</p><script type=\"application/json\" id=\"arizona-attrs\">",
-            ~"[\"az-click\"]</script></body></html>"
+            ~"<html><body><p>x</p></body></html>",
+            ~"<script type=\"application/json\" id=\"arizona-attrs\">[\"az-click\"]</script>"
         ]),
         Html
     ),
     Json = ~"{\"type\":\"Text\",\"children\":[\"</body>\"]}",
     ?assertEqual(Json, iolist_to_binary(arizona_json:static_document(Json, Names))).
+
+%% `static_document/2` is optional: a target without it has no client script to
+%% read the names, so its page is written exactly as rendered.
+target_without_static_document_embeds_nothing(Config) when is_list(Config) ->
+    Dir = subdir(Config, "no_static_document"),
+    Mod = arizona_text_page:load(),
+    {[Out], []} = arizona_static:generate(Dir, [{Mod, ~"index.txt"}]),
+    Page = iolist_to_binary(arizona_render:render_view_to_iolist(Mod, #{})),
+    ?assertEqual(Page, read(Out)).
+
+%% The HTML embed never reads the document: a `</BODY>` the parser takes as
+%% `</body>` still gets the names, and a data island holding the text `</body>`
+%% in a layout with no real one is never cut into.
+html_embed_never_searches_the_document(Config) when is_list(Config) ->
+    Script = ~"<script type=\"application/json\" id=\"arizona-attrs\">[\"az-click\"]</script>",
+    Upper = ~"<HTML><BODY><p>x</p></BODY></HTML>",
+    ?assertEqual(
+        <<Upper/binary, Script/binary>>,
+        iolist_to_binary(arizona_html:static_document(Upper, [~"az-click"]))
+    ),
+    Island = ~"<main></main><script type=\"application/json\">{\"s\":\"</body>\"}</script>",
+    ?assertEqual(
+        <<Island/binary, Script/binary>>,
+        iolist_to_binary(arizona_html:static_document(Island, [~"az-click"]))
+    ).
 
 %% The collector is armed for each page's render only, so the caller's process is
 %% not left recording what it renders later.

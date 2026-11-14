@@ -1,5 +1,6 @@
 import { applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
 import { allDocs, exitPip, requestPip } from './arizona-docs.js';
+import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
@@ -341,6 +342,43 @@ function withQueryAll(sel, fn) {
 }
 
 /**
+ * Command JSON in one text form, or null when it is not a command array: a
+ * single command and a list holding only it run the same (runCommands), so both
+ * become the list, without the empty items a list may carry.
+ * @param {*} value
+ * @returns {string|null}
+ */
+function canonicalCmds(value) {
+    if (!Array.isArray(value)) return null;
+    const list = value.length === 0 || Array.isArray(value[0]) ? value : [value];
+    return JSON.stringify(list.filter((c) => !Array.isArray(c) || c.length > 0));
+}
+
+/**
+ * Does an attribute value written under an `az-*` name prove it: a command array
+ * holding a command. A string is data, and an empty list (`set_attr(Sel, Name,
+ * [])` clearing a handler) runs nothing, so it proves the name for nothing.
+ * @param {*} value
+ * @returns {boolean}
+ */
+function provesName(value) {
+    return Array.isArray(value) && canonicalCmds(value) !== '[]';
+}
+
+/**
+ * Attribute text as `canonicalCmds` writes it, or null when it is not JSON.
+ * @param {string} text
+ * @returns {string|null}
+ */
+function canonicalCmdsText(text) {
+    try {
+        return canonicalCmds(JSON.parse(text));
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Execute JS commands from an az-* attribute value.
  * Single command: [opcode, ...args]
  * Multiple commands: [[opcode, ...args], [opcode, ...args]]
@@ -499,24 +537,50 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             });
             break;
         case JS_SET_ATTR:
+            // A runtime `arizona_js:set_attr(sel, "az-toggle", Cmd)` writes a name
+            // no template contains, and this command was itself proven (it ran from
+            // a proven name or a handler), so it proves the name -- when the value
+            // is a command, which the server ships as an array (an empty one runs
+            // nothing and proves nothing). A string is data,
+            // as are a diff op's string value and a `?local` value, and the server
+            // proves a command a diff ships on that frame. Before the write: a
+            // custom element's attributeChangedCallback may synchronously dispatch
+            // the very event the attribute names.
+            noteAzAttr(cmd[2], provesName(cmd[3]));
             withQueryAll(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
             break;
         case JS_REMOVE_ATTR:
             withQueryAll(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
             break;
-        case JS_TOGGLE_ATTR:
+        case JS_TOGGLE_ATTR: {
             // 3 args: presence toggle (remove if present, else set bare). 5 args:
             // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
-            // Each match is toggled on its own current state.
+            // Each match is toggled on its own current state. Like set_attr, it
+            // proves the name only when it writes a command, per match and before
+            // the write: a bare value is data, and toggling a handler off (to `[]`)
+            // proves nothing.
+            // Commands compare re-serialized on both sides: the server renders
+            // them with Erlang's encoder (`2.0`, binary-sorted keys), whose text
+            // JSON.stringify need not reproduce, so raw text may never match.
+            // Both are taken as a list, since `Cmd` and `[Cmd]` are written in
+            // their own shapes and run the same.
+            const cmds = Array.isArray(cmd[3]);
+            noteAzAttr(cmd[2], false);
+            const a = cmds ? canonicalCmds(cmd[3]) : cmd[3];
             withQueryAll(cmd[1], (t) => {
                 if (cmd.length === 3) {
                     if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
                     else applySetAttrOp(t, cmd[2], '');
                 } else {
-                    applySetAttrOp(t, cmd[2], t.getAttribute(cmd[2]) === cmd[3] ? cmd[4] : cmd[3]);
+                    const cur = t.getAttribute(cmd[2]);
+                    const isA = cmds ? cur !== null && canonicalCmdsText(cur) === a : cur === a;
+                    const value = isA ? cmd[4] : cmd[3];
+                    if (provesName(value)) noteAzAttr(cmd[2]);
+                    applySetAttrOp(t, cmd[2], value);
                 }
             });
             break;
+        }
         case JS_DISPATCH_EVENT:
             // Every hosting document, like the selector effects: a popped-out
             // (PiP) view is a first-class Arizona document (it gets the same

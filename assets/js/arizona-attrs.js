@@ -1,4 +1,3 @@
-import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { carryChooserLocal, heldChooserLocal } from './arizona-locals.js';
@@ -41,6 +40,8 @@ function decodeRawAttr(raw) {
  * A server-owned control the client holds (`host.holds`: an event carrying its state
  * is pending or awaits its reply, or the user is editing it) takes the attribute
  * only, and a `value` the user is mid bad input in waits.
+ * A write proves nothing about `name` (see `JS_SET_ATTR`): the diff path's value
+ * may be app data, and a `?local` value is.
  * @param {Element} el
  * @param {string} name
  * @param {string | unknown[] | {raw: string}} val
@@ -48,14 +49,6 @@ function decodeRawAttr(raw) {
 export function applySetAttrOp(el, name, val) {
     if (Array.isArray(val)) val = JSON.stringify(val);
     else if (typeof val !== 'string') val = decodeRawAttr(val.raw);
-    // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name no
-    // template contains, so the compile-time set cannot hold it. Every such write
-    // funnels here -- the SET_ATTR op, an ITEM_PATCH inner op, `set_attr`/
-    // `toggle_attr`, and a `?local` attribute slot -- so one call covers them all.
-    // Without it the attribute lands correctly and its event silently never
-    // fires. Before the write: a custom element's attributeChangedCallback may
-    // synchronously dispatch the very event the attribute names.
-    noteAzAttr(name);
     const local = name === 'multiple' ? heldLocal(el) : null;
     // Asked before the write: the default it changes is what the user's edit is
     // compared against.

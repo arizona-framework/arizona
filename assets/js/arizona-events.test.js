@@ -132,16 +132,17 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([['v', 'new"<&', {}]]);
     });
 
-    it('delegates the common types before the connect frame arrives', async () => {
+    it('delegates the names the page embeds before the connect frame arrives', async () => {
         const mod = await fresh();
-        document.body.innerHTML = `<div id="v" az-view><button id="b" az-click='[0,"clicked"]'>go</button></div>`;
+        document.body.innerHTML =
+            `<div id="v" az-view><button id="b" az-click='[0,"clicked"]'>go</button></div>` +
+            `<script type="application/json" id="arizona-attrs">["az-click"]</script>`;
         w = mockWorker(mod);
         w.open();
 
         // The socket is open, so `_connected` is true and the user can click -- but
-        // the name set is a server frame and arrives a round trip later. Without a
-        // bootstrap set the document has no listeners at all in that window and the
-        // click is lost with no symptom.
+        // the name set is a server frame and arrives a round trip later. The page
+        // carries the same set from its render, so the click finds its proof.
         document.getElementById('b').click();
 
         expect(w.sent()).toEqual([['v', 'clicked', {}]]);
@@ -205,7 +206,7 @@ describe('open event delegation', () => {
         // handed to the triage is whatever the caller wrote. addEventListener types
         // are case-sensitive, so an unlowered `az-Close` binds a dead `Close` while
         // the DOM holds `az-close` -- the attribute lands and its event never fires.
-        w.ops([[1, 'v:1', 'az-Close', '[0,"closed"]']]);
+        mod.applyEffects([[7, '#dlg', 'az-Close', [0, 'closed']]]);
         fire(document.getElementById('dlg'), 'close', false);
 
         expect(w.sent()).toEqual([['v', 'closed', {}]]);
@@ -218,16 +219,16 @@ describe('open event delegation', () => {
         w.open();
         w.names(['az-click']);
 
-        // A runtime attribute write names a type no template contains, so the
-        // compile-time set cannot hold it. Every such write funnels through
-        // applySetAttrOp: the op, an item-patch inner op, set_attr/toggle_attr
-        // effects, and a ?local attribute slot.
-        w.ops([[1, 'v:1', 'az-close', '[0,"closed"]']]);
+        // A diff that turns a dynamic into a command ships the command as a JSON
+        // array and proves its name on the same frame, ahead of the op: the
+        // compile-time set cannot hold a name only a runtime value carries.
+        w.names(['az-close'], [[1, 'v:1', 'az-close', [0, 'closed']]]);
         fire(document.getElementById('dlg'), 'close', false);
         expect(w.sent()).toEqual([['v', 'closed', {}]]);
 
-        // ...and via an effect, which never reaches the worker at all.
-        mod.applyEffects([[7, '#dlg', 'az-cancel', '[0,"cancelled"]']]);
+        // ...and via a set_attr effect, which never reaches the worker at all:
+        // the command that wrote it was itself proven, so it proves the name.
+        mod.applyEffects([[7, '#dlg', 'az-cancel', [0, 'cancelled']]]);
         fire(document.getElementById('dlg'), 'cancel', false);
         expect(w.sent()).toEqual([
             ['v', 'closed', {}],
@@ -493,7 +494,8 @@ describe('open event delegation', () => {
         document.body.innerHTML = `<div id="v" az-view><a id="l" href="#" az-click="" az-prevent-default>x</a></div>`;
         w = mockWorker(mod);
         w.open();
-        w.names(['az-prevent-default']);
+        // A bare event attribute is proven: it can only be the author's.
+        w.names(['az-click', 'az-prevent-default']);
 
         const ev = fire(document.getElementById('l'), 'click', true, true);
         expect(ev.defaultPrevented).toBe(true);

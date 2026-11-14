@@ -905,7 +905,10 @@ handle_event(~"inc", _P, B) ->
 - `toggle/1`, `show/1`, `hide/1` -- element visibility via `hidden` attribute
 - `add_class/2`, `remove_class/2`, `toggle_class/2` -- CSS class manipulation
 - `set_attr/3`, `remove_attr/2`, `toggle_attr/2,4` -- attribute manipulation (`toggle_attr/2`
-  presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values)
+  presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values).
+  Under an `az-*` name `set_attr/3` and `toggle_attr/4` also take a command (or list), written as
+  the JSON array an event attribute holds; only a non-empty one proves the name to the client, a
+  binary there being data and `[]` (no command, clearing the handler) proving nothing
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation, replaces the root view (opts: `#{replace => true}`)
 - `patch/1,2` -- in-place SPA navigation, keeps the root view and re-renders it via
@@ -1198,6 +1201,10 @@ Caveats (by design):
   updates all of them at once. `?local` therefore can't hold per-item independent client state
   in a list/stream -- use server state for that. (An item reorder/remove is also a wholesale
   re-render that resets that item's slot.)
+- **Under an `az-*` name it must start as a command.** Only the initial value proves the name,
+  at compile time: `{az_click, ?local(~"act", arizona_js:push_event(~"go"))}` proves `click`,
+  `{az_click, ?local(~"act", ~"")}` proves nothing, and no later `set` does, even of a command
+  array -- a `?local` value is client-side data.
 - **Forced reconnect resets it.** A non-1000 socket close fresh-mounts the view.
 - **Server never reads the value.** To use it server-side, read it client-side
   (`arizona.get`) and include it in a `push_event` payload -- auto-collection ignores `[az-local]`.
@@ -2037,6 +2044,22 @@ native request in an `arizona_req:request()`, runs any route middlewares, and ca
 `arizona_render:render_view/2` (`render_view_to_iolist/2` paired with the document's media
 type). The transport handler translates the returned result into its native reply shape.
 
+The page carries the `az-*` names proven to hold commands (`arizona_event_attrs:embed/2`, the
+render target's `static_document/2`: an `?html` page gets `<script type="application/json"
+id="arizona-attrs">` appended after the document, which the HTML parser moves into the body as
+its last element, even when the set is empty, so an element injected ahead of it in the normal
+flow is never the client's last match), the same set the socket's connect frame
+delivers. The client runs a command only under a proven name, and that frame lands a round trip
+after the socket opens, so without the embedded set a click or an HTTP-form `az-submit` in
+between would find no proof. Appending rather than splicing means the page is neither flattened
+nor searched: no case or data-island text can misplace the embed. It does not stop a forged set:
+`?raw` is trusted markup, and untrusted markup spliced through it can inject its own embed
+followed by an unclosed `<!--` (or a raw-text or RCDATA element left unclosed, e.g. `textarea`,
+`title`, `style`, `script`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`, or `noscript`
+with scripting on), which swallows the real one, so the forged set is the last match. Under a
+strict CSP that blocks the injected markup's own scripts, the allowed client then runs its
+`az-*` data as commands. A `?json` page has nowhere to embed and waits for the connect frame.
+
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
   - `{halt, Request}` -- middleware halted; the transport decodes the stashed redirect
@@ -2092,11 +2115,12 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   of `t:arizona_live:route_opts/0` (`bindings`/`on_mount`/`layouts`; no `middlewares`). The client
   `<script>` lives in the layout: a pure-static page loads `arizona-static.min.js` and calls
   `start()` instead of `connect('/ws')`, and browser-side commands (`?local`, toggles, dialogs,
-  PiP) run with no server. Each page with event attributes is handed their proven names -- what
-  the socket's connect frame carries on a live page -- through its target's
+  PiP) run with no server. Each page is handed its proven names, an empty set too -- what
+  an HTTP-rendered live page embeds the same way -- through its target's
   `static_document/2` renderer callback: HTML embeds them as
-  `<script type="application/json" id="arizona-attrs">` before its last `</body>`, and
-  `start()` delegates exactly those.
+  `<script type="application/json" id="arizona-attrs">` appended after the document, and
+  `start()` delegates exactly those. The callback is optional: a target with no client script
+  to read the names (a terminal) leaves it out and its page is written as rendered.
 
 ## Roadrunner handlers
 
@@ -2459,7 +2483,8 @@ az-nodiff element the fresh state names. A navigate is a new page and keeps noth
 - `az-*` attributes inside the widget's own DOM are markup Arizona did not render: the client
   delegates only the event names the compiled templates declared, and mounts hooks only in markup
   it inserted. Call the exported `mountHooks(root)` on the widget's root after rendering such
-  markup; it scans for both.
+  markup; it scans for both. The scan proves every `az-*` name it finds, so pass only the
+  widget's own root, never `document` or the server-rendered view around it.
 
 ## Connection events
 

@@ -419,11 +419,19 @@ array.
 -callback wire_attr(Name :: binary(), Value :: term()) -> json:encode_value().
 
 -doc """
-A statically generated document (`arizona_static`) carrying the `az-*` event names
-proven to hold commands -- what a live page's client gets on its socket's connect
-frame, here for a client with no server to ask. Called only when the page has any.
-How a document carries them is the target's: HTML embeds them as a JSON script
+A request-free page render carrying the `az-*` event names proven to hold commands
+(`arizona_event_attrs:embed/2`): a statically generated document (`arizona_static`),
+whose client has no server to ask, and an HTTP-rendered live page, whose client
+must know them before its socket's connect frame delivers the same set. Called
+for every such page, with an empty list too: the client reads the last embed, so
+a page without one would leave it reading an element the page content holds. How
+a document carries them is the target's: HTML embeds them as a JSON script
 element; a target whose document cannot take extra content (a single JSON value)
-returns `Doc` as it is, and its client is handed the names another way.
+returns `Doc` as it is, and its client is handed the names another way (the
+connect frame, or `start({attrs})` on a static page). Optional: a target with no
+client script to read them (a terminal) leaves it out, and its document is used
+as rendered.
 """.
 -callback static_document(Doc :: iodata(), EventNames :: [binary()]) -> iodata().
+
+-optional_callbacks([static_document/2]).

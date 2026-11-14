@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connect, executeJS, OP } from './arizona.js';
+import { embedAttrs } from './test-proofs.js';
 
 // Op codes (must match include/arizona_effect.hrl).
 const JS_PUSH_EVENT = 0;
@@ -62,7 +63,9 @@ function setupMockWorker() {
     globalThis.Worker = function () {
         return worker;
     };
+    const unembed = embedAttrs();
     const disconnect = connect('/ws');
+    unembed();
     worker.onmessage({ data: [1, false] }); // open -> _connected = true
     return {
         posted,

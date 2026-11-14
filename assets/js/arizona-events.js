@@ -11,6 +11,11 @@ import { warnOnce } from './arizona-util.js';
  * path deliberately calls `mountHooks` instead -- server-rendered markup declares
  * nothing the connect frame did not already deliver, so walking it again would
  * re-derive what we were told, per element per op.
+ *
+ * The scan IS a proof: every `az-*` name under `root` becomes a command name for
+ * the page, a data value's name included. Pass only the subtree the host inserted,
+ * never `document` or server-rendered markup (`{az_select, ?get(ids)}` there is
+ * data the server never proved).
  * @param {Element|Document} root
  */
 export function mountHooksPublic(root) {
@@ -123,7 +128,7 @@ function handleEvent(target, eventType, signal) {
         // what makes preventDefault take effect on a page that declares it.
         // `noteAzAttrs` reads the directive out of a frame's set before binding
         // anything from that frame -- but the declaration can also arrive AFTER
-        // the type is bound (a later delta frame, a runtime attribute write), so
+        // the type is bound (a later delta frame, a `set_attr` effect), so
         // a passive registration is recorded for `declarePreventDefault` to
         // rebind. Only the bubble listener needs recording: the four are all
         // NATIVELY_BUBBLING, so the capture listener below never binds for them.
@@ -156,8 +161,7 @@ const PASSIVE_FORCED = new Set(['wheel', 'mousewheel', 'touchstart', 'touchmove'
 
 /**
  * Types the platform always dispatches with `bubbles: true`, so the bubble phase
- * already sees every real one and a capture listener would only add reach. The
- * bootstrap seven plus the forced-passive four.
+ * already sees every real one and a capture listener would only add reach.
  */
 const NATIVELY_BUBBLING = new Set([
     'click',
@@ -211,21 +215,22 @@ function declarePreventDefault() {
 }
 
 /**
- * `az-*` suffixes that are framework directives rather than DOM event types.
- *
- * Only `submit` and `drop` are load-bearing: they name real DOM events AND have
- * their own dedicated listeners below (submit flushes debounced inputs, honors
- * `az-form-reset` and defers to `fetch`; drop carries the drag bookkeeping), so
- * delegating them generically would run their commands a second time.
- *
- * The rest name no DOM event at all, so binding one would only ever register a
- * listener that never fires. They are listed as hygiene, not as a safety net --
- * forgetting one is harmless, and only a future directive named after a real DOM
- * event would need to be added here.
+ * Proven event types with their own dedicated listeners below (submit flushes
+ * debounced inputs, honors `az-form-reset` and defers to `fetch`; drop carries the
+ * drag bookkeeping), so delegating them generically would run their commands a
+ * second time. They are still recorded as proven: their listeners are bound on
+ * every page and check the proof themselves.
+ */
+const DEDICATED = new Set(['submit', 'drop']);
+
+/**
+ * `az-*` suffixes that are framework directives rather than DOM event types. They
+ * name no DOM event at all, so binding one would only ever register a listener that
+ * never fires. Listed as hygiene, not as a safety net -- forgetting one is
+ * harmless, and only a future directive named after a real DOM event would need to
+ * be added here.
  */
 const AZ_DIRECTIVES = new Set([
-    'submit',
-    'drop',
     'view',
     'local',
     'key',
@@ -244,21 +249,25 @@ const AZ_DIRECTIVES = new Set([
 ]);
 
 /**
- * The az-* DOM events delegated so far. Bootstrapped with the types every app
- * uses, because the server's name set arrives one round trip after the socket
- * opens and a click in that window must not find an empty document. Grown by
- * `noteAzAttrs` from the set, and by `noteAzAttr` from a runtime attribute write.
- * Monotonic for the life of the page.
+ * The az-* event types proven to carry commands: the server's set (embedded in the
+ * page, then the connect frame and its deltas), a `set_attr`/`toggle_attr` effect,
+ * and host markup handed to the exported `mountHooks`. A diff op or a `?local`
+ * attribute write proves nothing: its string value is app data. Every executor runs a command only
+ * under a type in here -- the generic listeners by being bound only for these, the
+ * dedicated and replay paths by asking `proven` -- since `[0,"x"]` is a valid
+ * command list and an app's data value under any other `az-*` name would run.
+ * Empty until a proof arrives; monotonic for the life of the page.
  */
-const _eventTypes = new Set([
-    'click',
-    'change',
-    'input',
-    'keydown',
-    'keyup',
-    'focusin',
-    'focusout',
-]);
+const _eventTypes = new Set();
+
+/**
+ * Was `attr` (an `az-*` attribute name) proven to carry commands on this page?
+ * @param {string} attr
+ * @returns {boolean}
+ */
+export function proven(attr) {
+    return _eventTypes.has(attr.slice(3));
+}
 
 /**
  * Documents currently bound, and the tear-down for the ones whose listeners hang
@@ -287,27 +296,67 @@ export function noteAzAttrs(names) {
 
 /**
  * Delegate one `az-*` attribute NAME. The single place the directive/event triage
- * lives, so the server's set and a runtime attribute write cannot drift apart.
+ * lives, so the server's set and a `set_attr` effect cannot drift apart. With
+ * `cmds` false the write carried data, which proves no event, so only a directive
+ * is noted (`az-prevent-default` decides `passive`, and runs nothing).
  * @param {string} name
+ * @param {boolean} [cmds]
  */
-export function noteAzAttr(name) {
+export function noteAzAttr(name, cmds = true) {
     if (!name.startsWith('az-')) return;
     // Attribute names are ASCII-lowercased by the HTML parser, and
     // `addEventListener` types are case-sensitive, so an unlowered `az-Close`
     // would bind a dead `Close` while the DOM stores `az-close`.
     const type = name.slice(3).toLowerCase();
     if (type === 'prevent-default') declarePreventDefault();
-    else if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) bindEventType(type);
+    else if (cmds && !_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) {
+        _eventTypes.add(type);
+        if (!DEDICATED.has(type))
+            for (const [doc, rec] of _eventDocs) handleEvent(doc, type, rec.signal);
+    }
+}
+
+/** The element the server writes a page's proven `az-*` names into. */
+const ATTRS_ID = 'arizona-attrs';
+
+/**
+ * The names a page embeds for its client before the socket can deliver them
+ * (`<script type="application/json" id="arizona-attrs">`, the render target's
+ * `static_document/2`, appended after the document, even when empty), or none.
+ * @returns {string[]}
+ */
+function embeddedAttrs() {
+    // Not `getElementById`: an id can come from user input, and any earlier element
+    // carrying this one would win. Escaped content cannot create a script element,
+    // and the server writes its embed after the page, so the last match is it --
+    // unless untrusted markup spliced through `?raw` (trusted markup) forges one
+    // and swallows this one in an unclosed comment or raw-text/RCDATA element.
+    const els = document.querySelectorAll(`script[type="application/json"]#${ATTRS_ID}`);
+    const el = els[els.length - 1];
+    if (!el) return [];
+    try {
+        const names = JSON.parse(el.textContent || '[]');
+        return Array.isArray(names) ? names.filter((n) => typeof n === 'string') : [];
+    } catch {
+        console.warn(`[arizona] #${ATTRS_ID} is not a JSON list of names; delegating nothing`);
+        return [];
+    }
 }
 
 /**
- * Delegate `type` on every bound document. Idempotent: `_eventTypes` gates the
- * call, and every bound document has every type in it.
- * @param {string} type
+ * Note the names the page embeds, once the document is parsed. A classic script or
+ * an early module may call `connect`/`start` before the parser reaches the embed,
+ * which comes after the page, and the last match then is one the page content
+ * holds: a read then would prove its names for good, since proofs only add.
+ * @param {AbortSignal} signal
  */
-function bindEventType(type) {
-    _eventTypes.add(type);
-    for (const [doc, rec] of _eventDocs) handleEvent(doc, type, rec.signal);
+export function noteEmbeddedAttrs(signal) {
+    if (document.readyState === 'loading')
+        document.addEventListener('DOMContentLoaded', () => noteAzAttrs(embeddedAttrs()), {
+            once: true,
+            signal,
+        });
+    else noteAzAttrs(embeddedAttrs());
 }
 
 /**
@@ -335,6 +384,19 @@ function scanEvents(root) {
         // so the (typical) attribute-less element costs no array allocation.
         if (el.hasAttributes?.()) for (const name of el.getAttributeNames()) noteAzAttr(name);
     }
+}
+
+/**
+ * Tell the console and the app that a submit ran nothing: every drop warns and
+ * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
+ * @param {Element} form
+ * @param {'disconnected'|'unproven'} reason
+ */
+function dropSubmit(form, reason) {
+    console.warn(`[arizona] az-submit dropped: ${reason}`);
+    form.dispatchEvent(
+        new CustomEvent('arizona:submit-dropped', { bubbles: true, detail: { reason } }),
+    );
 }
 
 /**
@@ -371,7 +433,7 @@ export function unbindDocuments() {
  */
 export function bindDocumentEvents(target, signal, abort) {
     _eventDocs.set(target, { signal, abort });
-    for (const type of _eventTypes) handleEvent(target, type, signal);
+    for (const type of _eventTypes) if (!DEDICATED.has(type)) handleEvent(target, type, signal);
 
     // Form submission: flush any pending debounced/throttled inputs first so
     // the server sees final values, then execute JS commands from az-submit.
@@ -387,6 +449,12 @@ export function bindDocumentEvents(target, signal, abort) {
             // URL. Before the first open and during reconnect backoff that used to
             // be exactly what happened.
             e.preventDefault();
+            // Unproven: the value is app data (or the proof has not arrived, on a
+            // page without the embed), and the user still pressed submit.
+            if (!_eventTypes.has('submit')) {
+                dropSubmit(form, 'unproven');
+                return;
+            }
             const raw = form.getAttribute('az-submit');
             /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
             let needs = {};
@@ -407,13 +475,7 @@ export function bindDocumentEvents(target, signal, abort) {
                     return;
                 }
                 if (!host.ready() && (needs.event || needs.nav)) {
-                    console.warn('[arizona] az-submit dropped: disconnected');
-                    form.dispatchEvent(
-                        new CustomEvent('arizona:submit-dropped', {
-                            bubbles: true,
-                            detail: { reason: 'disconnected' },
-                        }),
-                    );
+                    dropSubmit(form, 'disconnected');
                     return;
                 }
                 // Flush pending debounced inputs so the server sees them before the
@@ -495,7 +557,7 @@ export function bindDocumentEvents(target, signal, abort) {
             if (!container) return;
             _itemDrag = false;
             e.preventDefault();
-            if (!host.ready()) return;
+            if (!host.ready() || !_eventTypes.has('drop')) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
             try {

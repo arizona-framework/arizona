@@ -15,6 +15,7 @@ import {
     setAll,
 } from './arizona.js';
 import { applyChoosers } from './arizona-attrs.js';
+import { embedAttrs } from './test-proofs.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,7 +93,9 @@ function setupMockWorker(mod) {
         return mockWorkerInstance;
     };
 
+    const unembed = embedAttrs();
     const disconnect = mod.connect('/ws');
+    unembed();
 
     return {
         worker: mockWorkerInstance,
@@ -1860,6 +1863,48 @@ describe('applyEffects -- toggle_attr', () => {
         document.body.innerHTML = '<input id="f" type="email" />';
         applyEffects([[21, '#f', 'type', 'password', 'text']]);
         expect(field().getAttribute('type')).toBe('password');
+    });
+
+    // The server renders a command attribute with Erlang's json:encode, which
+    // writes `2.0` and `1.0e21` and sorts map keys as binaries ("10" before
+    // "9"); JSON.stringify writes `2`, `1e+21` and puts integer-like keys first.
+    // The same command must still match, in either direction.
+    it('commands: flips from a server-rendered A whose text JS would write differently', () => {
+        const server = '[0,"pick",{"10":1,"9":2.0,"big":1.0e21,"x":0.1}]';
+        const a = JSON.parse(server);
+        const b = [0, 'other'];
+        document.body.innerHTML = `<input id="f" az-select='${server}' />`;
+        applyEffects([[21, '#f', 'az-select', a, b]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(b);
+        applyEffects([[21, '#f', 'az-select', a, b]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(a);
+        field().setAttribute('az-select', server);
+        applyEffects([[21, '#f', 'az-select', b, a]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual(b);
+    });
+
+    // A command and a list holding only it run the same, and the server writes
+    // whichever shape the template or the toggle argument was written in
+    // (`Cmd` is `[0,"a"]`, `[Cmd]` and `[Cmd, []]` are `[[0,"a"]]`).
+    it('commands: a single command matches a list of just it, in either direction', () => {
+        document.body.innerHTML = `<input id="f" az-select='[[0,"a"]]' />`;
+        applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([0, 'b']);
+        field().setAttribute('az-select', '[0,"a"]');
+        applyEffects([[21, '#f', 'az-select', [[0, 'a']], [[0, 'b']]]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([[0, 'b']]);
+    });
+
+    it('commands: a list of several commands never matches its first alone', () => {
+        document.body.innerHTML = `<input id="f" az-select='[[0,"a"],[1,"#m"]]' />`;
+        applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([0, 'a']);
+    });
+
+    it('commands: a current value that is not JSON resolves to A', () => {
+        document.body.innerHTML = `<input id="f" az-select="not json" />`;
+        applyEffects([[21, '#f', 'az-select', [0, 'a'], [0, 'b']]]);
+        expect(JSON.parse(field().getAttribute('az-select') ?? '')).toEqual([0, 'a']);
     });
 });
 
@@ -4783,6 +4828,8 @@ describe('saveFormState / restoreFormState edge cases', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
+        // Connected first: a replay proposes only under a name the page proved.
+        const mock = setupMockWorker(mod);
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;validate&quot;]"><div id="v" az-view><input name="x" value="val"></div></form>';
         mod.saveFormState();
@@ -4790,7 +4837,6 @@ describe('saveFormState / restoreFormState edge cases', () => {
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;validate&quot;]"><div id="v" az-view><input name="x" value=""></div></form>';
 
-        const mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.posted.length = 0;
         mod.restoreFormState();
@@ -4804,6 +4850,8 @@ describe('saveFormState / restoreFormState edge cases', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
+        // Connected first: a replay proposes only under a name the page proved.
+        const mock = setupMockWorker(mod);
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;my_change&quot;]"><div id="v" az-view><input name="a" value="1"></div></form>';
         mod.saveFormState();
@@ -4811,7 +4859,6 @@ describe('saveFormState / restoreFormState edge cases', () => {
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;my_change&quot;]"><div id="v" az-view><input name="a" value=""></div></form>';
 
-        const mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.posted.length = 0;
         mod.restoreFormState();

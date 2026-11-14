@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { embedAttrs } from './test-proofs.js';
 
 // Server-owned controls (`az-ctl`): the attribute a server write changes is only a
 // control's default, and once the user edits the control what it shows is the live
@@ -36,7 +37,9 @@ async function connect(html) {
     globalThis.Worker = function () {
         return worker;
     };
+    const unembed = embedAttrs();
     const disconnect = mod.connect('/ws');
+    unembed();
     mock = {
         open: () => onmessage({ data: [1, false] }),
         close: (code = 1006) => onmessage({ data: [2, code] }),

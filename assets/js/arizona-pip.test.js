@@ -83,7 +83,7 @@ async function fresh() {
 }
 
 /** The connection the running test opened, torn down in afterEach. */
-/** @type {{sent: () => *[], reconnect: () => void, restore: () => void} | null} */
+/** @type {{frame: (ops: *[], names: string[]) => void, sent: () => *[], reconnect: () => void, restore: () => void} | null} */
 let openConn = null;
 
 /**
@@ -114,6 +114,9 @@ function connectMock(mod) {
     let disconnect = mod.connect('/ws');
     inst.onmessage({ data: [1, false] });
     openConn = {
+        /** A server frame: `ops`, proving `names` ahead of them as the server does. */
+        frame: (/** @type {*[]} */ ops, /** @type {string[]} */ names) =>
+            inst.onmessage({ data: [0, ops, null, false, names, null] }),
         sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
         /** Retire this connection and open a fresh one against the same document. */
         reconnect: () => {
@@ -307,11 +310,27 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         // The type is declared after the window opened, so it has to reach every
         // hosting document, not just the main one -- the view now LIVES in the PiP
         // document, so binding only the main document would delegate nothing.
-        mod.applyOps([[1, 'v6:1', 'az-close', '[0,"closed"]']]);
+        conn.frame([[1, 'v6:1', 'az-close', [0, 'closed']]], ['az-close']);
         pip.document.getElementById('d6').dispatchEvent(new Event('close'));
 
         expect(conn.sent()).toEqual([['v6', 'closed', {}]]);
 
+        pip.fire('pagehide');
+    });
+
+    // A popped-out view keeps the main page's proofs: a static value under a name
+    // the server never proved is app data there too.
+    it('does not run an unproven az-click in a PiP document', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v15" az-view az="0"><button id="b15" az-click='[0,"evil"]'>x</button></div>`;
+        const conn = connectMock(mod);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await mod.requestPip('v15');
+
+        pip.document.getElementById('b15').dispatchEvent(new Event('click', { bubbles: true }));
+
+        expect(conn.sent()).toEqual([]);
         pip.fire('pagehide');
     });
 
@@ -322,7 +341,7 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         const conn = connectMock(mod);
 
         // Declared while the view is still inline...
-        mod.applyOps([[1, 'v10:1', 'az-close', '[0,"closed"]']]);
+        conn.frame([[1, 'v10:1', 'az-close', [0, 'closed']]], ['az-close']);
 
         const pip = makePipWindow();
         stubPip(pip);
@@ -365,7 +384,7 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         // window's listeners went with its AbortSignal, which also makes a re-add
         // there a silent no-op -- so a document left in the registry is a dead
         // Document kept alive and re-bound on every declaration, with no symptom.
-        mod.applyOps([[1, 'v11:1', 'az-toggle', '[0,"toggled"]']]);
+        conn.frame([[1, 'v11:1', 'az-toggle', [0, 'toggled']]], ['az-toggle']);
         expect(bound).toEqual([]);
 
         // ...while the view, restored inline, does get the new type delegated.

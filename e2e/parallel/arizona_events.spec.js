@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test';
 
 // The /events view (test/support/arizona_events_demo.erl) proves the whole
 // compile-time path over a real socket: the parse transform records `az-toggle`,
-// the server ships the set on the connect frame, and the client delegates it.
-// `toggle` is not bootstrapped and does not bubble, so it needs both the set and
-// the capture-phase listener -- a regression in either leaves the page inert.
+// the server embeds the set in the page and ships it on the connect frame, and the
+// client delegates it. `toggle` does not bubble, so it needs both the set and the
+// capture-phase listener -- a regression in either leaves the page inert.
 
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
@@ -62,8 +62,8 @@ test('delivers an event proved only by the render, at connect', async ({ page })
     await wsReady(page);
     await expect(page.locator('#entered')).toHaveText('0');
 
-    // A real hover: mouseenter is not bootstrapped, so it fires only because the
-    // connect frame carried the render-observed name.
+    // A real hover: mouseenter fires only because the render-observed name was
+    // proven (embedded by the page render, and on the connect frame).
     await page.hover('#enter');
     await expect(page.locator('#entered')).toHaveText('1');
     expect(errors).toEqual([]);
@@ -121,8 +121,7 @@ test('a runtime-bound page swap delivers the new page events', async ({ page }) 
 
     await page.click('#swap');
     await expect(page.locator('#pb')).toHaveText('page b:0');
-    // pointerup is not bootstrapped; the tap counts only because the swap
-    // reply's delta carried page b's names.
+    // The tap counts only because the swap reply's delta carried page b's names.
     await page.locator('#pb').dispatchEvent('pointerup', { bubbles: true });
     await expect(page.locator('#pb')).toHaveText('page b:1');
     expect(errors).toEqual([]);

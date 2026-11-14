@@ -12,6 +12,10 @@
 -export([walk_cache_follows_hot_reload/1]).
 -export([walk_asks_for_a_missing_callee_once/1]).
 -export([walk_terminates_on_a_cycle/1]).
+-export([embed_keeps_a_live_collector/1]).
+-export([embed_leaves_an_unarmed_process_unarmed/1]).
+-export([walk_follows_a_reload_below_its_roots/1]).
+-export([walk_follows_a_forget/1]).
 
 all() ->
     [
@@ -24,7 +28,11 @@ all() ->
         layout_command_warns_at_ssr,
         walk_cache_follows_hot_reload,
         walk_asks_for_a_missing_callee_once,
-        walk_terminates_on_a_cycle
+        walk_terminates_on_a_cycle,
+        embed_keeps_a_live_collector,
+        embed_leaves_an_unarmed_process_unarmed,
+        walk_follows_a_reload_below_its_roots,
+        walk_follows_a_forget
     ].
 
 %% The walk follows both the transform-recorded dependency (arizona_walk_child)
@@ -189,3 +197,82 @@ collect_ensure_loaded(Mod, N) ->
     after 5000 ->
         exit(no_count_request)
     end.
+
+%% A live process (armed for its life at init) may render a page through
+%% `embed/2` -- `arizona_static:generate/2` or `arizona_http:render/3` from a
+%% handler. Its pending observations, and its armed collector, must survive.
+embed_keeps_a_live_collector(Config) when is_list(Config) ->
+    ok = arizona_event_attrs:arm(),
+    ok = arizona_event_attrs:observe_attr(~"az-close"),
+    ok = arizona_event_attrs:observe_mod(arizona_walk_child),
+    ?assertMatch(
+        {arizona_html, _},
+        arizona_event_attrs:embed([], fun() ->
+            ok = arizona_event_attrs:observe_attr(~"az-cut"),
+            {arizona_html, ~"<p></p>"}
+        end)
+    ),
+    ok = arizona_event_attrs:observe_attr(~"az-toggle"),
+    ?assertEqual(
+        {[~"az-close", ~"az-toggle"], [arizona_walk_child]},
+        arizona_event_attrs:drain()
+    ).
+
+%% A request process may serve several renders: it must not keep recording.
+embed_leaves_an_unarmed_process_unarmed(Config) when is_list(Config) ->
+    ?assertMatch(
+        {arizona_html, _},
+        arizona_event_attrs:embed([], fun() -> {arizona_html, ~"<p></p>"} end)
+    ),
+    ok = arizona_event_attrs:observe_attr(~"az-toggle"),
+    ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+%% A page's names must not outlive the code they were read from: a reload of a
+%% module two edges below the root, with no `forget/1`, is seen on the very next
+%% page.
+walk_follows_a_reload_below_its_roots(Config) when is_list(Config) ->
+    Root = arizona_event_attrs_memo_root,
+    Leaf = arizona_event_attrs_memo_leaf,
+    ok = load_edges_module(Root, [], [arizona_event_attrs_memo_mid]),
+    ok = load_edges_module(arizona_event_attrs_memo_mid, [], [Leaf]),
+    ok = load_edges_module(Leaf, [~"az-copy"], []),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ok = load_edges_module(Leaf, [~"az-paste"], []),
+    ?assertEqual([~"az-paste"], embedded_names([Root])),
+    ok = load_edges_module(Leaf, [~"az-copy"], []),
+    ?assertEqual([~"az-copy"], embedded_names([Root])).
+
+%% An edit to only a hand-written attribute keeps the code's MD5, so only the dev
+%% reloader's `forget/1` reveals it.
+walk_follows_a_forget(Config) when is_list(Config) ->
+    Root = arizona_event_attrs_forget_root,
+    Leaf = arizona_event_attrs_forget_leaf,
+    ok = load_edges_module(Root, [], [Leaf]),
+    ok = load_attrs_module(Leaf, [~"az-copy"]),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ok = load_attrs_module(Leaf, [~"az-paste"]),
+    ?assertEqual([~"az-copy"], embedded_names([Root])),
+    ok = arizona_event_attrs:forget(Leaf),
+    ?assertEqual([~"az-paste"], embedded_names([Root])).
+
+embedded_names(Roots) ->
+    {arizona_html, Doc} = arizona_event_attrs:embed(Roots, fun() ->
+        {arizona_html, ~"<p></p>"}
+    end),
+    {match, [Json]} = re:run(
+        Doc, ~"id=\"arizona-attrs\">(.*?)</script>", [{capture, all_but_first, binary}]
+    ),
+    json:decode(Json).
+
+%% A module whose only difference between versions is its `-arizona_az_attrs`:
+%% the code, and so its MD5, stays the same.
+load_attrs_module(Mod, Names) ->
+    Forms = [
+        parse_form(io_lib:format("-module(~w).", [Mod])),
+        parse_form(io_lib:format("-arizona_az_attrs(~w).", [Names]))
+    ],
+    {ok, Mod, Bin} = compile:forms(Forms, []),
+    true = code:soft_purge(Mod),
+    {module, Mod} = code:load_binary(Mod, "", Bin),
+    ok.
