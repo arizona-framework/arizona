@@ -127,8 +127,8 @@ are events and unions monotonically, over what the page embedded.
 generic listeners are bound only for proven types, which is the only way one gets bound. The
 dedicated `submit` and `drop` listeners are bound on every page (they carry bookkeeping), so each
 asks `proven` before parsing its attribute; an unproven `az-submit` is still `preventDefault`ed
-(see below) and runs nothing. The reconnect replay proposes a form's `az-change` or a field's
-`az-change`/`az-input` only under a proven name (`proposing`). A `submit` or `drop` proof is
+(see below) and runs nothing. The reconnect replay re-runs only a form's `az-change`, and only
+when `az-change` is proven; no field's handler is replayed. A `submit` or `drop` proof is
 recorded beside the others but binds no generic listener (`DEDICATED`).
 
 Deriving the set from rendered bytes instead was tried and abandoned. A regex over serialized HTML
