@@ -8013,7 +8013,17 @@ describe('form submit', () => {
         [
             'an element inside an az-submit form',
             `<form az-submit='[0,"go"]' az-form-reset><div id="t"></div><input name="q" value="kept"></form>`,
-            '[arizona] a submit on a <div> is ignored: az-submit runs for a submit of the <form> carrying it',
+            '[arizona] a submit on a <div> is ignored: az-submit on a <form> runs only for a submit of that element, as an HTML <form>',
+        ],
+        [
+            'an element inside an az-submit element that is not a form',
+            `<div az-submit='[0,"go"]' az-form-reset><span id="t"></span><input name="q" value="kept"></div>`,
+            '[arizona] a submit on a <span> is ignored: az-submit on a <div> runs only for a submit of that element, as an HTML <form>',
+        ],
+        [
+            'an SVG form inside an az-submit element that is not a form',
+            `<div az-submit='[0,"go"]' az-form-reset><svg><form id="t"></form></svg><input name="q" value="kept"></div>`,
+            '[arizona] a submit on an SVG <form> is ignored: az-submit on a <div> runs only for a submit of that element, as an HTML <form>',
         ],
     ])('leaves a submit on %s alone', async (_what, html, message) => {
         vi.resetModules();

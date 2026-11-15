@@ -399,7 +399,7 @@ function ignoredSubmit(carrier, submitted) {
         return `[arizona] az-submit on ${describeEl(carrier)} is ignored: it belongs on an HTML <form>`;
     if (isForm(submitted))
         return `[arizona] az-submit on ${describeEl(carrier)} is ignored for the <form> inside it: it belongs on that <form>`;
-    return `[arizona] a submit on ${describeEl(submitted)} is ignored: az-submit runs for a submit of the <form> carrying it`;
+    return `[arizona] a submit on ${describeEl(submitted)} is ignored: az-submit on ${describeEl(carrier)} runs only for a submit of that element, as an HTML <form>`;
 }
 
 /**

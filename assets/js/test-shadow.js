@@ -71,7 +71,9 @@ function shadowForm(form) {
 
 /** @param {ParentNode} root */
 function shadowIn(root) {
-    for (const f of root.querySelectorAll('form')) shadowForm(f);
+    // An SVG `form` is no HTML form: it has no named properties.
+    for (const f of root.querySelectorAll('form'))
+        if (f.namespaceURI === 'http://www.w3.org/1999/xhtml') shadowForm(f);
 }
 
 /**

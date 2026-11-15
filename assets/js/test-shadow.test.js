@@ -58,4 +58,11 @@ describe('shadowNamedControls mirrors a browser form', () => {
         expect(f.value).toBeUndefined();
         expect(f.hidden).toBe(document.querySelector('img'));
     });
+
+    it('leaves an SVG form alone, as no HTML form', () => {
+        page('<svg><form id="s"><rect id="value"></rect></form></svg>');
+        const s = /** @type {any} */ (document.getElementById('s'));
+        expect(s.id).toBe('s');
+        expect(s.value).toBeUndefined();
+    });
 });
