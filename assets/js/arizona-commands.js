@@ -328,15 +328,18 @@ function busyMarks(holder) {
 
 /**
  * A fetch's URL as a slot names it: resolved against the page, so a relative and
- * an absolute spelling of one endpoint are the same slot. A URL that does not
- * parse is taken as written; the request itself reports it.
+ * an absolute spelling of one endpoint are the same slot, and without its fragment,
+ * which fetch() never sends. A URL that does not parse is taken as written; the
+ * request itself reports it.
  * @param {Element} holder
  * @param {string} url
  * @returns {string}
  */
 function fetchHref(holder, url) {
     try {
-        return new URL(url, holder.ownerDocument.baseURI).href;
+        const u = new URL(url, holder.ownerDocument.baseURI);
+        u.hash = '';
+        return u.href;
     } catch {
         return url;
     }

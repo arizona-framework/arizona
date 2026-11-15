@@ -8167,6 +8167,18 @@ describe('fetch in flight', () => {
             expect(urls()).toEqual(['/save']);
         });
 
+        it('leaves the fragment out: fetch never sends it', async () => {
+            await page(
+                `<form id="f" method="post"
+                    az-submit='${cmd([
+                        [22, '/s#a', DROP],
+                        [22, '/s#b', DROP],
+                    ])}'></form>`,
+            );
+            submit('f');
+            expect(urls()).toEqual(['/s#a']);
+        });
+
         it('leaves a GET query out: what is typed is not the request', async () => {
             await page(
                 `<form id="f" method="get" az-submit='${cmd([22, '/search', DROP])}'>
