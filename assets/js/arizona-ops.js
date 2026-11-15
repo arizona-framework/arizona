@@ -230,7 +230,7 @@ function nodiffIdentity(marked, parent, slots) {
     for (;;) {
         if (node !== marked && node.hasAttribute(NODIFF_ATTR)) return null;
         const key = node.getAttribute('az-key') ?? '';
-        const view = node.hasAttribute('az-view') ? node.id : '';
+        const view = node.hasAttribute('az-view') ? (node.getAttribute('id') ?? '') : '';
         id = `${key}#${view}/${id}`;
         const up = /** @type {Element} */ (node.parentNode);
         if (up === parent) {

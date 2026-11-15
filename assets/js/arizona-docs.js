@@ -151,7 +151,7 @@ export function reconcilePipWindows(navigated) {
         const doc = entry.win.document;
         if (!isStale(entry)) {
             if (doc.getElementById(entry.id)) continue;
-            const id = viewsIn(doc)[0]?.id;
+            const id = viewsIn(doc)[0]?.getAttribute('id');
             if (!id) continue;
             _viewDocs.delete(entry.id);
             _pipWindows.delete(entry.id);

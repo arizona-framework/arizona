@@ -22,7 +22,7 @@ import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
-import { isWebUrl, loadPage } from './arizona-util.js';
+import { formControls, isWebUrl, loadPage } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -622,7 +622,7 @@ function ctlGroup(ctl) {
     const r = /** @type {HTMLInputElement} */ (ctl);
     if (r.type !== 'radio' || !r.name || ctl.localName !== 'input') return [ctl];
     const scope = r.form
-        ? r.form.elements
+        ? formControls(r.form)
         : /** @type {Document} */ (ctl.getRootNode()).querySelectorAll(
               `input[name="${CSS.escape(r.name)}"]`,
           );
@@ -665,7 +665,7 @@ function carry(el, event) {
     const ctls =
         el.localName === 'form'
             ? withAllControls(el, () =>
-                  Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(
+                  Array.from(formControls(el)).filter(
                       (c) =>
                           isCtl(c) &&
                           /** @type {HTMLInputElement} */ (c).name &&
@@ -1160,8 +1160,10 @@ export function saveFormState(suspect = null) {
             // Only under a proven name: anything else is app data, which a
             // replay would otherwise run as commands.
             const azChange = (proven('az-change') && form.getAttribute('az-change')) || null;
-            const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
-            _savedForms.set(form.id, { fields: data, azChange, replay });
+            // The attribute: a control named `id` is the form's `id` property.
+            const id = /** @type {string} */ (form.getAttribute('id'));
+            const replay = !suspect?.has(id) && (held.get(id)?.replay ?? true);
+            _savedForms.set(id, { fields: data, azChange, replay });
         });
     }
 }
@@ -1182,13 +1184,16 @@ function nodeMark(el) {
     const f = /** @type {HTMLInputElement} */ (el);
     // A <form>'s own `form` is undefined; a <form name> is not one of its fields.
     const owner = el.localName === 'form' ? null : f.form;
-    const form = owner?.id || null;
+    // Attributes, not properties: a control named `id` is its form's `id`.
+    const form = owner?.getAttribute('id') || null;
     const name = (owner && f.name) || null;
     let nth = 0;
     if (owner && form && name) {
-        nth = [...owner.elements].filter((x) => /** @type {any} */ (x).name === name).indexOf(el);
+        nth = [...formControls(owner)]
+            .filter((x) => /** @type {any} */ (x).name === name)
+            .indexOf(el);
     }
-    return { doc: el.ownerDocument, el, id: el.id || null, form, name, nth };
+    return { doc: el.ownerDocument, el, id: el.getAttribute('id') || null, form, name, nth };
 }
 
 /**
@@ -1206,9 +1211,10 @@ function findMarked({ doc, el, id, form, name, nth }) {
     if (el.isConnected) target = el;
     else if (id) target = doc.getElementById(id);
     if (!target && form && name) {
-        const f = /** @type {any} */ (doc.getElementById(form));
-        if (f?.elements) {
-            target = [...f.elements].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
+        const f = doc.getElementById(form);
+        if (f?.localName === 'form') {
+            target =
+                [...formControls(f)].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
         }
     }
     return target;
@@ -1322,7 +1328,7 @@ export function restoreFormState() {
         };
         // Matched by local name, not `instanceof`: a resync re-parses a popped-out
         // (PiP) form in its window's realm, whose constructors are not ours.
-        for (const field of formEl.elements) {
+        for (const field of formControls(formEl)) {
             const el = /** @type {any} */ (field);
             if (el.localName === 'input') {
                 if (!el.name || el.type === 'file') continue;

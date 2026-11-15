@@ -8569,6 +8569,104 @@ describe('fetch in flight', () => {
             submit('f');
             expect(urls()).toEqual(['/send', '/send']);
         });
+
+        describe('a form whose controls shadow its own properties', () => {
+            // HTMLFormElement is [LegacyOverrideBuiltIns]: a control named `id`,
+            // `elements` or `reset` is what the form's property of that name
+            // returns in a browser, as a property of the form itself. jsdom does not
+            // shadow, so this does: `id` on every form (the prototype, so a form a
+            // resync renders too), `elements` and `reset` on the forms on the page.
+            /** @type {(() => void)|null} */
+            let unshadow = null;
+            function shadow() {
+                const real = /** @type {PropertyDescriptor} */ (
+                    Object.getOwnPropertyDescriptor(Element.prototype, 'id')
+                );
+                Object.defineProperty(HTMLFormElement.prototype, 'id', {
+                    configurable: true,
+                    get() {
+                        return this.querySelector('[name="id"]') ?? real.get?.call(this);
+                    },
+                    set(v) {
+                        real.set?.call(this, v);
+                    },
+                });
+                for (const form of document.querySelectorAll('form'))
+                    for (const k of ['elements', 'reset']) {
+                        const named = form.querySelector(`[name="${k}"]`);
+                        if (named) Object.defineProperty(form, k, { value: named });
+                    }
+                unshadow = () => {
+                    delete (/** @type {any} */ (HTMLFormElement.prototype).id);
+                };
+            }
+            afterEach(() => {
+                unshadow?.();
+                unshadow = null;
+            });
+
+            const ID_FORM = RESET_FORM(
+                '<input type="hidden" name="id" value="7"><input name="q" value="">',
+            );
+            const ELEMENTS_FORM = RESET_FORM(
+                '<input type="hidden" name="elements" value="7"><input name="q" value="">',
+            );
+
+            for (const [what, html] of [
+                ['id', ID_FORM],
+                ['elements', ELEMENTS_FORM],
+            ])
+                it(`keeps its request in flight and its fields across a reconnect (${what})`, async () => {
+                    await page(html);
+                    shadow();
+                    q().value = 'hello';
+                    submit('f');
+                    reconnect(html);
+                    expect(q().value).toBe('hello');
+                    expect(document.getElementById('f').hasAttribute('az-busy')).toBe(true);
+                    submit('f');
+                    expect(urls()).toEqual(['/send']);
+                    pending[0].resolve(response(200, ''));
+                    await flush();
+                    expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+                    expect(q().value).toBe('');
+                });
+
+            it('refocuses a field of an edit form after a reconnect', async () => {
+                await page(ID_FORM);
+                shadow();
+                q().focus();
+                reconnect(ID_FORM);
+                expect(document.activeElement).toBe(q());
+            });
+
+            it('sends the events of a view root form to its id', async () => {
+                await page(
+                    `<form id="child" az-view><input type="hidden" name="id" value="7"><button type="button" id="b" az-click='${cmd([0, 'go', {}])}'>B</button></form>`,
+                );
+                shadow();
+                document.getElementById('b').click();
+                expect(mock.getSentMessages().map((m) => m[0])).toEqual(['child']);
+            });
+
+            it('is reset with a control named reset', async () => {
+                const html = RESET_FORM(
+                    '<input name="q" value=""><button type="button" name="reset">R</button>',
+                );
+                const mod = await page(html);
+                shadow();
+                const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+                q().value = 'hello';
+                submit('f');
+                pending[0].resolve(response(200, ''));
+                await flush();
+                expect(err).not.toHaveBeenCalled();
+                expect(q().value).toBe('');
+                q().value = 'again';
+                mod.applyEffects([[25, '#f']]);
+                expect(q().value).toBe('');
+            });
+        });
     });
 });
 
@@ -9458,6 +9556,8 @@ describe('executeJS -- fetch', () => {
     });
 
     describe('az-form-reset keeps what changed while the request was in flight', () => {
+        afterEach(() => vi.restoreAllMocks());
+
         /** Send `form` by fetch; the returned function answers it with a 2xx. */
         function sendHeld(form) {
             /** @type {() => void} */
@@ -9482,7 +9582,7 @@ describe('executeJS -- fetch', () => {
             document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
             $('#a').value = 'sent';
             const form = $('form');
-            const reset = vi.spyOn(form, 'reset');
+            const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
             const answer = sendHeld(form);
             await answer();
             expect(reset).toHaveBeenCalledTimes(1);
@@ -9499,7 +9599,7 @@ describe('executeJS -- fetch', () => {
             $('#t').value = 'sent t';
             $('#u').value = 'sent u';
             const form = $('form');
-            const reset = vi.spyOn(form, 'reset');
+            const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
             const answer = sendHeld(form);
             $('#b').value = 'next';
             $('#u').value = 'next u';
@@ -9766,7 +9866,7 @@ describe('executeJS -- fetch', () => {
             document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
             $('#a').value = 'sent';
             const form = $('form');
-            const reset = vi.spyOn(form, 'reset');
+            const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
             const answer = sendHeld(form);
             form.insertAdjacentHTML('beforeend', '<button>Go</button><fieldset></fieldset>');
             await answer();
@@ -9863,9 +9963,9 @@ describe('executeJS -- fetch', () => {
                 '<form az-form-reset><input id="a" name="a" /><input id="b" name="b" /></form>';
             $('#a').value = 'sent';
             const form = $('form');
-            form.reset = () => {
+            vi.spyOn(HTMLFormElement.prototype, 'reset').mockImplementation(() => {
                 throw new Error('reset boom');
-            };
+            });
             const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
             const answer = sendHeld(form);
             $('#b').value = 'typed';
@@ -9922,9 +10022,9 @@ describe('executeJS -- fetch', () => {
     it('a throwing az-form-reset on a 2xx is logged, not misreported as a network failure', async () => {
         document.body.innerHTML = '<form az-form-reset><input name="n" /></form>';
         const form = /** @type {HTMLFormElement} */ (document.querySelector('form'));
-        form.reset = () => {
+        const resetSpy = vi.spyOn(HTMLFormElement.prototype, 'reset').mockImplementation(() => {
             throw new Error('reset boom');
-        };
+        });
         const fetchErr = vi.fn();
         document.addEventListener('arizona:fetch-error', fetchErr);
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -9937,6 +10037,7 @@ describe('executeJS -- fetch', () => {
         expect(fetchErr).not.toHaveBeenCalled();
 
         errorSpy.mockRestore();
+        resetSpy.mockRestore();
         document.removeEventListener('arizona:fetch-error', fetchErr);
     });
 });

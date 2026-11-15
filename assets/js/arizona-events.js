@@ -2,7 +2,7 @@ import { executeJS, flushTimer, maybeResetForm, socketNeeds } from './arizona-co
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
-import { warnOnce } from './arizona-util.js';
+import { formControls, warnOnce } from './arizona-util.js';
 
 /**
  * The exported `mountHooks`: the escape hatch a host app calls after inserting
@@ -491,8 +491,7 @@ export function bindDocumentEvents(target, signal, abort) {
                     // The form's own slots too: a form-level az-debounce paces the
                     // field events it delegates.
                     if (form.matches(sel)) pending.add(form);
-                    for (const el of /** @type {HTMLFormElement} */ (form).elements)
-                        if (el.matches(sel)) pending.add(el);
+                    for (const el of formControls(form)) if (el.matches(sel)) pending.add(el);
                     for (const el of pending) flushTimer(el);
                 }
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));

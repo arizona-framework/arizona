@@ -5,7 +5,7 @@ import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
 import { runTransition } from './arizona-transitions.js';
-import { warnOnce } from './arizona-util.js';
+import { formControls, resetForm, warnOnce } from './arizona-util.js';
 
 /**
  * Append an encoded query to a URL, before its fragment: everything after the first
@@ -79,7 +79,9 @@ export function applyEffects(effects) {
  * @returns {string|null}
  */
 export function resolveTarget(el) {
-    return el.getAttribute('az-target') || el.closest('[az-view]')?.id || null;
+    // The attribute: a view root that is a <form> holding a control named `id` has
+    // that control as its `id` property.
+    return el.getAttribute('az-target') || el.closest('[az-view]')?.getAttribute('id') || null;
 }
 
 /**
@@ -112,7 +114,7 @@ function multiValuedNames(form) {
     const names = new Set();
     /** @type {Map<string, {boxes: number, enabled: boolean}>} */
     const groups = new Map();
-    for (const el of form.elements) {
+    for (const el of formControls(form)) {
         const f = /** @type {any} */ (el);
         const name = f.name;
         if (!name) continue;
@@ -310,7 +312,7 @@ const sameState = (a, b) =>
  * @returns {Map<Element, unknown>}
  */
 function formSnapshot(form) {
-    return new Map(Array.from(form.elements, (c) => [c, shownState(c)]));
+    return new Map(Array.from(formControls(form), (c) => [c, shownState(c)]));
 }
 
 /**
@@ -426,7 +428,7 @@ export function withAllControls(form, fn) {
 export function maybeResetForm(form, sent) {
     if (!form.hasAttribute('az-form-reset')) return;
     const f = /** @type {HTMLFormElement} */ (form);
-    const ctls = Array.from(f.elements);
+    const ctls = Array.from(formControls(f));
     const kept = sent
         ? ctls.filter((c) => (sent.has(c) ? !sameState(shownState(c), sent.get(c)) : !atDefault(c)))
         : [];
@@ -463,7 +465,7 @@ export function maybeResetForm(form, sent) {
     try {
         detach(detached);
         _resetting = { form, detached: [...outer, ...detached] };
-        f.reset();
+        resetForm(f);
     } finally {
         _resetting = prev;
         attach(detached);
@@ -656,7 +658,7 @@ const ctlName = (c) => c.getAttribute('name') ?? '';
 function remapSent(sent, form) {
     /** @type {Map<string, Element[]>} */
     const byName = new Map();
-    for (const c of Array.from(form.elements)) {
+    for (const c of Array.from(formControls(form))) {
         const list = byName.get(ctlName(c)) ?? [];
         list.push(c);
         byName.set(ctlName(c), list);
@@ -1173,13 +1175,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
         case JS_RESET_FORM:
             // Broadcast (all matches, main + PiP docs), like the class/visibility
             // effects: reset every matching form. A non-form match (no reset()) is
-            // a safe no-op. Fires updated() so a hook observes it like a diff.
+            // a safe no-op. Fires updated() so a hook observes it like a diff. A form
+            // is reset through the prototype: a control named `reset` is its `reset`.
             withQueryAll(cmd[1], (t) => {
                 const f = /** @type {any} */ (t);
-                if (typeof f.reset === 'function') {
-                    f.reset();
-                    notifyUpdated(t);
-                }
+                if (t.localName === 'form') resetForm(t);
+                else if (typeof f.reset === 'function') f.reset();
+                else return;
+                notifyUpdated(t);
             });
             break;
         case JS_SELECT:
