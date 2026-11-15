@@ -20,18 +20,20 @@ live one ties every page to the socket. Mutable module state is written only in 
 declares it (an ES import is read-only), through a setter when another module must change it.
 
 **Never read a form's own properties.** `HTMLFormElement` is `[LegacyOverrideBuiltIns]`: a control
-named (or with the id) `id`, `elements`, `reset`, `hidden`, `value`, ... is what the form's property of
-that name returns, ahead of the prototype (an edit form's `<input type=hidden name=id>` is its
-`id`); an assignment still runs the prototype's setter where there is one (`form.hidden = true`)
-and throws where there is none (`value`, `reset`). On an element that is or may be a form, read its id with
-`getAttribute('id')`, its controls with `formControls`, reset it with `resetForm` (`arizona-util.js`,
-through the prototype), and test or toggle `hidden` through the attribute -- never read
-`form.<prop>`; a property
-a form lacks (`value`) is read only off a field (`fieldValue`: input, textarea, select, output, or a
-custom element's string `value`). jsdom
-does not shadow, so a test that must hold on a real page uses `shadowNamedControls`
-(`test-shadow.js`), which gives every form markup parses its controls as named properties, as
-Chromium and Firefox do (`test-shadow.test.js` pins that).
+named (or with the id) `id`, `elements`, `reset`, `hidden`, `value`, ... is what the form's property
+of that name returns, ahead of the prototype (an edit form's `<input type=hidden name=id>` is its
+`id`); an assignment still runs the prototype's setter where there is one (`form.hidden = true`) and
+throws where there is none (`value`, `reset`). On an element that is or may be a form, read its id
+with `getAttribute('id')`, its controls with `formControls`, reset it with `resetForm`
+(`arizona-util.js`, through the prototype), and test or toggle `hidden` through the attribute --
+never read `form.<prop>`; a property a form lacks (`value`) is read only off a field (`fieldValue`:
+input, textarea, select, output, or a custom element's string `value`). Decide "is a form" with
+`isForm` (local name **and** the HTML namespace: a `form` inside `<svg>` is an SVG element, and
+the prototype calls throw on it) and find a trigger's form with `closestForm`, never
+`closest('form')`, which an SVG `form` also matches. jsdom does not shadow, so a test that must
+hold on a real page uses `shadowNamedControls` (`test-shadow.js`), which gives every form markup
+parses its controls as named properties, as Chromium and Firefox do (`test-shadow.test.js` pins
+that).
 
 **Static entry.** `assets/js/arizona-static.js` is a second entry, built to
 `priv/static/assets/js/arizona-static.min.js` (a second Vite pass, `ARIZONA_BUILD_PASS=static`) and
@@ -239,7 +241,9 @@ is a drop like the disconnected one below (a warning and `arizona:submit-dropped
 catch that form's submit, but it is not the form's -- the listener leaves the submit alone (no
 `preventDefault`, nothing run, no drop) and warns once, naming the element, so a plain form inside
 an element whose `az-submit` holds app data submits natively as the page wrote it. A `submit`
-event app code dispatches on a non-form element carrying `az-submit` is left alone the same way.
+event app code dispatches on anything but an HTML `<form>` carrying `az-submit` (another element,
+an SVG `form`, an element inside the az-submit form) is left alone the same way; the warning names
+the element that carries `az-submit` and, when it differs, the one the submit reached.
 
 - **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
   its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a

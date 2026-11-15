@@ -1153,3 +1153,18 @@ describe('a form with a control named elements', () => {
         expect([a.checked, b.checked]).toEqual([false, true]);
     });
 });
+
+describe('an SVG form', () => {
+    it('raises its event with no controls to carry', async () => {
+        await connect(`<svg><form id="s" az-click='[0,"go"]'><rect></rect></form></svg>`);
+        const errors = vi.fn();
+        window.addEventListener('error', errors);
+        try {
+            document.getElementById('s').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            expect(errors).not.toHaveBeenCalled();
+            expect(mock.sent().map((m) => m[1])).toEqual(['go']);
+        } finally {
+            window.removeEventListener('error', errors);
+        }
+    });
+});

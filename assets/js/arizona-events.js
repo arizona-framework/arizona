@@ -2,7 +2,7 @@ import { executeJS, flushTimer, maybeResetForm, socketNeeds } from './arizona-co
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
-import { formControls, warnOnce } from './arizona-util.js';
+import { describeEl, formControls, isForm, warnOnce } from './arizona-util.js';
 
 /**
  * The exported `mountHooks`: the escape hatch a host app calls after inserting
@@ -389,6 +389,20 @@ function scanEvents(root) {
 }
 
 /**
+ * Why a submit reaching an az-submit element is not that element's to run.
+ * @param {Element} carrier the element carrying az-submit
+ * @param {Element} submitted the element the submit was dispatched on
+ * @returns {string}
+ */
+function ignoredSubmit(carrier, submitted) {
+    if (carrier === submitted)
+        return `[arizona] az-submit on ${describeEl(carrier)} is ignored: it belongs on an HTML <form>`;
+    if (isForm(submitted))
+        return `[arizona] az-submit on ${describeEl(carrier)} is ignored for the <form> inside it: it belongs on that <form>`;
+    return `[arizona] a submit on ${describeEl(submitted)} is ignored: az-submit runs for a submit of the <form> carrying it`;
+}
+
+/**
  * Tell the console and the app that a submit ran nothing: every drop warns and
  * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
  * @param {Element} form
@@ -446,15 +460,12 @@ export function bindDocumentEvents(target, signal, abort) {
             const submitted = /** @type {Element} */ (e.target);
             const form = submitted.closest('[az-submit]');
             if (!form) return;
-            // A submit bubbles, but az-submit belongs on the <form>: one on an element
-            // around this form is not its, so the form submits as the page wrote it,
-            // and one on an element that is no form (a submit app code dispatched) has
-            // nothing to post.
-            if (form !== submitted || submitted.localName !== 'form') {
-                warnOnce(
-                    `[arizona] az-submit on a <${form.localName}> is ignored: it belongs on the <form> itself`,
-                    'az-submit-outside-form',
-                );
+            // A submit bubbles, but az-submit belongs on the HTML <form> it submits:
+            // one on an element around this form is not its, so the form submits as
+            // the page wrote it, and a submit app code dispatched on anything else
+            // (an element that is no form, an SVG `form`) has nothing to post.
+            if (form !== submitted || !isForm(submitted)) {
+                warnOnce(ignoredSubmit(form, submitted), 'az-submit-ignored');
                 return;
             }
             // Unconditionally, before anything can return: an az-submit form that is

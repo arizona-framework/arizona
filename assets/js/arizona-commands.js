@@ -5,7 +5,7 @@ import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
 import { runTransition } from './arizona-transitions.js';
-import { formControls, resetForm, warnOnce } from './arizona-util.js';
+import { closestForm, formControls, isForm, resetForm, warnOnce } from './arizona-util.js';
 
 /**
  * Append an encoded query to a URL, before its fragment: everything after the first
@@ -1037,7 +1037,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
-            const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
+            const form = el ? closestForm(el) : null;
             // Every field, those a reset in progress set aside included (a fetch its
             // `reset` listener runs).
             const formData = (/** @type {HTMLFormElement} */ f) =>
@@ -1201,7 +1201,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // is reset through the prototype: a control named `reset` is its `reset`.
             withQueryAll(cmd[1], (t) => {
                 const f = /** @type {any} */ (t);
-                if (t.localName === 'form') resetForm(t);
+                if (isForm(t)) resetForm(t);
                 else if (typeof f.reset === 'function') f.reset();
                 else return;
                 notifyUpdated(t);

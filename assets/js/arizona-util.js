@@ -56,3 +56,38 @@ export function formControls(form) {
 export function resetForm(form) {
     HTMLFormElement.prototype.reset.call(/** @type {HTMLFormElement} */ (form));
 }
+
+const XHTML = 'http://www.w3.org/1999/xhtml';
+
+/**
+ * Is `el` an HTML <form>? Not by its local name alone: a `form` in SVG (or any
+ * other namespace) is an element of that name, and no form. The namespace is a
+ * string, so this holds for an element of another window (a PiP document) too.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+export function isForm(el) {
+    return el.localName === 'form' && el.namespaceURI === XHTML;
+}
+
+/**
+ * The HTML <form> `el` is in or is, past any SVG `form` between them.
+ * @param {Element} el
+ * @returns {HTMLFormElement|null}
+ */
+export function closestForm(el) {
+    let f = el.closest('form');
+    while (f && !isForm(f)) f = f.parentElement?.closest('form') ?? null;
+    return /** @type {HTMLFormElement|null} */ (f);
+}
+
+/**
+ * How a warning names `el`: its tag, with its namespace when that is not HTML.
+ * @param {Element} el
+ * @returns {string}
+ */
+export function describeEl(el) {
+    if (el.namespaceURI === XHTML) return `a <${el.localName}>`;
+    if (el.namespaceURI === 'http://www.w3.org/2000/svg') return `an SVG <${el.localName}>`;
+    return `a <${el.localName}> (${el.namespaceURI})`;
+}

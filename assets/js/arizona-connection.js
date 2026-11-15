@@ -22,7 +22,7 @@ import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
-import { formControls, isWebUrl, loadPage } from './arizona-util.js';
+import { formControls, isForm, isWebUrl, loadPage } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -662,19 +662,18 @@ function carry(el, event) {
     // A submit is always prevented (the client sends it), its fields still edited.
     const prevented = event?.defaultPrevented && event.type !== 'submit';
     if (prevented || /** @type {any} */ (event)?.dataTransfer) return null;
-    const ctls =
-        el.localName === 'form'
-            ? withAllControls(el, () =>
-                  Array.from(formControls(el)).filter(
-                      (c) =>
-                          isCtl(c) &&
-                          /** @type {HTMLInputElement} */ (c).name &&
-                          !c.matches(':disabled'),
-                  ),
-              )
-            : isCtl(el)
-              ? ctlGroup(el)
-              : [];
+    const ctls = isForm(el)
+        ? withAllControls(el, () =>
+              Array.from(formControls(el)).filter(
+                  (c) =>
+                      isCtl(c) &&
+                      /** @type {HTMLInputElement} */ (c).name &&
+                      !c.matches(':disabled'),
+              ),
+          )
+        : isCtl(el)
+          ? ctlGroup(el)
+          : [];
     if (!ctls.length) return null;
     /** @type {Array<[Element, string|boolean]>} */
     const carried = ctls.map((c) => [c, ctlState(c)]);
@@ -1153,6 +1152,7 @@ export function saveFormState(suspect = null) {
     // preserve the user's typing there exactly as it does on the main page.
     for (const doc of allDocs()) {
         doc.querySelectorAll('form[id]').forEach((form) => {
+            if (!isForm(form)) return; // an SVG `form` holds no fields
             const data = formFields(
                 new FormData(/** @type {HTMLFormElement} */ (form)),
                 /** @type {HTMLFormElement} */ (form),
@@ -1183,7 +1183,7 @@ export function saveFormState(suspect = null) {
 function nodeMark(el) {
     const f = /** @type {HTMLInputElement} */ (el);
     // A <form>'s own `form` is undefined; a <form name> is not one of its fields.
-    const owner = el.localName === 'form' ? null : f.form;
+    const owner = isForm(el) ? null : f.form;
     // Attributes, not properties: a control named `id` is its form's `id`.
     const form = owner?.getAttribute('id') || null;
     const name = (owner && f.name) || null;
@@ -1212,7 +1212,7 @@ function findMarked({ doc, el, id, form, name, nth }) {
     else if (id) target = doc.getElementById(id);
     if (!target && form && name) {
         const f = doc.getElementById(form);
-        if (f?.localName === 'form') {
+        if (f && isForm(f)) {
             target =
                 [...formControls(f)].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
         }
@@ -1293,7 +1293,8 @@ function rehomeHeld(marks) {
     for (const mark of marks) {
         if (mark.el.isConnected) continue; // kept: still the holder
         const target = findMarked(mark);
-        if (target?.localName === mark.el.localName) rehome(mark.el, target);
+        if (target?.localName === mark.el.localName && target.namespaceURI === mark.el.namespaceURI)
+            rehome(mark.el, target);
     }
 }
 
@@ -1310,7 +1311,7 @@ export function restoreFormState() {
         for (const doc of allDocs()) {
             const el = doc.getElementById(formId);
             // The id may name an element that is no form now: nothing to restore.
-            if (el?.localName === 'form') {
+            if (el && isForm(el)) {
                 form = el;
                 break;
             }

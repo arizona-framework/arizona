@@ -2146,6 +2146,11 @@ describe('applyEffects -- broadcast effects target all matching elements', () =>
         document.body.innerHTML = '<div class="f"></div>';
         expect(() => applyEffects([[25, '.f']])).not.toThrow();
     });
+
+    it('reset_form is a safe no-op on an SVG form', () => {
+        document.body.innerHTML = '<svg><form class="f"></form></svg>';
+        expect(() => executeJS(document.body, null, [25, '.f'])).not.toThrow();
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -4715,6 +4720,16 @@ describe('saveFormState / restoreFormState', () => {
         expect(() => restoreFormState()).not.toThrow();
         expect(document.querySelector('[name=a]').value).toBe('');
         expect(document.querySelector('[name=b]').value).toBe('2');
+    });
+
+    it('saves around an SVG form with an id', () => {
+        document.body.innerHTML =
+            '<svg><form id="s"></form></svg><form id="f"><input name="a" value="1"></form>';
+        expect(() => saveFormState()).not.toThrow();
+        document.body.innerHTML =
+            '<svg><form id="s"></form></svg><form id="f"><input name="a"></form>';
+        restoreFormState();
+        expect(document.querySelector('[name=a]').value).toBe('1');
     });
 
     it('ignores forms without id', () => {
@@ -7971,7 +7986,9 @@ describe('form submit', () => {
             expect(mock.getSentMessages()).toHaveLength(0);
             expect(dropped).not.toHaveBeenCalled();
             expect(warn.mock.calls).toEqual([
-                ['[arizona] az-submit on a <div> is ignored: it belongs on the <form> itself'],
+                [
+                    '[arizona] az-submit on a <div> is ignored for the <form> inside it: it belongs on that <form>',
+                ],
             ]);
         } finally {
             document.removeEventListener('arizona:submit-dropped', dropped);
@@ -7980,13 +7997,28 @@ describe('form submit', () => {
     });
 
     // A submit app code dispatches on an element that is no form: nothing to post.
-    it('leaves a submit on an az-submit element that is not a form alone', async () => {
+    // A submit app code dispatches on an element that is no HTML form (an SVG
+    // `form` included), or on an element inside the az-submit form: nothing to post.
+    it.each([
+        [
+            'an az-submit element that is not a form',
+            `<div id="t" az-submit='[0,"go"]' az-form-reset><input name="q" value="kept"></div>`,
+            '[arizona] az-submit on a <div> is ignored: it belongs on an HTML <form>',
+        ],
+        [
+            'an az-submit SVG form',
+            `<svg><form id="t" az-submit='[0,"go"]' az-form-reset><rect></rect></form></svg><input name="q" value="kept">`,
+            '[arizona] az-submit on an SVG <form> is ignored: it belongs on an HTML <form>',
+        ],
+        [
+            'an element inside an az-submit form',
+            `<form az-submit='[0,"go"]' az-form-reset><div id="t"></div><input name="q" value="kept"></form>`,
+            '[arizona] a submit on a <div> is ignored: az-submit runs for a submit of the <form> carrying it',
+        ],
+    ])('leaves a submit on %s alone', async (_what, html, message) => {
         vi.resetModules();
         const mod = await import('./arizona.js');
-        setupView(
-            'page',
-            `<div id="w" az-submit='[0,"go"]' az-form-reset><input name="q" value="kept"></div>`,
-        );
+        setupView('page', html);
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -7994,13 +8026,12 @@ describe('form submit', () => {
         window.addEventListener('error', errors);
         try {
             const ev = new Event('submit', { bubbles: true, cancelable: true });
-            document.getElementById('w').dispatchEvent(ev);
+            document.getElementById('t').dispatchEvent(ev);
             expect(ev.defaultPrevented).toBe(false);
             expect(errors).not.toHaveBeenCalled();
             expect(mock.getSentMessages()).toHaveLength(0);
-            expect(warn.mock.calls).toEqual([
-                ['[arizona] az-submit on a <div> is ignored: it belongs on the <form> itself'],
-            ]);
+            expect(warn.mock.calls).toEqual([[message]]);
+            expect(document.querySelector('[name=q]').value).toBe('kept');
         } finally {
             window.removeEventListener('error', errors);
             warn.mockRestore();
@@ -8721,6 +8752,20 @@ describe('fetch in flight', () => {
             expect(() =>
                 reconnect(
                     '<fieldset id="f"><input name="q" value=""></fieldset><p id="after"></p>',
+                ),
+            ).not.toThrow();
+            expect(document.getElementById('after')).not.toBeNull();
+            expect(document.activeElement).toBe(document.body);
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+        });
+
+        it('takes no SVG form the resync renders under the form id for the form', async () => {
+            await page(RESET_FORM());
+            q().focus();
+            submit('f');
+            expect(() =>
+                reconnect(
+                    '<svg><form id="f"><input name="q" value=""></form></svg><p id="after"></p>',
                 ),
             ).not.toThrow();
             expect(document.getElementById('after')).not.toBeNull();
@@ -9498,6 +9543,15 @@ describe('executeJS -- fetch', () => {
             text: () => Promise.resolve(JSON.stringify({ e: effects })),
         };
     }
+
+    it('posts the HTML form around an SVG form holding the trigger', async () => {
+        document.body.innerHTML =
+            '<form method="post"><input name="q" value="1" /><svg><form><g id="b"></g></form></svg></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+        executeJS(document.getElementById('b'), null, [22, '/x', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        expect(String(globalThis.fetch.mock.calls[0][1].body)).toBe('q=1');
+    });
 
     it('submits the trigger form as urlencoded with same-origin credentials', async () => {
         document.body.innerHTML =
