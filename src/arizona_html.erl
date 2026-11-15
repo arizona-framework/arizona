@@ -826,32 +826,33 @@ choices_at(Bin, At, {Content, _Stack} = Ctx, Picked, Marks) ->
     case markup_at(Bin, At, Content) of
         {Skip, Next} when Skip =:= skip; Skip =:= skip_text ->
             choices(Bin, Next, Ctx, Picked, Marks);
-        {start, Name, Attrs, Close} ->
-            choices_start(Bin, Name, Attrs, Close, Ctx, Picked, Marks);
+        {start, Name, Attrs, Close, Self} ->
+            choices_start(Bin, {Name, Self}, Attrs, Close, Ctx, Picked, Marks);
         {'end', Name, Close} ->
             choices_end(Bin, Name, Close, Ctx, Picked, Marks)
     end.
 
 choices_start(_Bin, _Name, _Attrs, eof, _Ctx, _Picked, Marks) ->
     Marks;
-choices_start(Bin, Name, Attrs, Close, {undefined, _} = Ctx, Picked, Marks) ->
+choices_start(Bin, {Name, _Self} = Tag, Attrs, Close, {undefined, _} = Ctx, Picked, Marks) ->
     case Name of
         ~"option" ->
             choices_after(
-                Bin, Name, Close, Ctx, Picked, mark_option(Bin, Attrs, Close, Picked, Marks)
+                Bin, Tag, Close, Ctx, Picked, mark_option(Bin, Attrs, Close, Picked, Marks)
             );
         _Other ->
             case closes_select(Name) of
                 true -> Marks;
-                false -> choices_after(Bin, Name, Close, Ctx, Picked, Marks)
+                false -> choices_after(Bin, Tag, Close, Ctx, Picked, Marks)
             end
     end;
-choices_start(Bin, Name, _Attrs, Close, Ctx, Picked, Marks) ->
-    choices_after(Bin, Name, Close, Ctx, Picked, Marks).
+choices_start(Bin, Tag, _Attrs, Close, Ctx, Picked, Marks) ->
+    choices_after(Bin, Tag, Close, Ctx, Picked, Marks).
 
 %% Past a start tag: over the content of an element that is not parsed as markup, and
-%% into the content context of one that changes it.
-choices_after(Bin, Name, Close, {Content, Stack} = Ctx, Picked, Marks) ->
+%% into the content context of one that changes it. `Slash` is whether the start tag
+%% carries the self-closing flag (tag_attrs/3).
+choices_after(Bin, {Name, Slash}, Close, {Content, Stack} = Ctx, Picked, Marks) ->
     case skip_content(Bin, Name, Close + 1, Content) of
         {skipped, Next} ->
             choices(Bin, Next, Ctx, Picked, Marks);
@@ -859,7 +860,7 @@ choices_after(Bin, Name, Close, {Content, Stack} = Ctx, Picked, Marks) ->
             Inner = content_context_name(Name, Content),
             %% A `/` closes only a foreign element (`<svg/>`, `<foreignObject/>`): the
             %% parser ignores it on an HTML one, a breakout inside `<svg>` included.
-            Self = binary:at(Bin, Close - 1) =:= $/ andalso is_foreign_element(Name, Content),
+            Self = Slash andalso is_foreign_element(Name, Content),
             case Inner of
                 Content ->
                     choices(Bin, Close + 1, Ctx, Picked, Marks);
@@ -901,7 +902,7 @@ past_template(Bin, Pos, Depth) ->
             byte_size(Bin);
         At ->
             case markup_at(Bin, At, undefined) of
-                {start, ~"template", _Attrs, Close} when is_integer(Close) ->
+                {start, ~"template", _Attrs, Close, _Self} when is_integer(Close) ->
                     past_template(Bin, Close + 1, Depth + 1);
                 {'end', ~"template", Close} when is_integer(Close), Depth =:= 1 ->
                     Close + 1;
@@ -994,7 +995,7 @@ option_markup(Bin, At, Acc) ->
             option_text(Bin, Next, Acc);
         {skip_text, Next} ->
             option_text(Bin, Next, [~"<" | Acc]);
-        {start, Name, _Attrs, Close} when is_integer(Close) ->
+        {start, Name, _Attrs, Close, _Self} when is_integer(Close) ->
             case ends_option(start, Name) of
                 true -> iolist_to_binary(lists:reverse(Acc));
                 false -> option_child(Bin, Name, Close + 1, Acc)
@@ -1057,7 +1058,7 @@ markup_at(Bin, At, Content) ->
             {skip, past(Bin, At + 2, ~">")};
         <<_:At/binary, "</", C, _/binary>> when ?IS_ALPHA(C) ->
             {Name, NameEnd} = tag_name_at(Bin, At + 2),
-            {_Attrs, Close} = tag_attrs(Bin, NameEnd, []),
+            {_Attrs, Close, _Self} = tag_attrs(Bin, NameEnd, []),
             {'end', Name, Close};
         <<_:At/binary, "</>", _/binary>> ->
             {skip, At + 3};
@@ -1065,8 +1066,8 @@ markup_at(Bin, At, Content) ->
             {skip, past(Bin, At + 2, ~">")};
         <<_:At/binary, "<", C, _/binary>> when ?IS_ALPHA(C) ->
             {Name, NameEnd} = tag_name_at(Bin, At + 1),
-            {Attrs, Close} = tag_attrs(Bin, NameEnd, []),
-            {start, Name, Attrs, Close};
+            {Attrs, Close, Self} = tag_attrs(Bin, NameEnd, []),
+            {start, Name, Attrs, Close, Self};
         <<_:At/binary, "<", _/binary>> ->
             {skip_text, At + 1}
     end.
@@ -1117,13 +1118,16 @@ has_upper(<<>>) -> false.
 %% A tag's attributes, as the tokenizer reads them, and the position of the `>` that
 %% closes the tag, or `eof`. Only `value` and `selected` matter here: those are kept,
 %% the value decoded, the first of a repeated name winning as in the parser.
+%% `{Attrs, Close, SelfClosing}`: the tag is self-closing when its `>` follows a `/` read
+%% as the solidus (after the name, a quoted value or a valueless attribute, skipped
+%% here), never the last byte of an unquoted value (`width=1/`), which is the value's.
 tag_attrs(Bin, Pos0, Acc) ->
     Pos = skip_attr_space(Bin, Pos0),
     case Bin of
         <<_:Pos/binary>> ->
-            {Acc, eof};
+            {Acc, eof, false};
         <<_:Pos/binary, ">", _/binary>> ->
-            {Acc, Pos};
+            {Acc, Pos, Pos > Pos0 andalso binary:at(Bin, Pos - 1) =:= $/};
         _Attr ->
             %% A `=` may start a name (a parse error the parser recovers from).
             NameEnd = attr_name_end(Bin, Pos + 1),

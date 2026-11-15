@@ -1103,6 +1103,15 @@ fragment_follows_svg_breakout(Config) when is_list(Config) ->
     ?assertEqual(1, Count(~"<svg><div/><option value=a>A</option></svg>")),
     ?assertEqual(0, Count(~"<svg><option value=a>A</option></svg>")),
     ?assertEqual(0, Count(~"<svg><foreignObject/><option value=a>A</option></svg>")),
+    %% The slash closes the tag only read as the solidus, not as the end of an unquoted
+    %% value: `<svg width=1/>` stays open, `<svg width="1"/>` closes.
+    ?assertEqual(0, Count(~"<svg width=1/><option value=a>A</option>")),
+    ?assertEqual(1, Count(~"<svg width=\"1\"/><option value=a>A</option>")),
+    ?assertEqual(1, Count(~"<svg disabled/><option value=a>A</option>")),
+    ?assertEqual(0, Count(~"<svg / ><option value=a>A</option>")),
+    ?assertEqual(
+        1, Count(~"<svg><foreignObject x=a/><option value=a>A</option></foreignObject></svg>")
+    ),
     %% End to end: a raw child of a select carrying a value.
     lists:foreach(
         fun({N, Raw}) ->

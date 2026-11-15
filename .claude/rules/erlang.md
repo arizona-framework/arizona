@@ -87,11 +87,12 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, false}` | `{hidden, false}` | Stripped (`?json` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
 
-A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target, in
-any content context (a breakout tag such as `div` inside `<svg>` makes the form an HTML one, and an
-SVG `form` ignores the attribute)
-(appended after its attributes), so a submit made before the client script runs never puts the
-fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
+A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target,
+appended after its attributes, so a submit made before the client script runs never puts the
+fields in the URL; an explicit `method` is kept as written. It does so in any content context:
+inside `<svg>` the parser takes everything after a breakout tag (such as `div`) up to the `</svg>`
+out of foreign content, which the template tree cannot tell, and an SVG `form` ignores the
+attribute. See [js.md](js.md).
 
 A `value` on a `select` selects the option it names, in the `?html` target and in HTML content
 (a `select` inside `<svg>`, foreign content, is no HTML select: its `value` stays an ordinary
