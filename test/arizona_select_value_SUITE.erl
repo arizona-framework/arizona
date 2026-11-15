@@ -54,6 +54,7 @@ and the select keeps its value for the client to apply after.
     markup_text_tracks_what_its_slot_tracks/1,
     authored_selected_is_refused/1,
     choice_text_needs_markup_text/1,
+    foreign_select_is_no_chooser/1,
     shadowing_parameter_is_renamed/1,
     user_map_keyed_s_is_not_a_template/1,
     shadowing_hoisted_read_is_refused/1,
@@ -127,6 +128,7 @@ groups() ->
             option_with_runtime_text_compiles,
             authored_selected_is_refused,
             choice_text_needs_markup_text,
+            foreign_select_is_no_chooser,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
@@ -1047,6 +1049,44 @@ choice_text_needs_markup_text(Config) when is_list(Config) ->
         "arizona_template:target(sel_no_markup_text, {select, "
         "[{value, arizona_template:get(v, Bindings)}], [{option, [], [~\"a\"]}]}). "
     ).
+
+%% A `select` in foreign content (inside `<svg>`) is no HTML select, so its `value` is an
+%% ordinary attribute and its options get no `selected`, whether written literally, in
+%% an `?each` or in a child the transform cannot see into; an integration point
+%% (`foreignObject`) returns to HTML content, where it is a chooser again.
+foreign_select_is_no_chooser(Config) when is_list(Config) ->
+    {module, Mod} = load_source(
+        "-module(sel_foreign). -export([lit/1, each/1, opaque/1, back/1]). "
+        "lit(Bindings) -> arizona_template:target(arizona_html, {svg, [], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}, {option, [{value, <<\"b\">>}], []}]}]}). "
+        "each(Bindings) -> arizona_template:target(arizona_html, {svg, [], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[arizona_template:each(fun(O) -> {option, [{value, O}], []} end, "
+        "arizona_template:get(opts, Bindings))]}]}). "
+        "opaque(Bindings) -> arizona_template:target(arizona_html, {svg, [], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[arizona_template:get(raw, Bindings)]}]}). "
+        "back(Bindings) -> arizona_template:target(arizona_html, {svg, [], "
+        "[{foreignObject, [], [{select, [{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}, {option, [{value, <<\"b\">>}], []}]}]}]}). "
+    ),
+    B = #{
+        v => ~"b",
+        opts => [~"a", ~"b"],
+        raw => arizona_template:raw(~"<option value=\"b\"></option>")
+    },
+    lists:foreach(
+        fun(F) ->
+            HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:F(B))),
+            ?assertEqual(0, count_selected(HTML), {F, HTML}),
+            ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"b\""), {F, HTML})
+        end,
+        [lit, each, opaque]
+    ),
+    Back = iolist_to_binary(arizona_render:render_to_iolist(Mod:back(B))),
+    ?assertEqual(1, count_selected(Back), Back),
+    ?assertEqual(1, length(binary:matches(Back, ~"value=\"b\"")), Back).
 
 args(0) -> "";
 args(A) -> lists:join(", ", ["A" ++ integer_to_list(N) || N <- lists:seq(1, A)]).

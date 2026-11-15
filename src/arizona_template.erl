@@ -437,7 +437,7 @@ values, each compared the same way (any other value is one pick); absent, a list
 chardata, one text. A `false` value picks nothing, as it renders no attribute.
 
 The parse transform calls it for every choice under a chooser that carries a value
-(`c:arizona_renderer:selection_role/1`): the `selected` of each `<option>` under a
+(`c:arizona_renderer:selection_role/2`): the `selected` of each `<option>` under a
 `<select>` with a `value`.
 """.
 -spec chosen(Backend, Choice, Value, Multiple) -> boolean() when
@@ -604,7 +604,7 @@ choices(Picks, Esc, Child) ->
     #{choices => Picks, esc => Esc, child => Child}.
 
 -doc """
-The value of a choice valued by its text (`c:arizona_renderer:selection_role/1`): the
+The value of a choice valued by its text (`c:arizona_renderer:selection_role/2`): the
 text its children render, ASCII whitespace stripped and collapsed. `Parts` are the
 children in order, literal text as binaries and the rest as the values their content
 slots render (escaped there, so the text is the value itself; a `raw/1` from a helper

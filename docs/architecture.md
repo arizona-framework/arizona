@@ -287,34 +287,37 @@ other capability answers let reach it: always the `?each` and element-shape advi
 `supports_keyed_item_ops/0` is `true`; the raw-text family (`dynamic_in_raw_text`,
 `local_in_raw_text`, `markup_in_raw_text`, `{markup_in_raw_text, Element, Value}`) when a
 tag's `raw_text_kind/2` is not `none`; and `{select_value, {option_selected, Tag, Name,
-Chooser}}` with `selection_role/1`. Errors whose advice needs no element of the target
+Chooser}}` with `selection_role/2`. Errors whose advice needs no element of the target
 (`duplicate_attr`, `invalid_element`, ...) stay the core's, as does the runtime
 `effect_in_content` a value raises where no backend is known.
 
-A few callbacks are optional, each a capability some targets lack by nature (`selection_role/1`,
+A few callbacks are optional, each a capability some targets lack by nature (`selection_role/2`,
 `mark_choices/2`, `markup_text/2`, `controlled/3`, `embed_attrs/2`).
-`c:arizona_renderer:selection_role/1` is for a target whose output has no attribute for an element's
+`c:arizona_renderer:selection_role/2` is for a target whose output has no attribute for an element's
 chosen value. HTML is that target: `value` on a `<select>` is ignored by the parser, which loads on
 the first option (or the one marked `selected`), while a diff writes the `.value` property, so the
 page and every later update would disagree. The backend names the roles -- `select` is a `chooser`
 (its `value`, its `multiple`, its `option` choices), `option` a `choice` (its `value`, its
-`selected`) -- and the transform does the rest generically: it drops the chooser's value and appends
-to every choice under it a `selected` calling `arizona_template:chosen(Backend, ChoiceValue,
-ChooserValue, Multiple)` (both read as the text the page holds, `attr_text/2`: an escaped value as
-its own text, a NUL as U+FFFD, `attr_input/1` (the escape writes a CR as a reference, see "Output is
-UTF-8"); a literal `?raw` value, or an interpolated one with a literal `?raw` part assembled as
-`raw_attr/2` renders it, is markup, so its character references are decoded too, through the
-backend's optional `c:arizona_renderer:markup_text/2` in `attribute`; a raw a helper returns renders
-escaped and compares as its text; the transform marks the parts of both values as the attribute
-renders them, so every path compares them alike, and under `multiple` each part of a literal list
-holding a `?raw` is its own pick), folded to a static `true`/`false` when both values are literals
-(text, or a literal `?raw` of text). The choices are found where the chooser compiles
-(`compile_element/5`), after hoisted variables and helper bodies are spliced, through elements,
-content lists and conditional tails. An `?each` compiles bottom-up, before its chooser, so the
-pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a chooser in a
-`'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its item as it
-compiles (`compile_each_clause/11`). A template compiled before the chooser was seen counts as
-reached only when every option element in its statics carries a `chosen/4` call.
+`selected`) -- in the content context the element sits in (`Context`, as `controlled/3` takes it),
+and only in HTML content: a `select` inside `<svg>` is no HTML select, so its `value` stays an
+ordinary attribute and its options get no `selected`. The transform does the rest generically: it
+drops the chooser's value and appends to every choice under it a `selected` calling
+`arizona_template:chosen(Backend, ChoiceValue, ChooserValue, Multiple)` (both read as the text the
+page holds, `attr_text/2`: an escaped value as its own text, a NUL as U+FFFD, `attr_input/1` (the
+escape writes a CR as a reference, see "Output is UTF-8"); a literal `?raw` value, or an
+interpolated one with a literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its
+character references are decoded too, through the backend's optional
+`c:arizona_renderer:markup_text/2` in `attribute`; a raw a helper returns renders escaped and
+compares as its text; the transform marks the parts of both values as the attribute renders them, so
+every path compares them alike, and under `multiple` each part of a literal list holding a `?raw` is
+its own pick), folded to a static `true`/`false` when both values are literals (text, or a literal
+`?raw` of text). The choices are found where the chooser compiles (`compile_element/5`), after
+hoisted variables and helper bodies are spliced, through elements, content lists and conditional
+tails. An `?each` compiles bottom-up, before its chooser, so the pre-pass (`mark_targets/3`, and
+again after each splice) wraps an `?each` under a chooser in a `'$arizona_choice'` mark carrying the
+value; the each takes it off and rewrites its item as it compiles (`compile_each_clause/11`). A
+template compiled before the chooser was seen counts as reached only when every option element in
+its statics carries a `chosen/4` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
 stripped and collapsed). Both kinds of text are read through the backend's optional

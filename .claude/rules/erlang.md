@@ -91,7 +91,9 @@ A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?h
 (appended after its attributes), so a submit made before the client script runs never puts the
 fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 
-A `value` on a `select` selects the option it names, in the `?html` target: HTML has no such
+A `value` on a `select` selects the option it names, in the `?html` target and in HTML content
+(a `select` inside `<svg>`, foreign content, is no HTML select: its `value` stays an ordinary
+attribute): HTML has no such
 attribute (the parser ignores it and loads on the first option), so the transform gives every
 `option` under the select a `selected` that tests the option's value against it
 (`arizona_template:chosen/4`, compared as the text the page holds). That is an ordinary dynamic
@@ -142,7 +144,7 @@ client's `set`, which replaces only the picks the local owns and keeps the stati
 callback parameter shadowing a name the value reads is renamed; a hoisted value whose definition
 reads such a name is `hoisted_var_captured`, as any hoisted read there. The one refusal is an option
 that also writes `selected` (`select_value`, `option_selected`): the value already decides it. The
-backend opts in through the optional `arizona_renderer:selection_role/1` and `mark_choices/2`;
+backend opts in through the optional `arizona_renderer:selection_role/2` and `mark_choices/2`;
 `?json` keeps `value` as a prop. Options sharing a value are all marked, at compile time, in a
 child's output and by the client alike, so the browser selects the last of them, as the parser does
 (the `.value` setter would pick the first).

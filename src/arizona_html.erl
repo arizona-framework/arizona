@@ -38,7 +38,7 @@ identical to the previous inlined emission.
 -export([supports_nodiff_keep/0]).
 -export([supports_keyed_item_ops/0]).
 -export([implied_attrs/2]).
--export([selection_role/1]).
+-export([selection_role/2]).
 -export([controlled/3]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
@@ -654,14 +654,21 @@ implied_attrs(Tag, Names) ->
             []
     end.
 
--spec selection_role(arizona_renderer:tag()) ->
+-spec selection_role(arizona_renderer:tag(), atom()) ->
     none
     | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
     | {choice, #{value := binary(), selected := binary()}}.
 %% `<select>` has no `value` attribute: the parser ignores it and selects the first
 %% option, so the page would load on one option and an update select another. The
-%% option's own `selected` is what the parser reads.
-selection_role(Tag) ->
+%% option's own `selected` is what the parser reads. Only in HTML content: in foreign
+%% content (an SVG `select`) neither is an HTML element, and `value` is an attribute
+%% like any other.
+selection_role(Tag, undefined) ->
+    html_selection_role(Tag);
+selection_role(_Tag, _Foreign) ->
+    none.
+
+html_selection_role(Tag) ->
     case tag_name(Tag) of
         ~"select" ->
             {chooser, #{value => ~"value", multiple => ~"multiple", choice => ~"option"}};

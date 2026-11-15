@@ -1008,7 +1008,7 @@ mark_targets_node(Node, Ctx, CCtx) ->
     Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
     case Ctx =/= none andalso is_control_flow_ast(Node) of
         true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
-        false when Ctx =/= none -> push_chooser(Marked, target_backend(Ctx));
+        false when Ctx =/= none -> push_chooser(Marked, target_backend(Ctx), CCtx);
         false -> Marked
     end.
 
@@ -1021,7 +1021,7 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = Backend:content_context(Tag, CCtx),
     Marked = [mark_targets(P, Ctx, ChildCCtx) || P <- unwrap_child_tail_wrappers(Parts, Ctx)],
     %% An `?each` under a chooser compiles before it: hand it the value now.
-    push_chooser({tuple, L, Marked}, Backend).
+    push_chooser({tuple, L, Marked}, Backend, CCtx).
 
 %% A whole-tail `?html`/`?json`/`?terminal` (matching the enclosing target) in a
 %% conditional child is the bare element in a wrapper: unwrap it here, before the
@@ -1432,7 +1432,7 @@ missing_callback_need({choice_text, Tag}, Backend, Fun, Arity) ->
     io_lib:format(
         "a ~ts without a value attribute is valued by its text, and a value in this "
         "one's text may render markup, whose text the render target ~ts cannot read: it "
-        "names the selection roles (selection_role/1) but does not export ~ts/~w. Or give "
+        "names the selection roles (selection_role/2) but does not export ~ts/~w. Or give "
         "the ~ts a value attribute.",
         [Tag, Backend, Fun, Arity, Tag]
     );
@@ -1449,7 +1449,7 @@ missing_callback_need(choices, Backend, Fun, Arity) ->
         "this child of an element choosing by a value may render choices the transform "
         "cannot see (a component, a remote helper, a runtime value, raw markup), which "
         "the render target ~ts marks in the child's rendered output: it names the "
-        "selection roles (selection_role/1) but does not export ~ts/~w.",
+        "selection roles (selection_role/2) but does not export ~ts/~w.",
         [Backend, Fun, Arity]
     ).
 
@@ -1882,7 +1882,9 @@ transform_node(Node, Module, Inline, FunDefs) ->
             Arg1 = splice_vars(Arg, Inline, Target, undefined),
             {Arg2, HelperCh} = inline_helper_calls(Arg1, Module, FunDefs, Target),
             Arg3 = retransform_spliced(
-                inherit_spliced_nodiff(Inherited, push_choices(Arg2, target_backend(Target))),
+                inherit_spliced_nodiff(
+                    Inherited, push_choices(Arg2, target_backend(Target), undefined)
+                ),
                 map_size(Inline) > 0 orelse HelperCh,
                 Module,
                 FunDefs
@@ -1931,7 +1933,7 @@ transform_each(Inherited, {MarkedFunArg, SourceArg}, {Backend, CCtx}, L, Scope) 
     ),
     {FunArg2, FunCh} = inline_helper_calls(FunArg1, Module, FunDefs, Target),
     FunArg3 = retransform_spliced(
-        inherit_spliced_each_nodiff(Inherited, push_each_choices(Choice, FunArg2, Backend)),
+        inherit_spliced_each_nodiff(Inherited, push_each_choices(Choice, FunArg2, Backend, CCtx)),
         Spliced orelse FunCh,
         Module,
         FunDefs
@@ -2960,7 +2962,7 @@ transform_live_root(Target, Arg, L, Module, Inline, FunDefs) ->
     Arg2 = splice_vars(Arg1, Inline, Target, undefined),
     {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
     Arg4 = retransform_spliced(
-        inherit_spliced_nodiff(false, push_choices(Arg3, target_backend(Target))),
+        inherit_spliced_nodiff(false, push_choices(Arg3, target_backend(Target), undefined)),
         map_size(Inline) > 0 orelse HelperCh,
         Module,
         FunDefs
@@ -4215,7 +4217,7 @@ compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs, Un
             ),
             FunAST = transform_expr(
                 inherit_spliced_each_nodiff(
-                    Inherited, push_each_choices(Choice, FunAST1, Backend)
+                    Inherited, push_each_choices(Choice, FunAST1, Backend, CCtx)
                 ),
                 Module,
                 #{},
@@ -4899,14 +4901,16 @@ is_literal_tag(_Evaluated) -> false.
 
 compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
     Backend = State0#state.backend,
-    {Attrs0, Children} = element_parts(Backend, Tag, AuthoredAttrs, AuthoredChildren, Line),
+    {Attrs0, Children} = element_parts(
+        Backend, {Tag, State0#state.content_ctx}, AuthoredAttrs, AuthoredChildren, Line
+    ),
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_nodiff(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
     %% The descriptor reads the locals as written: a chooser's value is rewritten
     %% to one whole local (kept_value/4) whose affixes the client still needs.
     Attrs = maybe_inject_local_descriptor(
-        Backend, Tag, AuthoredAttrs, Attrs1, Children, RawKind, Line
+        Backend, {Tag, State0#state.content_ctx}, AuthoredAttrs, Attrs1, Children, RawKind, Line
     ),
     State1 = State0#state{root = false, nodiff_mark = none},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
@@ -4956,9 +4960,9 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
 
 %% The authored attributes are checked as written; a chooser's value then becomes
 %% the `selected` of the choices under it (choose/4).
-element_parts(Backend, Tag, Attrs, Children, Line) ->
+element_parts(Backend, {Tag, Ctx}, Attrs, Children, Line) ->
     ok = reject_framework_attrs(Backend, Attrs, Line),
-    choose(Backend, Tag, Attrs, Children).
+    choose(Backend, {Tag, Ctx}, Attrs, Children).
 
 %% Folded or marker-anchored, the content of an element with an `az` diffs unless the
 %% element is nodiff (compile_element_children/7).
@@ -5502,7 +5506,7 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
 %% for the attribute context (the client reads it via getAttribute, which decodes
 %% the entities back). No separate escape here -- that would double-escape.
-maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind, Line) ->
+maybe_inject_local_descriptor(Backend, TagCtx, LocalAttrs, Attrs, Children, RawKind, Line) ->
     AttrLocals = collect_attr_locals(Backend, LocalAttrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
     case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
@@ -5514,7 +5518,7 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             %% After the support check: the affixes are read through callbacks only a
             %% backend supporting `?local` implements.
-            AttrAffixes = collect_attr_affixes(Backend, Tag, LocalAttrs, Line),
+            AttrAffixes = collect_attr_affixes(Backend, TagCtx, LocalAttrs, Line),
             Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
             Json = iolist_to_binary(json:encode(Desc)),
             [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Json)]} | Attrs]
@@ -5579,9 +5583,9 @@ collect_attr_locals(Backend, Attrs, Line) ->
 %% chooser's value hands over the static parts on either side as lists instead
 %% (`[[Before...], [After...]]`): under `multiple` each one is a pick of its own,
 %% and the client keeps them around the picks the local owns.
-collect_attr_affixes(Backend, Tag, Attrs, Line) ->
+collect_attr_affixes(Backend, {Tag, Ctx}, Attrs, Line) ->
     ChooserValue =
-        case selection_role(Backend, Tag) of
+        case selection_role(Backend, Tag, Ctx) of
             {chooser, #{value := ValueName}} -> attr_key(Backend, ValueName);
             _None -> none
         end,
@@ -7473,7 +7477,7 @@ extract_directives([Attr | Rest], Opts) ->
 %% HTML has no `value` attribute on `<select>`: the parser ignores it and loads on
 %% the first option, while an update writes the `.value` property, so the page and
 %% every later update disagree. What the parser does read is `selected` on an
-%% option. So for a backend that declares the roles (arizona_renderer:selection_role/1)
+%% option. So for a backend that declares the roles (arizona_renderer:selection_role/2)
 %% the chooser's `value` is not emitted at all, and every choice under it gets a
 %% `selected` attribute testing its own value against it (arizona_template:chosen/4):
 %% an ordinary dynamic attribute, so it renders at SSR, tracks its reads and diffs
@@ -7492,16 +7496,18 @@ extract_directives([Attr | Rest], Opts) ->
 %% renders and diffs see the child as written; the chooser keeps its value
 %% (kept_value/4) and the client applies it to what they render.
 
-selection_role(Backend, Tag) ->
-    case erlang:function_exported(Backend, selection_role, 1) of
-        true -> Backend:selection_role(Tag);
+%% The role is asked in the content context the element sits in: a `select` in
+%% foreign content (inside `<svg>`) is no HTML select.
+selection_role(Backend, Tag, Ctx) ->
+    case erlang:function_exported(Backend, selection_role, 2) of
+        true -> Backend:selection_role(Tag, Ctx);
         false -> none
     end.
 
 %% A chooser element that carries a value: its selection and its attributes without
 %% the value, or `none`. A static `false` value renders nothing and picks nothing.
-chooser_sel(Backend, Tag, Attrs) ->
-    case selection_role(Backend, Tag) of
+chooser_sel(Backend, Tag, Ctx, Attrs) ->
+    case selection_role(Backend, Tag, Ctx) of
         {chooser, #{value := ValueName, multiple := MultipleName, choice := Choice}} ->
             case take_attr(Backend, ValueName, Attrs) of
                 {ok, {tuple, _, [_Name, {atom, _, false}]}, _Rest} ->
@@ -7516,7 +7522,9 @@ chooser_sel(Backend, Tag, Attrs) ->
                         multiple => Multiple,
                         choice => Choice,
                         fold => false,
-                        local => has_local(Value)
+                        local => has_local(Value),
+                        %% The content context the chooser's children sit in.
+                        ctx => Backend:content_context(Tag, Ctx)
                     },
                     {Sel, Rest};
                 error ->
@@ -7653,21 +7661,51 @@ attr_key(Backend, Name) ->
 %% Before anything compiles: hand every `?each` under a chooser with a value the
 %% value (push_each/2). Run where an `?each` can first appear under one -- the
 %% pre-pass, and after a hoisted variable or a helper body is spliced in.
-push_choices({map, _, _} = Map, _Backend) ->
+%% `Ctx` is the content context the node sits in, tracked as mark_targets/3 does: an
+%% element's children sit in the one the backend names for it, and a nested target
+%% starts at the document root's.
+push_choices({map, _, _} = Map, _Backend, _Ctx) ->
     Map;
-push_choices({map, _, _, _} = Map, _Backend) ->
+push_choices({map, _, _, _} = Map, _Backend, _Ctx) ->
     Map;
-push_choices(Node, Backend) when is_tuple(Node) ->
-    push_chooser(list_to_tuple([push_choices(E, Backend) || E <- tuple_to_list(Node)]), Backend);
-push_choices(Nodes, Backend) when is_list(Nodes) ->
-    [push_choices(N, Backend) || N <- Nodes];
-push_choices(Leaf, _Backend) ->
-    Leaf.
-
-push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend) ->
+push_choices(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}} = Callee, [Arg]}, Backend, Ctx
+) when
+    Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD
+->
+    case is_target(Target) of
+        true -> {call, L, Callee, [push_choices(Arg, Backend, undefined)]};
+        false -> {call, L, Callee, [push_choices(Arg, Backend, Ctx)]}
+    end;
+push_choices({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend, Ctx) ->
     case is_element_tuple(Node) andalso element_tag(TagAST) of
         {ok, Tag} ->
-            case chooser_sel(Backend, Tag, ast_list_to_list(AttrsAST, Backend)) of
+            ChildCtx = Backend:content_context(Tag, Ctx),
+            Walked =
+                {tuple, L, [
+                    push_choices(TagAST, Backend, Ctx),
+                    push_choices(AttrsAST, Backend, Ctx),
+                    push_choices(Children, Backend, ChildCtx)
+                ]},
+            push_chooser(Walked, Backend, Ctx);
+        _NotElement ->
+            push_choices_node(Node, Backend, Ctx)
+    end;
+push_choices(Node, Backend, Ctx) when is_tuple(Node) ->
+    push_choices_node(Node, Backend, Ctx);
+push_choices(Nodes, Backend, Ctx) when is_list(Nodes) ->
+    [push_choices(N, Backend, Ctx) || N <- Nodes];
+push_choices(Leaf, _Backend, _Ctx) ->
+    Leaf.
+
+push_choices_node(Node, Backend, Ctx) ->
+    list_to_tuple([push_choices(E, Backend, Ctx) || E <- tuple_to_list(Node)]).
+
+%% `Ctx` is the content context the element sits in.
+push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend, Ctx) ->
+    case is_element_tuple(Node) andalso element_tag(TagAST) of
+        {ok, Tag} ->
+            case chooser_sel(Backend, Tag, Ctx, ast_list_to_list(AttrsAST, Backend)) of
                 {Sel, _Rest} ->
                     {tuple, L, [TagAST, AttrsAST, choice_children(Children, Sel, push)]};
                 none ->
@@ -7676,15 +7714,15 @@ push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend) ->
         _NotElement ->
             Node
     end;
-push_chooser(Node, _Backend) ->
+push_chooser(Node, _Backend, _Ctx) ->
     Node.
 
 %% The callback of an `?each` that renders under a chooser: the chooser's value,
-%% then its own choosers.
-push_each_choices(none, FunArg, Backend) ->
-    push_choices(FunArg, Backend);
-push_each_choices(Sel, FunArg, Backend) ->
-    push_choices(push_each_fun(FunArg, Sel), Backend).
+%% then its own choosers. `CCtx` is the content context the each's items sit in.
+push_each_choices(none, FunArg, Backend, CCtx) ->
+    push_choices(FunArg, Backend, CCtx);
+push_each_choices(Sel, FunArg, Backend, CCtx) ->
+    push_choices(push_each_fun(FunArg, Sel), Backend, CCtx).
 
 element_tag({atom, _, Tag}) ->
     {ok, Tag};
@@ -7781,14 +7819,20 @@ scalar_kind(Child) ->
     end.
 
 choice_element({tuple, L, [TagAST, AttrsAST, Children]} = Child, Tag, Sel, Mode) ->
-    case selection_role(maps:get(backend, Sel), Tag) of
+    #{backend := Backend, ctx := Ctx} = Sel,
+    case selection_role(Backend, Tag, Ctx) of
         {choice, Info} when Mode =:= final -> rewrite_choice(Child, Tag, Info, Sel);
-        {choice, _Info} -> Child;
-        {chooser, _Info} -> Child;
-        none -> {tuple, L, [TagAST, AttrsAST, choice_children(Children, Sel, Mode)]}
+        {choice, _Info} ->
+            Child;
+        {chooser, _Info} ->
+            Child;
+        none ->
+            Inner = Sel#{ctx := Backend:content_context(Tag, Ctx)},
+            {tuple, L, [TagAST, AttrsAST, choice_children(Children, Inner, Mode)]}
     end;
 choice_element({tuple, _, [_TagAST, _AttrsAST]} = Child, Tag, Sel, final) ->
-    case selection_role(maps:get(backend, Sel), Tag) of
+    #{backend := Backend, ctx := Ctx} = Sel,
+    case selection_role(Backend, Tag, Ctx) of
         {choice, Info} -> rewrite_choice(Child, Tag, Info, Sel);
         _Other -> Child
     end;
@@ -7911,7 +7955,8 @@ choice_mark(Sel, FunArg) ->
         value := Value,
         multiple := Multiple,
         choice := Choice,
-        local := Local
+        local := Local,
+        ctx := Ctx
     } = Sel,
     L = anno(FunArg),
     {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, ?CHOICE_MARK}}, [
@@ -7921,12 +7966,20 @@ choice_mark(Sel, FunArg) ->
         Multiple,
         ast_binary(Choice),
         {atom, L, Local},
+        {atom, L, Ctx},
         FunArg
     ]}.
 
 take_choice_mark(
     {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, ?CHOICE_MARK}}, [
-        {atom, _, Backend}, TagAST, Value, Multiple, ChoiceAST, {atom, _, Local}, FunArg
+        {atom, _, Backend},
+        TagAST,
+        Value,
+        Multiple,
+        ChoiceAST,
+        {atom, _, Local},
+        {atom, _, Ctx},
+        FunArg
     ]}
 ) ->
     Sel = #{
@@ -7936,7 +7989,8 @@ take_choice_mark(
         multiple => Multiple,
         choice => binary_text(ChoiceAST),
         fold => false,
-        local => Local
+        local => Local,
+        ctx => Ctx
     },
     {Sel, FunArg};
 take_choice_mark(FunArg) ->
@@ -7982,13 +8036,13 @@ callback_scope(_FunArg, Inline) ->
 %% Where a chooser compiles: drop its value, mark every choice under it. A child
 %% the compiler cannot see into keeps the value on the chooser instead (kept_value/4),
 %% and so does a `?local` value, the client's to change.
-choose(Backend, Tag, Attrs, Children) ->
-    case chooser_sel(Backend, Tag, Attrs) of
+choose(Backend, {Tag, Ctx}, Attrs, Children) ->
+    case chooser_sel(Backend, Tag, Ctx, Attrs) of
         {#{local := Local} = Sel, Rest} ->
             Chosen = [choice_child(C, Sel#{fold := true}, final) || C <- Children],
             case Local orelse holds_choices(Chosen) of
                 false -> {Rest, Chosen};
-                true -> {kept_value(Backend, Tag, Attrs, Sel), Chosen}
+                true -> {kept_value(Backend, {Tag, Ctx}, Attrs, Sel), Chosen}
             end;
         none ->
             {Attrs, Children}
@@ -8001,8 +8055,8 @@ choose(Backend, Tag, Attrs, Children) ->
 %% is the value it stands for (local_inits/2), so under `multiple` an interpolated
 %% one is one pick of the array. Its key and affixes reach the client through the
 %% descriptor, built from the attributes as written (compile_element/5).
-kept_value(Backend, Tag, Attrs, Sel) ->
-    {chooser, #{value := ValueName}} = selection_role(Backend, Tag),
+kept_value(Backend, {Tag, Ctx}, Attrs, Sel) ->
+    {chooser, #{value := ValueName}} = selection_role(Backend, Tag, Ctx),
     {ok, Kept, _Rest} = take_attr(Backend, ValueName, Attrs),
     [
         case Attr of

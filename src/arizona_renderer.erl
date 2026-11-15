@@ -246,6 +246,10 @@ the attribute that makes the value a list), `choice` for a descendant it picks
 from, keyed by its own `value` attribute (by its static text when it has none) and
 marked picked by its `selected` attribute; `none` for any other tag.
 
+`Context` is the content context the element sits in (`content_context/2` of its
+parent): HTML names roles only in HTML content, since a `select` in foreign content
+(inside `<svg>`) is no HTML select and its `value` an ordinary attribute.
+
 Optional, for a target whose output has no such attribute: HTML ignores `value` on
 `<select>` and loads on the first option, so the parse transform drops the chooser's
 `value` and gives each choice a `selected` that tests the choice's value against it
@@ -253,7 +257,7 @@ Optional, for a target whose output has no such attribute: HTML ignores `value` 
 ordinary attribute. `choice` is the choice's tag name as `name/1` spells it, which
 the transform also looks for in compiled markup to refuse a choice it cannot mark.
 """.
--callback selection_role(Tag :: tag()) ->
+-callback selection_role(Tag :: tag(), Context :: content_context()) ->
     none
     | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
     | {choice, #{value := binary(), selected := binary()}}.
@@ -271,7 +275,7 @@ runs; a live client applies the chooser's value after. For HTML: `selected` on e
 `<option>` in the fragment whose value (its `value`, else its text) is a pick, read as
 the parser reads it (newlines and NUL preprocessed, references decoded).
 
-Optional, and required of a backend that implements `selection_role/1`: a chooser's
+Optional, and required of a backend that implements `selection_role/2`: a chooser's
 child that needs it is refused at compile time (`missing_callback`), where it is written.
 """.
 -callback mark_choices(Fragment :: iodata(), Picks :: [binary()]) -> iodata().
@@ -280,7 +284,7 @@ child that needs it is refused at compile time (`missing_callback`), where it is
 The text `Markup` of this backend shows in `Context`, and whether it holds markup
 syntax.
 
-In `text`, the text of a choice valued by its text (`selection_role/1`). Read at
+In `text`, the text of a choice valued by its text (`selection_role/2`). Read at
 compile time for a
 static binary in such a choice, which is spliced as markup: `{text, Text}` folds to the
 choice's value, while `{markup, _}` (a tag) is left for `mark_choices/2`, since static
@@ -302,7 +306,7 @@ value's are.
 Optional, except for a backend whose `supports_local/0` is `true`, which needs it for
 the fixed text beside an attribute `?local` (one there is a `missing_callback` compile
 error without it). A backend that
-implements `selection_role/1` without it cannot compile a
+implements `selection_role/2` without it cannot compile a
 choice whose text holds a value (a `missing_callback` compile error), its static text
 holding markup syntax is left for `mark_choices/2`, and a markup value compares as
 written, as an escaped one does.
@@ -337,7 +341,7 @@ Optional. A backend without it marks nothing.
     boolean().
 
 %% `markup_text/2` is required of a backend supporting `?local` (`supports_local/0`).
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/3]).
+-optional_callbacks([selection_role/2, mark_choices/2, markup_text/2, controlled/3]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
@@ -502,6 +506,6 @@ A backend words every reason that can reach it, given its other capability answe
 - A `raw_text_kind/2` other than `none`: `dynamic_in_raw_text`, `local_in_raw_text`,
   `markup_in_raw_text` (compile time) and `{markup_in_raw_text, Element, Value}`
   (render time, raised by the backend's own `neutralize_raw_text/4`).
-- `selection_role/1`: `{select_value, {option_selected, Tag, Name, Chooser}}`.
+- `selection_role/2`: `{select_value, {option_selected, Tag, Name, Chooser}}`.
 """.
 -callback format_error(Reason :: term()) -> unicode:chardata().
