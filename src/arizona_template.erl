@@ -463,11 +463,11 @@ same_text(Backend, Choice, Value) ->
 The text attribute value `Value` holds once `Backend` renders it and its parser reads
 it, the form every path compares a choice and a chooser's value in (`chosen/4`,
 `picks/3`, the backend's `c:arizona_renderer:mark_choices/2`, the client). An escaped
-value holds its own text, preprocessed as the parser preprocesses input
-(`attr_input/1`); `true` renders a bare attribute, the empty string. A `raw/1` literal
-at the template site is markup, spliced verbatim, so it holds what the parser makes of
-it (`c:arizona_renderer:markup_text/2`, in `attribute`); so does a list holding one as
-a part, the parts assembled as the attribute renders them (`raw_attr/2`). The parse
+value holds its own text, a NUL as U+FFFD (`attr_input/1`); `true` renders a bare
+attribute, the empty string. A `raw/1` literal at the template site is markup,
+spliced verbatim, so it holds what the parser makes of it
+(`c:arizona_renderer:markup_text/2`, in `attribute`); so does a list holding one as a
+part, the parts assembled as the attribute renders them (`raw_attr/2`). The parse
 transform marks those (`{arizona_markup, Bin}`) where it hands a value to this
 comparison, as it does where the attribute renders; any other `raw/1` is a helper's,
 escaped where it renders, so it holds its text.
@@ -510,22 +510,17 @@ markup_attr_text(Backend, Markup) ->
     end.
 
 -doc """
-`Text` as the HTML parser preprocesses an attribute value before anything reads it:
-newlines normalized (CR LF and CR to LF), NUL replaced with U+FFFD. A choice and a
-chooser's value compare in this form (`chosen/4`, `picks/3`), so the server, the
+The text an escaped `Text` holds once the page is parsed: itself, but a NUL, which no
+HTML can hold, as U+FFFD (the backend writes it so, `arizona_html:escape/1`). A choice
+and a chooser's value compare in this form (`chosen/4`, `picks/3`), so the server, the
 backend's `mark_choices/2` and the client agree on which option a value names.
 """.
 -spec attr_input(Text) -> Text when
     Text :: binary().
 attr_input(Text) ->
-    case binary:match(Text, [~"\r", <<0>>]) of
-        nomatch ->
-            Text;
-        _Some ->
-            Lf = binary:replace(binary:replace(Text, ~"\r\n", ~"\n", [global]), ~"\r", ~"\n", [
-                global
-            ]),
-            binary:replace(Lf, <<0>>, <<16#FFFD/utf8>>, [global])
+    case binary:match(Text, <<0>>) of
+        nomatch -> Text;
+        _Some -> binary:replace(Text, <<0>>, <<16#FFFD/utf8>>, [global])
     end.
 
 -doc """
@@ -624,10 +619,9 @@ so the comparison renders, tracks and diffs like any attribute.
     Backend :: module(),
     Parts :: [term()].
 choice_text(Backend, Parts) ->
-    %% A NUL in text is dropped; splitting folds CR away.
-    Text = binary:replace(
-        iolist_to_binary([choice_text_part(Backend, P) || P <- Parts]), <<0>>, <<>>, [global]
-    ),
+    %% Static text and markup come through markup_text/2, which drops a NUL as the
+    %% tree builder does, so a NUL left is an escaped value's: U+FFFD on the page.
+    Text = attr_input(iolist_to_binary([choice_text_part(Backend, P) || P <- Parts])),
     Words = binary:split(Text, [~" ", ~"\t", ~"\n", ~"\f", ~"\r"], [global, trim_all]),
     iolist_to_binary(lists:join(~" ", Words)).
 

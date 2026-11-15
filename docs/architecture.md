@@ -156,6 +156,15 @@ binary is emitted as the bytes it holds, unchecked, because checking every value
 render path was measured at +22% to +49% on non-ASCII SSR (see docs/performance.md,
 "What did not work").
 
+Two characters the HTML parser rewrites before the page exists are escaped too, so the
+page holds what a live update writes through the DOM: a CR (alone or before a LF, which
+the parser turns into a LF) is written `&#13;`, which decodes to the CR itself, and a
+NUL, which no HTML can hold (the parser drops it in text and replaces it elsewhere), is
+written U+FFFD, which the web client also writes for a NUL in a live text or attribute
+value. Likewise the parser drops a newline right after a `<textarea>` start tag in HTML
+content (not an SVG `textArea`), so that start tag is followed by one
+(`element_open_end/2`) and content starting with a newline keeps it.
+
 The usual source of a non-UTF-8 binary is a bare `<<"café">>` literal: with no type
 spec, each character is stored as one byte, which is Latin-1. Fix it at the source:
 
@@ -282,31 +291,30 @@ Chooser}}` with `selection_role/1`. Errors whose advice needs no element of the 
 (`duplicate_attr`, `invalid_element`, ...) stay the core's, as does the runtime
 `effect_in_content` a value raises where no backend is known.
 
-A few callbacks are optional, each a capability some targets lack by nature
-(`selection_role/1`, `mark_choices/2`, `markup_text/2`, `attr_markup/1`, `controlled/2`,
-`embed_attrs/2`). `c:arizona_renderer:selection_role/1` is for a target whose output has no
-attribute for an element's chosen value. HTML is that target: `value` on a `<select>` is ignored by
-the parser, which loads on the first option (or the one marked `selected`), while a diff writes the
-`.value` property, so the page and every later update would disagree. The backend names the roles --
-`select` is a `chooser` (its `value`, its `multiple`, its `option` choices), `option` a `choice`
-(its `value`, its `selected`) -- and the transform does the rest generically: it drops the chooser's
-value and appends to every choice under it a `selected` calling
-`arizona_template:chosen(Backend, ChoiceValue, ChooserValue, Multiple)` (both read as the text the
-page holds, `attr_text/2`: an escaped value as the parser reads an attribute value, `attr_input/1`,
-newlines normalized and NUL replaced; a literal `?raw` value, or an interpolated one with a
-literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its character references
-are decoded too, through the backend's optional `c:arizona_renderer:markup_text/2` in `attribute`;
-a raw a helper returns renders escaped and compares as its text; the transform marks the parts of
-both values as the attribute renders them, so every path compares them alike, and under
-`multiple` each part of a literal list holding a `?raw` is its own pick), folded to a
-static `true`/`false` when both values are literals (text, or a literal `?raw` of text). The
-choices are found where the chooser compiles (`compile_element/5`), after hoisted variables and
-helper bodies are spliced, through elements, content lists and conditional tails. An `?each`
-compiles bottom-up, before its chooser, so the pre-pass (`mark_targets/3`, and again after each
-splice) wraps an `?each` under a chooser in a `'$arizona_choice'` mark carrying the value; the each
-takes it off and rewrites its item as it compiles (`compile_each_clause/11`). A template compiled
-before the chooser was seen counts as reached only when every option element in its statics carries
-a `chosen/4` call.
+A few callbacks are optional, each a capability some targets lack by nature (`selection_role/1`,
+`mark_choices/2`, `markup_text/2`, `controlled/3`, `embed_attrs/2`).
+`c:arizona_renderer:selection_role/1` is for a target whose output has no attribute for an element's
+chosen value. HTML is that target: `value` on a `<select>` is ignored by the parser, which loads on
+the first option (or the one marked `selected`), while a diff writes the `.value` property, so the
+page and every later update would disagree. The backend names the roles -- `select` is a `chooser`
+(its `value`, its `multiple`, its `option` choices), `option` a `choice` (its `value`, its
+`selected`) -- and the transform does the rest generically: it drops the chooser's value and appends
+to every choice under it a `selected` calling `arizona_template:chosen(Backend, ChoiceValue,
+ChooserValue, Multiple)` (both read as the text the page holds, `attr_text/2`: an escaped value as
+its own text, a NUL as U+FFFD, `attr_input/1` (the escape writes a CR as a reference, see "Output is
+UTF-8"); a literal `?raw` value, or an interpolated one with a literal `?raw` part assembled as
+`raw_attr/2` renders it, is markup, so its character references are decoded too, through the
+backend's optional `c:arizona_renderer:markup_text/2` in `attribute`; a raw a helper returns renders
+escaped and compares as its text; the transform marks the parts of both values as the attribute
+renders them, so every path compares them alike, and under `multiple` each part of a literal list
+holding a `?raw` is its own pick), folded to a static `true`/`false` when both values are literals
+(text, or a literal `?raw` of text). The choices are found where the chooser compiles
+(`compile_element/5`), after hoisted variables and helper bodies are spliced, through elements,
+content lists and conditional tails. An `?each` compiles bottom-up, before its chooser, so the
+pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a chooser in a
+`'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its item as it
+compiles (`compile_each_clause/11`). A template compiled before the chooser was seen counts as
+reached only when every option element in its statics carries a `chosen/4` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
 stripped and collapsed). Both kinds of text are read through the backend's optional
@@ -347,20 +355,20 @@ the in-body rules: classic in-select parsing ignores those start tags (it switch
 and `template`), so an option inside one there is real and is left for the client; an option whose
 text runs past the fragment is valued by the part inside it. An option's value is its `value`
 attribute, else its text as its `text` property reads it, with the input preprocessed (CR LF and CR
-to LF, NUL to U+FFFD, picks alike) and character references decoded the way the tokenizer decodes
-them (`arizona_html_entities`, the standard's whole named table, legacy names and the
-attribute-value exception included), and it is marked when it is one of `Picks` (a `selected` the
-markup carries is cut from any other option, as the client clears it). A page without such a chooser
-renders exactly as before, and one with it pays for that child's bytes only. A live render and every
-diff see the child as written (`arizona_eval` and `peek_nodiff` unwrap it; an `?each` inside still
-diffs item by item), and `Picks` is never called there. In the live client the select's `value` is
-applied to its options' `selected` attributes (and, on a change, their selection): when the page
-starts, when an op writes it, and after any batch that rendered or changed an option
-(`applyChooser`, `arizona-attrs.js`). Options the transform reached keep their own `selected` diffs
-beside it; both compute the same choice. A backend without the callbacks keeps `value` as an
-ordinary attribute, which is what `?json` wants. Options sharing a value are all marked, by every
-path, so the browser selects the last of them, as the parser selects the last `selected` option (the
-`.value` setter would pick the first).
+to LF, NUL to U+FFFD; the picks are the text the page holds) and character references decoded the
+way the tokenizer decodes them (`arizona_html_entities`, the standard's whole named table, legacy
+names and the attribute-value exception included), and it is marked when it is one of `Picks` (a
+`selected` the markup carries is cut from any other option, as the client clears it). A page without
+such a chooser renders exactly as before, and one with it pays for that child's bytes only. A live
+render and every diff see the child as written (`arizona_eval` and `peek_nodiff` unwrap it; an
+`?each` inside still diffs item by item), and `Picks` is never called there. In the live client the
+select's `value` is applied to its options' `selected` attributes (and, on a change, their
+selection): when the page starts, when an op writes it, and after any batch that rendered or changed
+an option (`applyChooser`, `arizona-attrs.js`). Options the transform reached keep their own
+`selected` diffs beside it; both compute the same choice. A backend without the callbacks keeps
+`value` as an ordinary attribute, which is what `?json` wants. Options sharing a value are all
+marked, by every path, so the browser selects the last of them, as the parser selects the last
+`selected` option (the `.value` setter would pick the first).
 
 ## API -- `arizona_diff.erl`
 
@@ -1087,7 +1095,7 @@ refuses an edit (`qty` stays `5` when the user types `999`) or normalises it (`"
 as `"abc"`) leaves the binding unchanged, so the diff sends no op and the field would keep
 the user's text forever.
 
-**Compile time.** The optional `c:arizona_renderer:controlled/2` callback names the parts that
+**Compile time.** The optional `c:arizona_renderer:controlled/3` callback names the parts that
 are such defaults; `arizona_html` answers `true` for `value` on `input`/`select`,
 `checked` on `input`, `selected` on `option` (the one the transform derives from a select's
 `value` included) and `textarea` content. An element holding a **diffable** dynamic for one
@@ -1151,15 +1159,16 @@ prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server
 dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). A literal
 `?raw` of literal text is static and may be an affix part: the transform folds it to the
 text its markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
-treats that as static text, which the page holds exactly (the backend's `attr_markup/1`,
-required with `markup_text/2` of a backend supporting `?local`, writes it when escaping
-would not keep it: HTML writes a CR as `&#13;`). Every affix is the text the page reads
-back, so a static NUL, which no attribute can hold, is the U+FFFD the page shows.
+treats that as static text, which the page holds exactly once escaped (HTML writes a CR
+as `&#13;`, see "Output is UTF-8"). Every affix is the text the page reads back
+(`markup_text/2` of the escaped part), so a static NUL, which no attribute can hold, is
+the U+FFFD the page shows.
 Spliced verbatim, the value beside it could complete an open reference in it (`&amp`
 before `1` reads `&amp1`) or a `"` could end the attribute, and the page would stop
 holding the affix the client composes with on `set` and strips on `get`. A select's
-value is read as the page reads one: its parts joined, then normalized, so a CR ending
-one part and a LF starting the next are one newline (each part alone under `multiple`).
+value is read as the page holds one: its parts joined as exact text, a NUL as U+FFFD, so
+a CR ending one part and a LF starting the next stay a CR and a LF (each part alone
+under `multiple`).
 A raw of a computed value is still `local_attr_mixed`: the affixes ride on the static
 descriptor and the slot never diffs, so a server-side change could never reach the
 attribute the client owns. Interpolation is for
@@ -2840,15 +2849,17 @@ never rendered either: it counts as changed, the conservative answer. The snapsh
 advanced to the new values when the re-render is suppressed, so nothing drifts.
 
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
-context (`raw_text_kind/2`, second argument `html | foreign`), threaded through the transform by
-`content_context/2`: `<svg>` opens foreign content and `<foreignObject>` switches back. In foreign
-content an element is ordinary parsed markup -- comments really are comments -- so `title` is
-classified `none` there and its slot keeps markers and stays diffable. It is the only tag that
-differs: `script`/`style` stay `raw` in both, and `textarea` cannot appear in foreign content.
+context (`raw_text_kind/2`, second argument `undefined | foreign`: HTML content or foreign),
+threaded through the transform by `content_context/2`: `<svg>` opens foreign content and its HTML
+integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their
+children. In foreign content an element is ordinary parsed markup -- comments really are comments
+-- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`, `script` or
+`style` keeps its slot markers and stays diffable, and an SVG `textArea` is no RCDATA element (no
+newline after its start tag, no `az-ctl`).
 This matters because an SVG `<title>` is a graphic's accessible name, so a bound one would
 otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -- it would need
-its own integration points to be correct, and leaving it in `html` keeps existing behaviour rather
-than half-handling it.
+its own integration points to be correct, and leaving it in HTML content (`undefined`) keeps
+existing behaviour rather than half-handling it.
 
 The context reaches a construct compiled elsewhere through the top-down marking pass. A **local
 element helper** is spliced into the caller's element AST before that element compiles, so it
@@ -2873,9 +2884,10 @@ bottom-up, or a spliced hoisted one already marked -- keeps the context of the c
 HTML; write the `?each` inside the `<svg>` element for SVG treatment.
 
 A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
-with no call site at compile time, so a `<title>` there is classified `html` and its slot comes
-out markerless. That much is not fixable -- the same child may be used in both contexts, and
-nothing in its own source says which.
+with no call site at compile time, so a `<title>` there is compiled in HTML content
+(`undefined`), classified `escapable`, and its slot comes out markerless. That much is not
+fixable -- the same child may be used in both contexts, and nothing in its own source says
+which.
 
 The *update* still lands, though, because the child's own slot in the caller does have markers.
 `make_ops/5` checks whether a markerless slot inside a nested template changed value, and

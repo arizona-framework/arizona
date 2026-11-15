@@ -1,4 +1,4 @@
-import { applyChooser, applyChoosers, syncsProp } from './arizona-attrs.js';
+import { applyChooser, applyChoosers, shownDefault, syncsProp } from './arizona-attrs.js';
 import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import {
@@ -746,7 +746,7 @@ function edited(ctl) {
             (/** @type {any} */ o) => o.selected !== o.defaultSelected,
         );
     if (c.type === 'checkbox' || c.type === 'radio') return c.checked !== c.defaultChecked;
-    return syncsProp(ctl, 'value') && c.value !== c.defaultValue;
+    return syncsProp(ctl, 'value') && c.value !== shownDefault(ctl, c.defaultValue);
 }
 
 /** @param {Element} ctl */
@@ -806,7 +806,7 @@ function showDefault(ctl) {
                 if (o.selected !== o.defaultSelected) o.selected = o.defaultSelected;
     } else if (c.type === 'checkbox' || c.type === 'radio') {
         if (c.checked !== c.defaultChecked) c.checked = c.defaultChecked;
-    } else if (syncsProp(ctl, 'value') && c.value !== c.defaultValue) {
+    } else if (syncsProp(ctl, 'value') && c.value !== shownDefault(ctl, c.defaultValue)) {
         let range = null;
         try {
             if (ctl.ownerDocument.activeElement === ctl && c.selectionStart !== null)

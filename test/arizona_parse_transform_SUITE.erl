@@ -1494,20 +1494,20 @@ local_attr_render(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"home")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"az-local=")).
 
-%% An explicit-size element carries its own byte layout: `<<1024:16>>` is <<4,0>>,
-%% not U+0400's UTF-8 (`<<208,128>>`). It must not fold; it renders through the
+%% An explicit-size element carries its own byte layout: `<<1025:16>>` is <<4,1>>,
+%% not U+0401's UTF-8 (`<<208,129>>`). It must not fold; it renders through the
 %% dynamic path, which preserves the bytes. Discriminates: the pre-fix static path
-%% baked <<208,128>> and no <<4,0>>.
+%% baked <<208,129>> and no <<4,1>>.
 static_binary_sized_integer_not_utf8(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_static_sized). "
         "-export([render/1]). "
-        "render(Bindings) -> arizona_template:target(arizona_html, {'p', [], [<<1024:16>>]}). "
+        "render(Bindings) -> arizona_template:target(arizona_html, {'p', [], [<<1025:16>>]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     HTML = iolist_to_binary(HTML0),
-    ?assertNotEqual(nomatch, binary:match(HTML, <<4, 0>>)),
-    ?assertEqual(nomatch, binary:match(HTML, <<208, 128>>)).
+    ?assertNotEqual(nomatch, binary:match(HTML, <<4, 1>>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<208, 129>>)).
 
 %% Guard against over-rejection: a `[utf8]` element (`~"..."`, `X/utf8`) and an
 %% all-ASCII `default` element still fold to a static (no dynamic-slot markers),
@@ -4696,13 +4696,13 @@ az_ctl_marks_rendered_controls(Config) when is_list(Config) ->
         {_, _},
         binary:match(
             Render("pt_ctl_textarea", "{textarea, [], [" ++ Get("t") ++ "]}"),
-            <<"-0\" az-ctl=\"content\">hi</textarea>">>
+            <<"-0\" az-ctl=\"content\">\nhi</textarea>">>
         )
     ).
 
 %% No mark where nothing diffs a control's default: a static default, another
 %% attribute, a `?local` (the client's own), an az-nodiff subtree, a non-control,
-%% and a target with no `controlled/2`.
+%% and a target with no `controlled/3`.
 az_ctl_skips_unrendered_controls(Config) when is_list(Config) ->
     Render = fun(Mod, Elem) ->
         M = compile_module(
@@ -4741,7 +4741,7 @@ az_ctl_skips_unrendered_controls(Config) when is_list(Config) ->
             {"pt_ctl_ta_value", "{textarea, [{value, " ++ Get("v") ++ "}], []}"}
         ]
     ),
-    ?assertEqual(false, erlang:function_exported(arizona_json, controlled, 2)),
+    ?assertEqual(false, erlang:function_exported(arizona_json, controlled, 3)),
     NativeMod = compile_module(
         "-module(pt_ctl_json). -export([render/1]). render(Bindings) -> "
         "arizona_template:target(arizona_json, {'TextField', [{value, "
@@ -6780,7 +6780,7 @@ nodiff_inherited_raw_text(Config) when is_list(Config) ->
         "    ). "
     ),
     ?assertEqual(
-        <<"<div><textarea>&lt;/script&gt;&amp;</textarea><script><\\/script>&</script></div>">>,
+        <<"<div><textarea>\n&lt;/script&gt;&amp;</textarea><script><\\/script>&</script></div>">>,
         render_markerless(Mod:render(#{f => true, c => ~"</script>&"}))
     ).
 

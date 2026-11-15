@@ -1,8 +1,9 @@
 import {
     applyRemAttrOp,
     applySetAttrOp,
-    attrInput,
     isMultipleChooser,
+    pageText,
+    sanitized,
     syncsProp,
 } from './arizona-attrs.js';
 import { resolveTarget } from './arizona-commands.js';
@@ -51,13 +52,15 @@ function writeLocalValue(el, target, value) {
         // never puts an element in reach; a hook that renders into the element
         // can, and it would otherwise be detached with its instance left in
         // `_hooks` and `destroyed()` never called.
+        // Held as the page holds the initial: a NUL as U+FFFD.
+        const text = value == null ? '' : pageText(String(value));
         const marker = findMarker(el, localMarkerAz(el, target[1]));
         if (marker) {
             forEachElementBetweenMarkers(marker, destroyHooks);
-            setMarkerText(marker, value);
+            setMarkerText(marker, text);
         } else {
             destroyChildHooks(el);
-            el.textContent = value == null ? '' : String(value);
+            el.textContent = text;
         }
         notifyUpdated(el);
         return;
@@ -111,7 +114,7 @@ function readLocalValue(el, target) {
     // A multiple select holds a list: the values of the options the user sees picked,
     // but those a static part beside the local names -- they are the part's.
     if (isMultipleChooser(el, name)) {
-        const fixed = target.length === 4 ? [...target[2], ...target[3]].map(attrInput) : [];
+        const fixed = target.length === 4 ? [...target[2], ...target[3]].map(pageText) : [];
         return Array.from(
             /** @type {HTMLSelectElement} */ (el).selectedOptions,
             (o) => o.value,
@@ -126,9 +129,14 @@ function readLocalValue(el, target) {
         const suf = affix(target[3]);
         if (name === 'value' && syncsProp(el, name)) {
             const v = /** @type {HTMLInputElement} */ (el).value;
-            const fits =
-                v.length >= pre.length + suf.length && v.startsWith(pre) && v.endsWith(suf);
-            return fits ? v.slice(pre.length, v.length - suf.length) : null;
+            // The live value is sanitized, so it holds the affixes as sanitization
+            // leaves them: as a prefix (its start a value's), as a suffix (its end
+            // one), or as one value when the local's part sanitizes away.
+            const p = sanitized(el, pre, false, true);
+            const s = sanitized(el, suf, true, false);
+            if (v.length >= p.length + s.length && v.startsWith(p) && v.endsWith(s))
+                return v.slice(p.length, v.length - s.length);
+            return v === sanitized(el, pre + suf, false, false) ? '' : null;
         }
         const v = el.getAttribute(name) ?? '';
         return v.slice(pre.length, v.length - suf.length);
@@ -156,14 +164,14 @@ function ownPicks(value) {
 
 /**
  * An affix as one text: a select value's static parts arrive as a list (one pick each
- * under `multiple`), any other attribute's as the text itself. A select value is read
- * as the page reads it, so its joined parts are normalized as one input (a CR ending
- * one part and a LF starting the next are one newline), as the server compares it.
+ * under `multiple`), any other attribute's as the text itself. It is the text the page
+ * holds (the server escapes a CR as `&#13;`), so the joined parts are exact text, a
+ * NUL as U+FFFD, as the server compares them.
  * @param {string | string[]} a
  * @returns {string}
  */
 function affix(a) {
-    return Array.isArray(a) ? attrInput(a.join('')) : a;
+    return pageText(Array.isArray(a) ? a.join('') : a);
 }
 
 /**

@@ -2318,7 +2318,7 @@ text_template_renders_text_in_raw_text(Config) when is_list(Config) ->
         end
      || {Fun, Open} <- [
             {title_text_template_prop, ~">"},
-            {textarea_text_template_prop, ~">"}
+            {textarea_text_template_prop, ~">\n"}
         ]
     ],
     Static = iolist_to_binary(

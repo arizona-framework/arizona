@@ -19,8 +19,14 @@ other formats while reusing the same walker, diff engine, and transport.
 -doc "The framework-injected `az` diff-target marker for an element.".
 -callback az_attr(Az :: binary()) -> binary().
 
--doc "End of an element's open tag (after attributes), before children.".
--callback element_open_end() -> binary().
+-doc """
+End of an element's open tag (after attributes), before children, for the given wire
+tag name in `Context`, the content context the element sits in (`content_context/2`
+of its parent). HTML follows a `textarea` start tag in HTML content with the newline
+its parser drops there, so content starting with one keeps it on the page, as a live
+update writes it; foreign content (an SVG `textArea`) drops none.
+""".
+-callback element_open_end(TagName :: binary(), Context :: content_context()) -> binary().
 
 -doc "Self-close for a void (childless) element.".
 -callback element_void_close() -> binary().
@@ -97,12 +103,14 @@ is emitted.
 target (`<!--az:X-->...<!--/az-->`) and is fully diffable. `raw` for raw-text
 elements (`script`, and the RAWTEXT `style`/`xmp`/`iframe`/`noembed`/`noframes`):
 the browser never decodes character references or HTML comments there, so the
-slot is emitted verbatim, markerless and render-once
-(comment markers would become literal bytes and corrupt the script/CSS).
-`escapable` for escapable-raw-text elements (`textarea`/`title`): character
-references ARE decoded, so a scalar slot is HTML-escaped, but it is still
-markerless and render-once. Non-HTML backends return `none` -- their wire format
-does not use HTML comment markers.
+slot is emitted verbatim and markerless (comment markers would become literal
+bytes and corrupt the script/CSS). `escapable` for escapable-raw-text elements
+(`textarea`/`title`): character references ARE decoded, so a scalar slot is
+HTML-escaped, but it is still markerless. Either way the element carries an `az`
+and its whole content folds into one nested template held there, so a value
+change re-renders that content (an `az-nodiff` element renders it once).
+Non-HTML backends return `none` -- their wire format does not use HTML comment
+markers.
 """.
 -callback raw_text_kind(Tag :: tag(), Context :: content_context()) -> raw_text_kind().
 
@@ -115,7 +123,10 @@ uses `foreign` for the HTML parser's foreign-content mode (inside `<svg>`), wher
 element is ordinary parsed content -- comments are comments, so a slot keeps its
 markers and stays diffable. The distinction only matters for a tag classified
 differently in each: an HTML `<title>` makes comment markers literal text, an SVG
-`<title>` does not. Backends with no such mode return `Parent` unchanged.
+`<title>` does not. HTML returns to HTML content for the children of an SVG
+`foreignObject`, `desc` or `title`, the parser's HTML integration points; MathML is
+not tracked (its own integration points would be needed), so it stays HTML content.
+Backends with no such mode return `Parent` unchanged.
 """.
 -callback content_context(Tag :: tag(), Parent :: content_context()) -> content_context().
 
@@ -201,8 +212,9 @@ Whether this backend supports the client-owned `?local` slot: one the server
 renders once and the client owns from then on, updating it with no round-trip. A
 backend capability, declared by each backend; the parse transform rejects `?local`
 at compile time when `false`. A backend answering `true` must also implement
-`markup_text/2` and `attr_markup/1`, which the transform calls for the fixed text
-beside an attribute `?local`.
+`markup_text/2`, which the transform reads the escaped fixed text beside an attribute
+`?local` back through: that text is what the page holds, and what the client composes
+the attribute with.
 """.
 -callback supports_local() -> boolean().
 
@@ -286,8 +298,8 @@ value `a&b` picks, as it is in the page. For HTML: the value preprocessed (newli
 normalized, NUL replaced) and its character references decoded as an attribute
 value's are.
 
-Optional, except for a backend whose `supports_local/0` is `true`, which needs it (with
-`attr_markup/1`) for the fixed text beside an attribute `?local`. A backend that
+Optional, except for a backend whose `supports_local/0` is `true`, which needs it for
+the fixed text beside an attribute `?local`. A backend that
 implements `selection_role/1` without it cannot compile a
 choice whose text holds a value (a `select_value` compile error), its static text
 holding markup syntax is left for `mark_choices/2`, and a markup value compares as
@@ -295,22 +307,6 @@ written, as an escaped one does.
 """.
 -callback markup_text(Markup :: iodata(), Context :: text | attribute) ->
     {text | markup, binary()}.
-
--doc """
-Markup for an attribute value that the backend's parser reads back as `Text`, except
-for what the parser cannot hold at all (HTML: a NUL, which reads as U+FFFD however it
-is written): the inverse of `markup_text/2` in `attribute`. `escape/1` is not that
-wherever the parser rewrites a character it leaves as is. Used at compile time for the
-fixed text beside an attribute `?local` (a static part, or a literal `raw/1` folded to
-the text it means), which the client recomposes the attribute with and strips on a
-read, so the page must hold that text, and the client's affix is what the page reads
-from it (`markup_text/2`). For HTML: escaped, and a CR written as a reference, since
-the parser turns a CR byte into a LF.
-
-Required, with `markup_text/2`, of a backend whose `supports_local/0` is `true`; one
-without `?local` needs neither.
-""".
--callback attr_markup(Text :: binary()) -> binary().
 
 -doc """
 Whether `Tag`'s `{attr, Name}` (`Name` as `name/1` spells it) or its `content` is a
@@ -327,13 +323,19 @@ the client then carries the control's state with an event it raises and, once th
 server has answered that event, shows what the server rendered unless the user changed
 it since -- for the parts the server renders only.
 
+`Context` is the content context the element sits in (`content_context/2` of its
+parent): HTML marks only an element in HTML content, since one in foreign content (an
+SVG `textArea`) is no form control.
+
 Optional. A backend without it marks nothing.
 """.
--callback controlled(Tag :: tag(), Part :: {attr, binary()} | content) -> boolean().
+-callback controlled(
+    Tag :: tag(), Part :: {attr, binary()} | content, Context :: content_context()
+) ->
+    boolean().
 
-%% `markup_text/2` and `attr_markup/1` are required of a backend supporting `?local`
-%% (`supports_local/0`); a backend without `?local` needs neither.
--optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, attr_markup/1, controlled/2]).
+%% `markup_text/2` is required of a backend supporting `?local` (`supports_local/0`).
+-optional_callbacks([selection_role/1, mark_choices/2, markup_text/2, controlled/3]).
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for

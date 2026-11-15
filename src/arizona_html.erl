@@ -12,7 +12,7 @@ identical to the previous inlined emission.
 -export([name/1]).
 -export([element_open/1]).
 -export([az_attr/1]).
--export([element_open_end/0]).
+-export([element_open_end/2]).
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
@@ -39,10 +39,9 @@ identical to the previous inlined emission.
 -export([supports_keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([selection_role/1]).
--export([controlled/2]).
+-export([controlled/3]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
--export([attr_markup/1]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -67,10 +66,10 @@ identical to the previous inlined emission.
 
 %% A byte that needs no entity. Letters and UTF-8 bytes (> `>`) answer on the
 %% first test; the rest of the safe set lies between and around `"`, `&`/`'`
-%% and `<`/`>`.
+%% and `<`/`>`, and below `"` all but NUL and CR (escape/1).
 -define(SAFE(C),
-    (C > $> orelse (C > $' andalso C < $<) orelse C < $" orelse C =:= $= orelse
-        (C > $" andalso C < $&))
+    (C > $> orelse (C > $' andalso C < $<) orelse (C < $" andalso C > $\r) orelse
+        C =:= $= orelse (C > $" andalso C < $&) orelse (C < $\r andalso C > 0))
 ).
 %% Past the first metacharacter, a tail shorter than this has no run long enough
 %% for slicing to pay off, so the plain append loop takes it.
@@ -135,8 +134,17 @@ element_open(TagName) ->
 az_attr(Az) ->
     <<" az=\"", Az/binary, "\"">>.
 
--spec element_open_end() -> binary().
-element_open_end() ->
+-spec element_open_end(binary(), atom()) -> binary().
+%% The parser drops a newline right after an HTML `textarea` start tag (a reference to
+%% one too), and a live update writes the content through the DOM, keeping one. So the
+%% tag is followed by the newline the parser drops, and the content keeps its own. In
+%% foreign content (an SVG `textArea`) nothing is dropped.
+element_open_end(Tag, undefined) ->
+    case ascii_lowercase(Tag) of
+        ~"textarea" -> ~">\n";
+        _Other -> ~">"
+    end;
+element_open_end(_Tag, _Foreign) ->
     ~">".
 
 -spec element_void_close() -> binary().
@@ -326,14 +334,19 @@ rawtext_names() ->
 content_context(Tag, Parent) ->
     content_context_name(tag_name(Tag), Parent).
 
-%% `<svg>` switches the parser into foreign content; `<foreignObject>` switches
-%% back for its children. MathML is deliberately not tracked: it would need its
-%% own integration points (`mtext` and friends) to be correct, and leaving it in
-%% HTML content keeps today's behaviour rather than half-handling it. HTML content
-%% is the root context, `undefined`, so `<foreignObject>` returns to it.
+%% `<svg>` switches the parser into foreign content; `<foreignObject>`, `<desc>` and
+%% `<title>` (its HTML integration points) switch back for their children. MathML is
+%% deliberately not tracked: it would need its own integration points (`mtext` and
+%% friends) to be correct, and leaving it in HTML content keeps today's behaviour
+%% rather than half-handling it. HTML content is the root context, `undefined`, so an
+%% integration point returns to it.
 content_context_name(~"svg", _Parent) ->
     foreign;
 content_context_name(~"foreignobject", foreign) ->
+    undefined;
+content_context_name(~"desc", foreign) ->
+    undefined;
+content_context_name(~"title", foreign) ->
     undefined;
 content_context_name(_Other, Parent) ->
     Parent.
@@ -658,12 +671,15 @@ selection_role(Tag) ->
             none
     end.
 
--spec controlled(arizona_renderer:tag(), {attr, binary()} | content) -> boolean().
+-spec controlled(arizona_renderer:tag(), {attr, binary()} | content, atom()) -> boolean().
 %% The user edits a control's live value/checkedness/selectedness apart from the
 %% attribute (or textarea content) that is only its default, so a render of the default
-%% stops showing once the user has edited it.
-controlled(Tag, Part) ->
-    controlled_part(tag_name(Tag), Part).
+%% stops showing once the user has edited it. Only an HTML element is a form control:
+%% in foreign content (an SVG `textArea`) nothing is.
+controlled(Tag, Part, undefined) ->
+    controlled_part(tag_name(Tag), Part);
+controlled(_Tag, _Part, _Foreign) ->
+    false.
 
 controlled_part(Tag, {attr, Name}) ->
     case {Tag, ascii_lowercase(Name)} of
@@ -695,19 +711,13 @@ markup_text(Markup, text) ->
         _Tag -> {markup, Text}
     end.
 
--spec attr_markup(binary()) -> binary().
-%% Input preprocessing rewrites a CR byte (alone or before a LF) into a LF before any
-%% reference is decoded, so only a reference keeps one in the value.
-attr_markup(Text) ->
-    binary:replace(escape(Text), ~"\r", ~"&#13;", [global]).
-
 -spec mark_choices(iodata(), [binary()]) -> iodata().
 %% `Fragment` is what a child the parse transform could not see into rendered under a
 %% `<select>` with a value (a component, a runtime value, raw markup). Mark `selected`
 %% every `<option>` in it whose value is one of `Picks`, so the page loads on it: its
 %% `value` attribute, else its text with whitespace stripped and collapsed, both read
 %% as the parser reads them (newlines and NUL preprocessed, character references
-%% decoded from the full named set), the picks read as attribute text the same way.
+%% decoded from the full named set), the picks as the text an escaped value holds.
 %%
 %% The fragment is tokenized the way the parser would, so markup that only looks like
 %% an option is left alone: attribute values, comments, bogus comments, the content of
@@ -726,9 +736,9 @@ attr_markup(Text) ->
 %% static markup after the slot) is valued by the part inside it.
 mark_choices(Fragment, Picks) ->
     Bin = iolist_to_binary(Fragment),
-    %% Picks from arizona_template:picks/3 are read as attribute text already; one a
-    %% caller hands as written is read the same way here.
-    Texts = [preprocess(P) || P <- Picks],
+    %% Picks from arizona_template:picks/3 are the text the page holds already; one a
+    %% caller hands as written is read as an escaped value holds it.
+    Texts = [arizona_template:attr_input(P) || P <- Picks],
     Picked = fun(Text) -> lists:member(Text, Texts) end,
     case choices(Bin, 0, {undefined, []}, Picked, []) of
         [] -> Fragment;
@@ -1077,10 +1087,16 @@ first_attr(Name, Value, Acc) ->
         false -> [{Name, decode_refs(preprocess(Value), attribute)} | Acc]
     end.
 
-%% What the parser does to an attribute value before it decodes it, as
-%% arizona_template:attr_input/1 reads the picks.
+%% What the parser does to markup before it decodes a reference: newlines normalized
+%% (CR LF and CR to LF), NUL replaced with U+FFFD.
 preprocess(Text) ->
-    arizona_template:attr_input(Text).
+    case binary:match(Text, ~"\r") of
+        nomatch ->
+            arizona_template:attr_input(Text);
+        _Some ->
+            Lf = binary:replace(Text, ~"\r\n", ~"\n", [global]),
+            arizona_template:attr_input(binary:replace(Lf, ~"\r", ~"\n", [global]))
+    end.
 
 attr_value(Bin, Pos) ->
     case Bin of
@@ -1289,9 +1305,15 @@ boolean_attrs() -> presence.
 -spec attr_names() -> case_insensitive.
 attr_names() -> case_insensitive.
 
-%% HTML-escape the five metacharacters; safe for element content and
-%% double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is
+%% HTML-escape the five metacharacters, plus CR and NUL (below); safe for element
+%% content and double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is
 %% safe (continuation bytes are all > 127, never a metacharacter).
+%%
+%% The parser rewrites two more bytes before anything reads the page: a CR (alone or
+%% before a LF) becomes a LF, and a NUL becomes U+FFFD (in body text it is dropped).
+%% A live update writes its value through the DOM, which keeps both, so a CR is
+%% written as a reference, which decodes to the CR itself, and a NUL, which no HTML
+%% can hold, as U+FFFD (the client writes it so too).
 %%
 %% Almost every value rendered through here (a name, a number, a date) carries no
 %% metacharacter at all, so locate the first one before building anything: with
@@ -1347,6 +1369,8 @@ escape(<<"<", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&lt;">>);
 escape(<<">", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&gt;">>);
 escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
 escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
+escape(<<"\r", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#13;">>);
+escape(<<0, R/binary>>, Acc) -> escape(R, <<Acc/binary, 16#FFFD/utf8>>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 
 %% `Run` counts the clean bytes appended one by one since the last entity; at two,
@@ -1361,6 +1385,10 @@ escape_runs(<<"\"", R/binary>>, Acc, _Run) ->
     escape_runs(R, <<Acc/binary, "&quot;">>, 0);
 escape_runs(<<"'", R/binary>>, Acc, _Run) ->
     escape_runs(R, <<Acc/binary, "&#39;">>, 0);
+escape_runs(<<"\r", R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, "&#13;">>, 0);
+escape_runs(<<0, R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, 16#FFFD/utf8>>, 0);
 escape_runs(<<C, R/binary>>, Acc, Run) when Run < 2 ->
     escape_runs(R, <<Acc/binary, C>>, Run + 1);
 escape_runs(<<>>, Acc, _Run) ->

@@ -286,7 +286,7 @@ shadow-less custom element is unaffected, since `composed` only matters at a bou
 
 - `set(viewId, key, value)` -- `findViewRoot(viewId)`, then `forEachLocal` writes every matching slot in that view. Always 3-arg; the 2-arg `arizona_js:set/2` ("closest view of the trigger") is a template-only form the client resolves from the trigger element.
 - `setAll(key, value)` -- every matching slot in **every** hosting document (main + popped-out PiP documents), no view scoping.
-- `get(key)` -> first match anywhere; `get(viewId, key)` -> first match in that view. Reads come back as DOM strings (no type preservation); an absent boolean attribute reads `false` and a bare one `true`. A form control's binding is the exception: it reads the live property -- `checked` on an `<input>` and `selected` on an `<option>` as a boolean, `value` on a `<select multiple>` as the list of the selected values the local owns (all of them, but those a static part beside the local names -- a part keeps its pick), `value` on a `<textarea>`/`<select>` or an `<input>` in the HTML value mode "value" (text-like types) as a string -- since after user interaction the dirty value/checkedness flags leave the attribute holding only the default. An interpolated binding of such a live `value` (text-like `<input>`, `<textarea>`, single `<select>`) reads the live value as well, its static affixes stripped, or `null` when it no longer carries them; any other interpolated attribute reads the attribute. Which element/attribute pairs sync is `syncsProp`, matched by local name (a PiP document's elements come from another realm, so `instanceof` would miss them). Anywhere else `value` only reflects the attribute, coerced, so it is neither read nor written as a property: a write would put a removed attribute back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a hidden/checkbox/radio/button `<input>`) or coerce a set one.
+- `get(key)` -> first match anywhere; `get(viewId, key)` -> first match in that view. Reads come back as DOM strings (no type preservation); an absent boolean attribute reads `false` and a bare one `true`. A form control's binding is the exception: it reads the live property -- `checked` on an `<input>` and `selected` on an `<option>` as a boolean, `value` on a `<select multiple>` as the list of the selected values the local owns (all of them, but those a static part beside the local names -- a part keeps its pick), `value` on a `<textarea>`/`<select>` or an `<input>` in the HTML value mode "value" (text-like types) as a string -- since after user interaction the dirty value/checkedness flags leave the attribute holding only the default. An interpolated binding of such a live `value` (text-like `<input>`, `<textarea>`, single `<select>`) reads the live value as well, its static affixes stripped (as the input's value sanitization leaves them: newlines gone, a url or email value trimmed, each value of an email `multiple`), or `null` when it no longer carries them; any other interpolated attribute reads the attribute. Which element/attribute pairs sync is `syncsProp`, matched by local name (a PiP document's elements come from another realm, so `instanceof` would miss them). Anywhere else `value` only reflects the attribute, coerced, so it is neither read nor written as a property: a write would put a removed attribute back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a hidden/checkbox/radio/button `<input>`) or coerce a set one.
 
 A `<select>` carrying a `value` attribute is one whose options the server could not all mark
 `selected` in the template (a component, a runtime value or raw markup renders some; see "A `value`
@@ -312,17 +312,18 @@ batch in which an op, at any depth (an item or list patch's inner ops, a child v
 an item), targeted a select/option/optgroup or carried markup holding one (`noteChoices`,
 `arizona-ops.js`): an option the value names may arrive later. Option markup counts only when the
 page has a valued select (asked once per batch); otherwise only markup bringing a select does, so a
-page without one never searches for one. Picks are read as the parser reads an attribute value
-(newlines normalized, NUL replaced; a live write or a JSON array skipped the parser), as the server
-compares them. Options sharing a value are all marked, and the last one is selected, as the parser
-selects the last `selected` option (the `.value` setter would pick the first), also when an update
-brings one before it. The `arizona_js` attribute effects (`set_attr`, `remove_attr`, `toggle_attr`)
+page without one never searches for one. Picks are read as the text the page holds (`pageText`:
+a NUL as U+FFFD, as the server renders one and as a live text or attribute write stores it; a CR the
+server escapes as `&#13;`, so a CR and a LF are different picks), as the server compares them.
+Options sharing a value are all marked, and the last one is selected, as the parser selects the
+last `selected` option (the `.value` setter would pick the first), also when an update brings one
+before it. The `arizona_js` attribute effects (`set_attr`, `remove_attr`, `toggle_attr`)
 go through the same writers, so `value` on a select means the same from an effect: it picks the
 option(s) it names, and removing it names none, which leaves a single select on its first option
 (the HTML default) and a multiple one on none. A select without a `value` is never touched by a
 batch.
 
-A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. The `ap` affixes are attribute **text** (what `getAttribute` returns), never markup: a literal `?raw` affix (`&#47;u&#47;`) is folded at compile time to its text (`/u/`), and the page holds exactly that text (a CR as `&#13;`, since a CR byte parses as a LF), so composing with `setAttribute` and stripping a `getAttribute` read need no decoding here. A select value's affixes arrive as lists of parts, each the text the page reads from it; `affix` joins them and normalizes the result with `attrInput`, as the page and the server read a select value (a CR ending one part and a LF starting the next are one newline), while under `multiple` each part is normalized alone as its own pick. `set`/`setAll` on a missing view or key are silent no-ops.
+A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. The `ap` affixes are attribute **text** (what `getAttribute` returns), never markup: a literal `?raw` affix (`&#47;u&#47;`) is folded at compile time to its text (`/u/`), and the page holds exactly that text (the server escapes a CR as `&#13;`, since a CR byte parses as a LF), so composing with `setAttribute` and stripping a `getAttribute` read need no decoding here. A select value's affixes arrive as lists of parts, each the text the page reads from it; `affix` joins them as exact text (`pageText`: a NUL as U+FFFD), as the page holds and the server compares a select value (a CR ending one part and a LF starting the next stay a CR and a LF), while under `multiple` each part is its own pick. `set`/`setAll` on a missing view or key are silent no-ops.
 
 Every item of an `?each` shares the slot **key** (keys are compile-time literals), so a `set` hits all of them; `?local` cannot hold per-item independent client state.
 
@@ -416,8 +417,12 @@ the field shows the server's state, which is the point.
 - **Settle.** Inside the worker handler's `apply`, after the ops and effects (so a
   transition-deferred frame settles after its DOM): for each control of the frame's ref still
   owned by that ref, drop the hold and, if connected and it still shows its snapshot,
-  `showDefault` it -- text and textarea `value = defaultValue` only when it differs (a focused
-  one keeps its selection, clamped); a checkbox or radio `checked = defaultChecked` (a group
+  `showDefault` it -- text and textarea `value = defaultValue` only when it differs from what
+  the control shows for its default (`shownDefault`: the default held by a fresh copy carrying only the
+  attributes the sanitization reads -- `type`, `min`, `max`, `step`, `multiple`, a color's `alpha` and `colorspace`, none for a
+  textarea, so no `style` write a strict CSP reports -- and read back, so the browser's own sanitization applies -- a textarea's CR read as a LF, an
+  input's newlines stripped, a color lowercased, a range clamped; a focused one keeps its
+  selection, clamped); a checkbox or radio `checked = defaultChecked` (a group
   settles to its default-checked member, else none); a select with a `value` attribute through
   `applyChooser(sel, true)`, else each option to `defaultSelected` -- and fire `updated()` on
   every control whose state that changed (a radio it unchecked included). A control changed
@@ -425,7 +430,7 @@ the field shows the server's state, which is the point.
   `123` and never `13`: an earlier reply's op lands on the attribute and its settle skips the
   control a later event owns.
 - **Unsent typing.** A marked control that is focused (any member of its radio group) and
-  `edited` (shows something other than its default) is held too. A held write that is not the
+  `edited` (shows something other than its default, as `shownDefault` reads it) is held too. A held write that is not the
   reply to an event carrying the control -- a push, or an effect (even in that reply: a command
   a handler returns is a server statement) -- is noted (`_guardWrote`). Which frame is the
   reply is told by the ref of the frame being applied (`_applying`, against `_ownedRefs`);

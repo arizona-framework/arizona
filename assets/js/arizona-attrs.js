@@ -48,7 +48,8 @@ function decodeRawAttr(raw) {
  */
 export function applySetAttrOp(el, name, val) {
     if (Array.isArray(val)) val = JSON.stringify(val);
-    else if (typeof val !== 'string') val = decodeRawAttr(val.raw);
+    else if (typeof val === 'string') val = pageText(val);
+    else val = decodeRawAttr(val.raw);
     const local = name === 'multiple' ? heldLocal(el) : null;
     // Asked before the write: the default it changes is what the user's edit is
     // compared against.
@@ -180,23 +181,86 @@ function chooserPicks(sel, raw) {
     if (sel.multiple) {
         try {
             const picks = JSON.parse(raw);
-            if (Array.isArray(picks)) return picks.map((p) => attrInput(String(p)));
+            if (Array.isArray(picks)) return picks.map((p) => pageText(String(p)));
         } catch {
             // Not the server's array: one value, as the server compares it.
         }
     }
-    return [attrInput(raw)];
+    return [pageText(raw)];
 }
 
 /**
- * A pick as the parser reads an attribute value (and an option's value reads):
- * newlines normalized, NUL replaced. A value written live or decoded from JSON skipped
- * the parser, so it is read here as the server compares it.
+ * A value as the page holds it: a NUL, which no HTML can hold, as U+FFFD (the server
+ * renders it so). Every other character, a CR included, is held as it is. A server
+ * value written live, and a pick decoded from JSON, go through it so they hold what
+ * the server's render of the same value does.
  * @param {string} text
  * @returns {string}
  */
-export function attrInput(text) {
-    return text.replace(/\r\n?/g, '\n').replace(/\0/g, '\uFFFD');
+export function pageText(text) {
+    return text.includes('\0') ? text.replace(/\0/g, '\uFFFD') : text;
+}
+
+// The <input> types whose value sanitization strips newlines; a url or email value
+// is also stripped of the whitespace around it, an email multiple's around each
+// comma-separated value.
+const LINE_INPUTS = new Set(['text', 'search', 'url', 'tel', 'email', 'password']);
+const LEAD_WS = /^[\t\n\f\r ]+/;
+const TRAIL_WS = /[\t\n\f\r ]+$/;
+
+/**
+ * `text`, part of an input's value, as the input's value sanitization leaves it.
+ * `keepStart`/`keepEnd`: the text's start/end lies inside a value the rest of the
+ * input's value continues, so no whitespace is stripped there.
+ * @param {Element} el
+ * @param {string} text
+ * @param {boolean} keepStart
+ * @param {boolean} keepEnd
+ * @returns {string}
+ */
+export function sanitized(el, text, keepStart, keepEnd) {
+    const input = /** @type {HTMLInputElement} */ (el);
+    if (el.localName !== 'input' || !LINE_INPUTS.has(input.type)) return text;
+    const line = text.replace(/[\r\n]/g, '');
+    if (input.type !== 'url' && input.type !== 'email') return line;
+    const values = input.type === 'email' && input.multiple ? line.split(',') : [line];
+    const last = values.length - 1;
+    return values
+        .map((t, i) => {
+            const s = i === 0 && keepStart ? t : t.replace(LEAD_WS, '');
+            return i === last && keepEnd ? s : s.replace(TRAIL_WS, '');
+        })
+        .join(',');
+}
+
+// The <input> attributes its value sanitization reads (a color's `alpha` and
+// `colorspace` too).
+const SANITIZING_ATTRS = ['type', 'min', 'max', 'step', 'multiple', 'alpha', 'colorspace'];
+
+/**
+ * What a control's `value` shows once `text`, its default, is written to it, as the
+ * browser computes it: a textarea's API value reads a CR as a LF, and an input's value
+ * is sanitized by its type (newlines stripped, a color lowercased, a range clamped and
+ * snapped, an invalid number or date emptied). A fresh, never-edited copy carrying only
+ * the attributes that decide the sanitization holds `text` as its default and shows it:
+ * a clone would carry the control's dirty value instead, and any other attribute copied
+ * (a `style` a strict CSP reports) would be a write of its own. No `value` setter runs.
+ * Compared with `value` to tell an edit from the default.
+ * @param {Element} el
+ * @param {string} text
+ * @returns {string}
+ */
+export function shownDefault(el, text) {
+    const probe = /** @type {HTMLInputElement} */ (el.ownerDocument.createElement(el.localName));
+    if (el.localName === 'textarea') probe.textContent = text;
+    else {
+        for (const name of SANITIZING_ATTRS) {
+            const v = el.getAttribute(name);
+            if (v !== null) probe.setAttribute(name, v);
+        }
+        probe.setAttribute('value', text);
+    }
+    return probe.value;
 }
 
 /**

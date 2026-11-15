@@ -685,21 +685,23 @@ describe('applyOps -- a select that kept its value', () => {
         search.mockRestore();
     });
 
-    // The value compares as the parser reads an attribute: newlines normalized, NUL
-    // replaced, whether it arrives as markup, as a JSON array or through a live write.
-    it('compares the value as the parser reads it', () => {
+    // The value compares as the page holds its text: a CR the server wrote as a
+    // reference is a CR, apart from a LF, and a NUL is U+FFFD, whether it arrives as
+    // markup, as a JSON array or through a live write.
+    it('compares the value as the page holds it', () => {
         setupView(
             'v',
             '<select az="0" multiple value="[&quot;a\\r\\nb&quot;,&quot;c\\u0000&quot;]">' +
-                '<option value="z">z</option><option value="a&#10;b">x</option>' +
+                '<option value="a&#10;b">n</option><option value="a&#13;&#10;b">x</option>' +
                 '<option value="c&#xFFFD;">y</option></select>' +
-                '<select az="1"><option value="z">z</option><option value="a&#10;b">x</option></select>',
+                '<select az="1"><option value="z">z</option><option value="a&#10;b">n</option>' +
+                '<option value="a&#13;&#10;b">x</option></select>',
         );
         applyOps([[OP.SET_ATTR, 'v:0', 'value', '["a\\r\\nb","c\\u0000"]']]);
         const many = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
         expect([...many.selectedOptions].map((o) => o.text)).toEqual(['x', 'y']);
         applyOps([[OP.SET_ATTR, 'v:1', 'value', 'a\r\nb']]);
-        expect(/** @type {HTMLSelectElement} */ (resolveEl('v:1')).value).toBe('a\nb');
+        expect(/** @type {HTMLSelectElement} */ (resolveEl('v:1')).value).toBe('a\r\nb');
     });
 
     // An update that inserts an option sharing the value before the selected one: the
@@ -4181,21 +4183,22 @@ describe('?local -- interpolated attribute', () => {
         expect(get('v', 'k')).toBe('y');
     });
 
-    // A select value's parts are read joined, then normalized, as the page reads the
-    // value: a CR ending one part and a LF starting the next are one newline. Rendered
-    // for `{value, [?raw(~"a&#13;"), <<"\nb">>, ?local(k, <<>>)]}`.
-    it('reads a select value affix split across a CR and a LF as one newline', () => {
+    // A select value's parts are read joined as the exact text the page holds: a CR
+    // ending one part and a LF starting the next stay a CR and a LF (the server writes
+    // the CR as `&#13;`). Rendered for `{value, [?raw(~"a&#13;"), <<"\nb">>, ?local(k,
+    // <<>>)]}` over options `zz`, `a\nb` and `a\r\nb`.
+    it('reads a select value affix split across a CR and a LF as exact text', () => {
         setupView(
             'v',
-            `<select az="0" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;k&quot;},&quot;ap&quot;:{&quot;value&quot;:[[&quot;a\\r&quot;,&quot;\\nb&quot;],[]]}}" value="a\nb"><option az="1" value="zz">1</option><option az="2" value="a\nb" selected>2</option></select>`,
+            `<select az="0" az-local="{&quot;a&quot;:{&quot;value&quot;:&quot;k&quot;},&quot;ap&quot;:{&quot;value&quot;:[[&quot;a\\r&quot;,&quot;\\nb&quot;],[]]}}" value="a&#13;\nb"><option az="1" value="zz">1</option><option az="2" value="a\nb">2</option><option az="3" value="a&#13;\nb" selected>3</option></select>`,
         );
         const select = document.querySelector('select');
         expect(get('v', 'k')).toBe('');
         set('v', 'k', 'x');
-        expect(select.getAttribute('value')).toBe('a\nbx');
+        expect(select.getAttribute('value')).toBe('a\r\nbx');
         set('v', 'k', '');
-        expect(select.getAttribute('value')).toBe('a\nb');
-        expect(select.value).toBe('a\nb');
+        expect(select.getAttribute('value')).toBe('a\r\nb');
+        expect(select.value).toBe('a\r\nb');
         expect(get('v', 'k')).toBe('');
     });
 

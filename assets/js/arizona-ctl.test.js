@@ -478,6 +478,79 @@ describe('server-owned controls: textarea content', () => {
         expect(el.value).toBe('hello');
     });
 
+    // The `value` API reads a textarea's CR (alone or before a LF) as a LF, while its
+    // default keeps the CR the server wrote as `&#13;`: an untouched textarea is
+    // not edited, so a later push still shows while it is focused.
+    it('a content update holding a CR leaves the textarea unedited', async () => {
+        await connect(`<textarea az="0" az-ctl="content">x</textarea>`);
+        const el = /** @type {HTMLTextAreaElement} */ (document.querySelector('textarea'));
+        el.focus();
+        mock.reply([[mod.OP.TEXT, 'page:0', 'c&#13;\nd', true]], null);
+        expect(el.value).toBe('c\nd');
+        mock.reply([[mod.OP.TEXT, 'page:0', 'e&#13;\nf', true]], null);
+        expect(el.value).toBe('e\nf');
+    });
+
+    // A text input's value strips the newlines its default holds: once a reply
+    // settles it on that default, it is not edited, so a later push still shows
+    // while it is focused.
+    it('an input whose default holds a newline is not edited once settled', async () => {
+        await connect(`<input az="0" ${CHANGE} value="a&#13;&#10;b" az-ctl="value" />`);
+        const el = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        edit(el, (e) => {
+            e.value = 'typed';
+        });
+        mock.reply(null, mock.lastRef());
+        expect(el.value).toBe('ab');
+        el.focus();
+        mock.reply([setAttr(0, 'value', 'c')], null);
+        expect(el.value).toBe('c');
+    });
+
+    // A color input's value is its default lowercased: once a reply settles it on that
+    // default, it is not edited, so a later push still shows while it is focused.
+    it('a color input whose default is uppercase is not edited once settled', async () => {
+        await connect(`<input az="0" type="color" ${CHANGE} value="#FF0000" az-ctl="value" />`);
+        const el = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        edit(el, (e) => {
+            e.value = '#0000ff';
+        });
+        mock.reply(null, mock.lastRef());
+        expect(el.value).toBe('#ff0000');
+        el.focus();
+        mock.reply([setAttr(0, 'value', '#00ff00')], null);
+        expect(el.value).toBe('#00ff00');
+    });
+
+    // Reading the default's shown value copies only what decides the sanitization: a
+    // `style` (or any other attribute) set on the probe would be an inline-style write a
+    // strict CSP reports, once per check.
+    it('reads the shown default without copying unrelated attributes', async () => {
+        await connect(
+            `<input az="0" type="color" alpha colorspace="display-p3" style="color: red" title="t" ${CHANGE} value="#FF0000" az-ctl="value" />`,
+        );
+        const el = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+        const names = /** @type {string[]} */ ([]);
+        const orig = Element.prototype.setAttribute;
+        const spy = vi.spyOn(Element.prototype, 'setAttribute').mockImplementation(function (n, v) {
+            if (this !== el) names.push(n);
+            return orig.call(this, n, v);
+        });
+        edit(el, (e) => {
+            e.value = '#0000ff';
+        });
+        mock.reply(null, mock.lastRef());
+        expect(el.value).toBe('#ff0000');
+        el.focus();
+        mock.reply([setAttr(0, 'value', '#00ff00')], null);
+        expect(el.value).toBe('#00ff00');
+        spy.mockRestore();
+        // A color's `alpha` and `colorspace` decide its value too, so they are copied.
+        expect(names).toEqual(expect.arrayContaining(['type', 'alpha', 'colorspace', 'value']));
+        const decides = ['type', 'min', 'max', 'step', 'multiple', 'alpha', 'colorspace', 'value'];
+        expect(names.filter((n) => !decides.includes(n))).toEqual([]);
+    });
+
     it('an unmarked textarea keeps the user text, as before', async () => {
         await connect(`<textarea az="0">a</textarea>`);
         const el = document.querySelector('textarea');

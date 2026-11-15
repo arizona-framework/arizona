@@ -1,4 +1,10 @@
-import { applyChoosers, applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
+import {
+    applyChoosers,
+    applyRemAttrOp,
+    applySetAttrOp,
+    pageText,
+    shownDefault,
+} from './arizona-attrs.js';
 import {
     _pipWindows,
     _viewDocs,
@@ -291,6 +297,7 @@ function mountHooksOutside(root, kept) {
  * @param {boolean} [isHtml]
  */
 function applyTextOp(el, az, val, isHtml) {
+    if (!isHtml) val = pageText(val);
     const marker = findMarker(el, az);
     if (marker) {
         // A re-rendered slot keeps the az-nodiff elements its new content names again:
@@ -342,7 +349,7 @@ function applyTextOp(el, az, val, isHtml) {
             }
         }
         const ta = /** @type {HTMLTextAreaElement} */ (el);
-        if (live && ta.value !== ta.defaultValue) ta.value = ta.defaultValue;
+        if (live && ta.value !== shownDefault(ta, ta.defaultValue)) ta.value = ta.defaultValue;
     }
     notifyUpdated(el);
 }
