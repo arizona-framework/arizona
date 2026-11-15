@@ -49,7 +49,7 @@ setHost({
     release: () => {},
     holds: () => false,
     ctlEvent: () => {},
-    holdReplay: () => (fn) => fn(),
+    keepOrigin: () => (fn) => fn(),
     navigate: (url, opts) => loadPage(url, opts?.replace),
     leavePage: loadPage,
 });

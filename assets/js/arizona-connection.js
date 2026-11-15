@@ -1,5 +1,5 @@
 import { applyChooser, applyChoosers, shownDefault, syncsProp } from './arizona-attrs.js';
-import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
+import { applyEffects, executeJS, formFields, osHost, replayEvents } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import {
     bindDocumentEvents,
@@ -234,51 +234,20 @@ const _savedForms = new Map();
 const _replayedForms = new Set();
 
 /**
- * The current connection's form replay: how many of its parts have yet to post
- * their events -- the restore itself, plus any command that defers its work (a
- * view transition's update, a fetch's response effects). The acknowledgement
- * goes out when it reaches zero, so it always follows every replayed event.
- * Cleared on close, so a late part of an old replay acknowledges nothing.
- * @type {{pending: number}|null}
- */
-let _replay = null;
-
-/** The replay whose commands are executing right now, if any. @type {{pending: number}|null} */
-let _replayRunning = null;
-
-/** @param {{pending: number}} replay */
-function replayPartDone(replay) {
-    replay.pending--;
-    if (replay.pending === 0 && replay === _replay) workerPost(W_ACK_REPLAY);
-}
-
-/**
- * Hold the replay executing now (if any) open for work a command runs later.
- * Returns the runner for that work: it runs it as part of the replay, then
- * releases the hold -- once, however many times it is called. The work keeps the
- * origin of the command too: one a server frame ran (a handler's
- * `transition(set_attr(...))`) still writes as the server (`_inFrame`).
+ * Keep the origin of the command running now for work it runs later: the returned
+ * runner runs that work as the command would have, so one a server frame ran (a
+ * handler's `transition(set_attr(...))`) still writes as the server (`_inFrame`).
  * @returns {(fn: () => void) => void}
  */
-function holdReplay() {
-    const replay = _replayRunning;
+function keepOrigin() {
     const inFrame = _inFrame;
-    if (replay) replay.pending++;
-    let held = replay !== null;
     return (fn) => {
-        const outer = _replayRunning;
         const outerFrame = _inFrame;
-        if (held) _replayRunning = replay;
         _inFrame = inFrame;
         try {
             fn();
         } finally {
             _inFrame = outerFrame;
-            _replayRunning = outer;
-            if (held) {
-                held = false;
-                replayPartDone(/** @type {{pending: number}} */ (replay));
-            }
         }
     };
 }
@@ -1273,11 +1242,10 @@ function restoreFocus(marks) {
 
 /**
  * Restore form state after reconnection. Sets field values on matching forms
- * and replays az-change events to sync server state, once: a replayed form is
+ * and replays their az-change push_events to sync server state, once: a replayed form is
  * tracked in `_replayedForms` until the server acknowledges the replay.
  */
 export function restoreFormState() {
-    _replay = { pending: 1 }; // the restore itself
     for (const [formId, { fields, azChange, replay }] of _savedForms) {
         // Saved from any hosting document, so look in all of them -- a form popped
         // out to a PiP window is not reachable from the main document.
@@ -1341,13 +1309,11 @@ export function restoreFormState() {
                 }
             }
         }
-        if (replay && azChange && _connected) {
-            _replayRunning = _replay;
-            try {
-                executeJS(form, null, JSON.parse(azChange));
-            } finally {
-                _replayRunning = null;
-            }
+        // Only the push_events (see replayEvents): a fetch-only form asks for
+        // no acknowledgement, so it never becomes suspect.
+        const events = replay && azChange && _connected ? replayEvents(JSON.parse(azChange)) : [];
+        if (events.length > 0) {
+            executeJS(form, null, events);
             _replayedForms.add(formId);
         }
     }
@@ -1355,7 +1321,7 @@ export function restoreFormState() {
     // The server handles a socket's frames in order, and an event synchronously,
     // so the pong to a ping sent after every replayed event proves they were
     // handled without crashing the view.
-    if (_replayedForms.size > 0) replayPartDone(/** @type {{pending: number}} */ (_replay));
+    if (_replayedForms.size > 0) workerPost(W_ACK_REPLAY);
 }
 
 /**
@@ -1715,7 +1681,6 @@ export function connect(endpoint, params = {}) {
                         saveFormState(code === WS_CLOSE_CRASH ? _replayedForms : null);
                     }
                     _replayedForms.clear();
-                    _replay = null;
                     // A 1000 close is a deliberate end, which the worker does not
                     // reconnect after. Once per outage, since the worker's failed
                     // reconnect attempts each report a close too -- and again when
@@ -1821,7 +1786,6 @@ export function connect(endpoint, params = {}) {
                 // Same as a close: the owed replies die with the socket.
                 dropOwedReplies();
                 _replayedForms.clear();
-                _replay = null;
                 cancelMountReload();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
@@ -1857,7 +1821,6 @@ export function connect(endpoint, params = {}) {
         _mountProof = null;
         _outage = false;
         _replayedForms.clear();
-        _replay = null;
         cancelMountReload();
         setPendingScroll(null);
         _unloadingToOtherPage = false;
@@ -1909,7 +1872,7 @@ setHost({
         if (t.kind === 'any' && (_navRefs.size > 0 || _navAwaitResync)) return;
         armPendingTransition(t);
     },
-    holdReplay,
+    keepOrigin,
     carry,
     release,
     holds,

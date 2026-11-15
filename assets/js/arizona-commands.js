@@ -377,6 +377,24 @@ function enterSlot(holder, slot) {
 }
 
 /**
+ * The `push_event`s a reconnect replays of a form's `az-change` (single or list),
+ * looked for through `transition` wrappers only. The replay rebuilds the view
+ * state a remount discarded, which only an event holds; every other command acts
+ * on the page or beyond it (a fetch repeats its request), so it is not re-run.
+ * @param {Array<*>} cmds
+ * @param {Array<Array<*>>} [out]
+ * @returns {Array<Array<*>>}
+ */
+export function replayEvents(cmds, out = []) {
+    const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+    for (const c of list) {
+        if (c[0] === JS_PUSH_EVENT) out.push(c);
+        else if (c[0] === JS_TRANSITION) replayEvents(c[2], out);
+    }
+    return out;
+}
+
+/**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
  * searched across the main document and any PiP documents. First-match only --
  * the single-target effects `focus`/`blur`/`scroll_to` use this, since those act
@@ -527,7 +545,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 // every caller's containment -- a throwing command would become
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
-                const later = host.holdReplay();
+                const later = host.keepOrigin();
                 runTransition(opts, () =>
                     later(() => {
                         try {
@@ -742,7 +760,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
             // A synchronous throw here leaves nothing in flight: the slot and the
-            // replay hold are taken once the request is out.
+            // frame origin are taken once the request is out.
             const req = fetch(target, {
                 method,
                 body,
@@ -750,7 +768,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 headers,
                 keepalive: opts.keep_alive === true,
             });
-            const later = host.holdReplay();
+            const later = host.keepOrigin();
             const release = enterSlot(holder, slot);
             req.then((resp) =>
                 resp.text().then((text) =>

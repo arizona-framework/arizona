@@ -803,6 +803,28 @@ describe('a reconnect', () => {
         c.msg(null, null, replay[3]);
         expect($('input').value).toBe('');
     });
+
+    it('a push_event replayed out of a transition, beside a fetch, still carries the controls', async () => {
+        const v = view(` az-change='[[20,{},[0,"changed"]],[22,"/save",{}]]'`);
+        const originalFetch = globalThis.fetch;
+        const fetchSpy = vi.fn(() => new Promise(() => {}));
+        globalThis.fetch = fetchSpy;
+        try {
+            const c = await start(v);
+            $('input').value = 'typed';
+            touch($('input'));
+            c.close();
+            c.open(true);
+            c.msg([[8, 'page', v]], null, null, true);
+            expect(fetchSpy).not.toHaveBeenCalled();
+            const replay = c.sent().at(-1);
+            expect(replay.slice(0, 3)).toEqual(['page', 'changed', { q: 'typed' }]);
+            c.msg(null, null, replay[3]);
+            expect($('input').value).toBe('');
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
 });
 
 // The larger design's scenarios below raise an IME composition, or type inside a
