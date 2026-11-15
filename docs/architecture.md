@@ -964,7 +964,11 @@ handle_event(~"inc", _P, B) ->
   network failure. A redirect is an `arizona_js:navigate` effect
   (`arizona_controller:reply_redirect/1`), not an HTTP 3xx. `keep_alive` (default `false`) maps to
   the browser's `fetch(url, { keepalive: true })` so a request fired just before a navigation
-  completes instead of being cancelled (browser inflight-body cap ~64KB).
+  completes instead of being cancelled (browser inflight-body cap ~64KB). `on_repeat` (`allow`,
+  the default, or `drop`) decides what a repeat does while the previous request is in flight -- the
+  same method and URL from the same holder (the form the request posts, else the trigger); `drop`
+  issues none and dispatches `arizona:fetch-dropped` instead. The holder carries `az-busy` while a
+  request it holds is in flight, under either policy. See "HTTP fetch" in `CLAUDE.md`.
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
@@ -1104,7 +1108,7 @@ the implied ones, naming the parts it renders (`az-ctl="value checked"`): the cl
 only those, so a checkbox whose rendered part is only its `value` keeps its checkedness. A
 `?local` (the client's own), an az-nodiff subtree (never updated) and a backend without the
 callback (`?json`, `?terminal`) emit nothing. `az-ctl` is
-reserved (`reserved_attr`), like `az` and `az-local`.
+reserved (`reserved_attr`), like `az`, `az-local` and `az-busy`.
 
 **Client.** The guarantee: *once the server has answered an event that carried a control's
 value, and the user has not changed the control since, the control shows what the server

@@ -285,20 +285,19 @@ export function maybeResetForm(form) {
  * `nav`, the first SPA `navigate`/`patch` that runs unconditionally (a `full`
  * navigate is a plain page load and needs no socket). A navigation under `on_key`
  * runs only on a matching key, so it counts as `event`: it cannot be degraded to a
- * page load that may never have been asked for. `fetch` (the fetch commands) also
- * tells the submit listener to leave `az-form-reset` to the fetch's own response,
- * wherever the fetch sits (a transition runs it inside its callback, an on_key on a
- * matching key), and which requests to check against one still in flight.
+ * page load that may never have been asked for. `fetch` also tells the submit
+ * listener to leave `az-form-reset` to the fetch's own response, wherever the fetch
+ * sits (a transition runs it inside its callback, an on_key on a matching key).
  * @param {Array<*>} cmds
- * @param {{event?: boolean, fetch?: Array<*>[], nav?: Array<*>}} acc
+ * @param {{event?: boolean, fetch?: boolean, nav?: Array<*>}} acc
  * @param {boolean} conditional
- * @returns {{event?: boolean, fetch?: Array<*>[], nav?: Array<*>}}
+ * @returns {{event?: boolean, fetch?: boolean, nav?: Array<*>}}
  */
 export function socketNeeds(cmds, acc, conditional) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
     for (const c of list) {
         if (c[0] === JS_PUSH_EVENT) acc.event = true;
-        else if (c[0] === JS_FETCH) acc.fetch = [...(acc.fetch ?? []), c];
+        else if (c[0] === JS_FETCH) acc.fetch = true;
         else if (c[0] === JS_PATCH || (c[0] === JS_NAVIGATE && !c[2]?.full)) {
             if (conditional) acc.event = true;
             else acc.nav ??= c;
@@ -309,103 +308,69 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
- * A user gesture (a click, a submit, ...): its commands, the view-transition updates
- * they defer and the requests they start, counted in `pending`, and the elements it
- * holds. Its holds are released together once `pending` drops to 0.
- * @typedef {{pending: number, held: Set<Element>}} Gesture
+ * The fetch requests in flight, per holder (see `JS_FETCH`): the count of each slot,
+ * `METHOD url`, it holds. Keyed by the node, so a holder a re-render replaces is a
+ * new one with nothing in flight.
+ * @type {WeakMap<Element, Map<string, number>>}
  */
+const _inFlight = new WeakMap();
 
 /**
- * The gesture whose commands are running now, if any. A command a server effect, a
- * response or a replay runs has none, so it holds nothing.
- * @type {Gesture|null}
- */
-let _gesture = null;
-
-/**
- * The elements a gesture's non-GET/HEAD `fetch` holds until its last request has
- * settled. While one is held, another gesture's fetch on it is dropped: a double
- * click or a second Enter would otherwise post a login or an order twice, and the
- * server cannot tell the repeat from a new request. Dropped rather than queued,
- * since a queued repeat is the duplicate request itself. The same gesture's own
- * fetches all go out (`[fetch(A), fetch(B)]` is two requests the author asked for).
- * An element replaced by a re-render is a new element, held by nothing.
- * @type {WeakMap<Element, Gesture>}
- */
-const _fetchHeld = new WeakMap();
-
-/** @returns {Gesture} */
-export function newGesture() {
-    return { pending: 0, held: new Set() };
-}
-
-/**
- * Run `fn` as part of gesture `g`.
- * @param {Gesture} g
- * @param {() => void} fn
- */
-export function inGesture(g, fn) {
-    g.pending++;
-    const outer = _gesture;
-    _gesture = g;
-    try {
-        fn();
-    } finally {
-        _gesture = outer;
-        settleGesture(g);
-    }
-}
-
-/**
- * One piece of `g`'s work is done; the last one releases its holds.
- * @param {Gesture} g
- */
-function settleGesture(g) {
-    if (--g.pending > 0) return;
-    for (const h of g.held) if (_fetchHeld.get(h) === g) _fetchHeld.delete(h);
-    g.held.clear();
-}
-
-/**
- * The element a gesture's `fetch` command holds while in flight: the trigger's form
- * when the request posts it (no explicit `body`), from whichever control inside it,
- * else the trigger. None for a GET/HEAD, which changes nothing, so a newer query is
- * never dropped behind an older one.
- * @param {Element} el
- * @param {Array<*>} cmd
- * @returns {Element|null}
- */
-function fetchHold(el, cmd) {
-    const form = el.closest?.('form') ?? null;
-    const method = (cmd[2]?.method || form?.getAttribute('method') || 'post').toUpperCase();
-    if (method === 'GET' || method === 'HEAD') return null;
-    return cmd[2]?.body === undefined && form ? form : el;
-}
-
-/**
- * Hold, for gesture `g`, every element a submit's `fetches` will hold, so a repeat
- * submit is dropped whole -- none of its commands run -- even while the first one's
- * commands wait in a view transition. False, holding nothing, when another gesture
- * holds one.
- * @param {Gesture} g
- * @param {Element} form
- * @param {Array<*>[]} fetches
+ * Whether `holder` carries `az-busy` while a request it holds is in flight: a
+ * page element, never the page root (a server effect's holder) or a detached one
+ * (a response's stand-in), which no app styles.
+ * @param {Element} holder
  * @returns {boolean}
  */
-export function holdSubmit(g, form, fetches) {
-    const held = [];
-    for (const c of fetches) {
-        const h = fetchHold(form, c);
-        if (!h) continue;
-        const cur = _fetchHeld.get(h);
-        if (cur && cur !== g) return false;
-        held.push(h);
+function busyMarks(holder) {
+    return holder.isConnected && holder !== holder.ownerDocument.documentElement;
+}
+
+/**
+ * A fetch's URL as a slot names it: resolved against the page, so a relative and
+ * an absolute spelling of one endpoint are the same slot. A URL that does not
+ * parse is taken as written; the request itself reports it.
+ * @param {Element} holder
+ * @param {string} url
+ * @returns {string}
+ */
+function fetchHref(holder, url) {
+    try {
+        return new URL(url, holder.ownerDocument.baseURI).href;
+    } catch {
+        return url;
     }
-    for (const h of held) {
-        _fetchHeld.set(h, g);
-        g.held.add(h);
+}
+
+/**
+ * Count a request in `slot` of `holder` as in flight, marking the holder busy.
+ * Returns its release, which takes effect once however often it is called.
+ * @param {Element} holder
+ * @param {string} slot
+ * @returns {() => void}
+ */
+function enterSlot(holder, slot) {
+    const slots = _inFlight.get(holder) ?? new Map();
+    _inFlight.set(holder, slots);
+    slots.set(slot, (slots.get(slot) ?? 0) + 1);
+    if (busyMarks(holder) && !holder.hasAttribute('az-busy')) {
+        holder.setAttribute('az-busy', '');
+        notifyUpdated(holder);
     }
-    return true;
+    let settled = false;
+    return () => {
+        if (settled) return;
+        settled = true;
+        const n = /** @type {number} */ (slots.get(slot)) - 1;
+        if (n > 0) slots.set(slot, n);
+        else slots.delete(slot);
+        if (slots.size > 0) return;
+        _inFlight.delete(holder);
+        if (holder.hasAttribute('az-busy')) {
+            holder.removeAttribute('az-busy');
+            notifyUpdated(holder);
+        }
+    };
 }
 
 /**
@@ -560,13 +525,8 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
                 const later = host.holdReplay();
-                // The deferred commands are still the gesture's: its holds wait for them.
-                const g = _gesture;
-                if (g) g.pending++;
                 runTransition(opts, () =>
                     later(() => {
-                        const outer = _gesture;
-                        _gesture = g;
                         try {
                             runCommands(el, event, inner, `${prefix}${index}.`);
                         } catch (err) {
@@ -575,9 +535,6 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                                 `[arizona] az-transition command failed: ${detail}`,
                                 'az-transition',
                             );
-                        } finally {
-                            _gesture = outer;
-                            if (g) settleGesture(g);
                         }
                     }),
                 );
@@ -726,89 +683,72 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
-            // Only a gesture holds: a repeat of one is the double submit.
-            const g = _gesture;
-            const held = g && el ? fetchHold(el, cmd) : null;
-            if (g && held) {
-                const cur = _fetchHeld.get(held);
-                if (cur && cur !== g) break;
-                _fetchHeld.set(held, g);
-                g.held.add(held);
-                g.pending++;
-            }
-            let settled = false;
-            const release = () => {
-                if (g && held && !settled) {
-                    settled = true;
-                    settleGesture(g);
-                }
-            };
-            // Every path from the hold to the request releases it: a throw here
-            // (fetch() rejecting its init synchronously) would lock the form for good.
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
-            let req;
-            let onError;
-            try {
-                const method = (
-                    opts.method ||
-                    form?.getAttribute('method') ||
-                    'post'
-                ).toUpperCase();
-                const headers = { accept: 'application/json', ...(opts.headers || {}) };
-                let target = url;
-                let body;
-                if (method === 'GET' || method === 'HEAD') {
-                    // No request body for GET/HEAD -- carry the payload in the query string
-                    // instead (fetch is otherwise POST-oriented: it sets cookies). The same
-                    // precedence as a body: an explicit `body` wins over the form's fields.
-                    let params = null;
-                    if (opts.body !== undefined) params = bodyQuery(opts.body);
-                    else if (form) {
-                        params = new URLSearchParams(
-                            /** @type {any} */ (new FormData(form, submitter(event))),
-                        );
-                    }
-                    const qs = params ? params.toString() : '';
-                    if (qs) target = appendQuery(url, qs);
-                } else if (opts.body !== undefined) {
-                    body = JSON.stringify(opts.body);
-                    headers['content-type'] = 'application/json';
-                } else if (form) {
-                    // Mirror a normal form POST: application/x-www-form-urlencoded.
-                    // (multipart / file uploads are a documented non-goal.)
-                    body = new URLSearchParams(
+            const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
+            // What a repeat is: the same method and URL from the same holder -- the
+            // form the request posts, else the trigger (the page root for a server
+            // effect's, a response's detached stand-in for one it carries).
+            const holder =
+                opts.body === undefined && form ? form : (el ?? document.documentElement);
+            const slot = `${method} ${fetchHref(holder, url)}`;
+            if (opts.on_repeat === 'drop' && _inFlight.get(holder)?.has(slot)) {
+                // Dropped, not queued: a queued repeat is the duplicate request.
+                (busyMarks(holder) ? holder : document).dispatchEvent(
+                    new CustomEvent('arizona:fetch-dropped', {
+                        bubbles: true,
+                        detail: { url, method, reason: 'in_flight' },
+                    }),
+                );
+                break;
+            }
+            const headers = { accept: 'application/json', ...(opts.headers || {}) };
+            let target = url;
+            let body;
+            if (method === 'GET' || method === 'HEAD') {
+                // No request body for GET/HEAD -- carry the payload in the query string
+                // instead (fetch is otherwise POST-oriented: it sets cookies). The same
+                // precedence as a body: an explicit `body` wins over the form's fields.
+                let params = null;
+                if (opts.body !== undefined) params = bodyQuery(opts.body);
+                else if (form) {
+                    params = new URLSearchParams(
                         /** @type {any} */ (new FormData(form, submitter(event))),
                     );
                 }
-                onError = (/** @type {object} */ detail) => {
-                    // Still the gesture's, so a retry it posts holds the form again.
-                    const run = () => {
-                        if (opts.on_error)
-                            runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
-                    };
-                    // Contained: a throw from the response leg would fall into the
-                    // network .catch and run on_error a second time, and the DOM
-                    // event must still report the failure.
-                    try {
-                        if (g && held) inGesture(g, run);
-                        else run();
-                    } catch (err) {
-                        console.error('[arizona] fetch on_error threw', err);
-                    }
-                    document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
-                };
-                req = fetch(target, {
-                    method,
-                    body,
-                    credentials: CREDENTIALS[opts.credentials] || 'same-origin',
-                    headers,
-                    keepalive: opts.keep_alive === true,
-                });
-            } catch (err) {
-                release();
-                throw err;
+                const qs = params ? params.toString() : '';
+                if (qs) target = appendQuery(url, qs);
+            } else if (opts.body !== undefined) {
+                body = JSON.stringify(opts.body);
+                headers['content-type'] = 'application/json';
+            } else if (form) {
+                // Mirror a normal form POST: application/x-www-form-urlencoded.
+                // (multipart / file uploads are a documented non-goal.)
+                body = new URLSearchParams(
+                    /** @type {any} */ (new FormData(form, submitter(event))),
+                );
             }
+            const onError = (/** @type {object} */ detail) => {
+                // Contained: a throw from the response leg would fall into the
+                // network .catch and run on_error a second time, and the DOM event
+                // must still report the failure.
+                try {
+                    if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                } catch (err) {
+                    console.error('[arizona] fetch on_error threw', err);
+                }
+                document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
+            };
+            // A synchronous throw here leaves nothing in flight: the slot and the
+            // replay hold are taken once the request is out.
+            const req = fetch(target, {
+                method,
+                body,
+                credentials: CREDENTIALS[opts.credentials] || 'same-origin',
+                headers,
+                keepalive: opts.keep_alive === true,
+            });
             const later = host.holdReplay();
+            const release = enterSlot(holder, slot);
             req.then((resp) =>
                 resp.text().then((text) =>
                     later(() => {
@@ -833,16 +773,15 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         } else if (resp.ok) {
                             effects = [];
                         }
+                        // Settled before its effects or on_error run, so either (or
+                        // the user, at once) may issue the same request again.
+                        release();
                         // Effect application is isolated from the trailing network
                         // .catch: a throw here is an app bug on a request that
                         // SUCCEEDED (the body parsed), so it is logged -- letting it
                         // flow into the .catch would fire on_error/arizona:fetch-error
                         // as a phantom network failure, after effects partially applied.
                         if (effects !== null) {
-                            // Settled: released before the effects, which run outside
-                            // the gesture, so one of them (or the user, at once) may
-                            // post the form again.
-                            release();
                             // A detached stand-in carrying the trigger's target, never
                             // a live element: as a push_event trigger a form or a field
                             // would put what was typed in the payload, and any element
@@ -859,13 +798,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             } catch (err) {
                                 console.error('[arizona] fetch response effect threw', err);
                             }
-                        } else {
-                            // on_error is the gesture's: the form stays held until it
-                            // ran, its deferred view-transition work included, so a
-                            // user submit cannot slip in ahead of its retry.
-                            onError({ url, status: resp.status });
-                            release();
-                        }
+                        } else onError({ url, status: resp.status });
                         // Honor az-form-reset only on a 2xx success, so a validation
                         // error (a non-2xx) keeps the typed fields. Same isolation as
                         // the effects above.
@@ -880,11 +813,8 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 ),
             ).catch((error) =>
                 later(() => {
-                    try {
-                        onError({ url, error });
-                    } finally {
-                        release();
-                    }
+                    release();
+                    onError({ url, error });
                 }),
             );
             break;

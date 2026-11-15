@@ -7,6 +7,7 @@
 -dialyzer({nowarn_function, attr_refuses_an_improper_list_value/1}).
 -dialyzer({nowarn_function, attr_refuses_a_name_that_is_not_a_binary/1}).
 -dialyzer({nowarn_function, attr_refuses_a_selector_that_is_not_a_binary/1}).
+-dialyzer({nowarn_function, fetch_refuses_a_bad_on_repeat/1}).
 
 -export([all/0]).
 -export([groups/0]).
@@ -15,6 +16,8 @@
 -export([fetch_unwraps_on_error_cmd_list/1]).
 -export([fetch_without_on_error_unchanged/1]).
 -export([fetch_empty_on_error_list/1]).
+-export([fetch_encodes_on_repeat/1]).
+-export([fetch_refuses_a_bad_on_repeat/1]).
 -export([transition_empty_cmd_list/1]).
 -export([on_key_empty_cmd_list/1]).
 -export([set_attr_writes_a_command_as_an_array/1]).
@@ -36,7 +39,12 @@
 -export([attr_refuses_a_selector_that_is_not_a_binary/1]).
 
 all() ->
-    [{group, fetch_on_error}, {group, empty_cmd_lists}, {group, az_attr_commands}].
+    [
+        {group, fetch_on_error},
+        {group, fetch_on_repeat},
+        {group, empty_cmd_lists},
+        {group, az_attr_commands}
+    ].
 
 groups() ->
     [
@@ -44,6 +52,10 @@ groups() ->
             fetch_unwraps_single_on_error_cmd,
             fetch_unwraps_on_error_cmd_list,
             fetch_without_on_error_unchanged
+        ]},
+        {fetch_on_repeat, [parallel], [
+            fetch_encodes_on_repeat,
+            fetch_refuses_a_bad_on_repeat
         ]},
         {empty_cmd_lists, [parallel], [
             fetch_empty_on_error_list,
@@ -127,6 +139,35 @@ fetch_without_on_error_unchanged(Config) when is_list(Config) ->
         {arizona_effect, [?EFFECT_FETCH, ~"/x", #{method := post}]},
         arizona_js:fetch(~"/x", #{method => post})
     ).
+
+%% --------------------------------------------------------------------
+%% fetch/2 on_repeat
+%% --------------------------------------------------------------------
+
+%% The policy rides to the client as its name, which is what the client reads.
+fetch_encodes_on_repeat(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            [?EFFECT_FETCH, ~"/x", #{~"on_repeat" := Name}],
+            json:decode(arizona_effect:encode_json(arizona_js:fetch(~"/x", #{on_repeat => Repeat})))
+        )
+     || {Repeat, Name} <- [{allow, ~"allow"}, {drop, ~"drop"}]
+    ].
+
+%% Any other value is refused where it is written, not ignored by the client
+%% (which would quietly issue every repeat).
+fetch_refuses_a_bad_on_repeat(Config) when is_list(Config) ->
+    [
+        begin
+            Fun = fun() -> arizona_js:fetch(~"/x", #{on_repeat => Bad}) end,
+            ?assertError({bad_on_repeat, Bad}, Fun()),
+            ?assertNotEqual(
+                nomatch, string:find(formatted_error(Fun), ~"on_repeat must be allow or drop")
+            ),
+            ?assertMatch({arizona_js, fetch, _, _}, top_frame(Fun))
+        end
+     || Bad <- [queue, ~"drop", true]
+    ].
 
 %% --------------------------------------------------------------------
 %% Empty command lists

@@ -1,12 +1,4 @@
-import {
-    executeJS,
-    flushTimer,
-    holdSubmit,
-    inGesture,
-    maybeResetForm,
-    newGesture,
-    socketNeeds,
-} from './arizona-commands.js';
+import { executeJS, flushTimer, maybeResetForm, socketNeeds } from './arizona-commands.js';
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
@@ -32,29 +24,6 @@ export function mountHooksPublic(root) {
 }
 
 /**
- * The last delegated click's gesture, with the node it hit, until the task that
- * dispatched it ends. A click on a submit button (Enter in a field clicks the
- * default one) is followed in that task by the form's submit, a separate event of
- * the same gesture: the submit adopts it, so a fetch the click started does not
- * make the submit look like a repeat.
- * @type {{target: Node, g: import('./arizona-commands.js').Gesture, used?: boolean}|null}
- */
-let _clickGesture = null;
-
-/**
- * The gesture a submit belongs to: the click on its submitter, else its own.
- * @param {SubmitEvent} e
- */
-function submitGesture(e) {
-    const c = _clickGesture;
-    if (!c || !e.submitter?.contains(c.target)) return newGesture();
-    // One click submits once: a later submit in the same task is not its gesture.
-    c.used = true;
-    _clickGesture = null;
-    return c.g;
-}
-
-/**
  * Run the `az-<eventType>` command for one delegated event.
  *
  * `capture` picks the resolver, and the two are not interchangeable. A BUBBLING
@@ -70,9 +39,6 @@ function submitGesture(e) {
  * @param {boolean} capture
  */
 function runDelegated(e, attr, sel, capture) {
-    // Before every return: a click that ends up submitting nothing (cancelled,
-    // an invalid form) must not leave its gesture for a later click's submit.
-    if (e.type === 'click') _clickGesture = null;
     const t = /** @type {Element} */ (e.target);
     // Not always an Element: a viewport `scroll`, the page-level `mouseenter`, and
     // a server-sent `dispatch_event` all target the Document, which has no closest().
@@ -105,23 +71,7 @@ function runDelegated(e, attr, sel, capture) {
     // attribute reports once.
     try {
         const cmds = JSON.parse(raw);
-        const g = newGesture();
-        /** @type {{target: Node, g: import('./arizona-commands.js').Gesture, used?: boolean}|null} */
-        const click = e.type === 'click' ? { target: t, g } : null;
-        if (click) {
-            _clickGesture = click;
-            // A task, not a microtask: the submit follows the click's dispatch.
-            setTimeout(() => {
-                if (_clickGesture === click) _clickGesture = null;
-            }, 0);
-        }
-        try {
-            inGesture(g, () => executeJS(el, e, withTransitionAttr(el, cmds)));
-        } finally {
-            // A click this click's own commands dispatched cleared it; this click's
-            // submit has yet to follow -- unless one already used it.
-            if (click && !click.used) _clickGesture = click;
-        }
+        executeJS(el, e, withTransitionAttr(el, cmds));
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         // Keyed by the attribute, not the message: a churning bad value would
@@ -296,6 +246,7 @@ const AZ_DIRECTIVES = new Set([
     'navigate',
     'patch',
     'ctl',
+    'busy',
 ]);
 
 /**
@@ -438,15 +389,13 @@ function scanEvents(root) {
 }
 
 /**
- * Tell the app that a submit ran nothing: every drop dispatches
- * `arizona:submit-dropped` on the form, so the app can show feedback. One the page
- * caused also warns; a repeat while the form's fetch is in flight is the user's
- * double click, not a fault, so it does not.
+ * Tell the console and the app that a submit ran nothing: every drop warns and
+ * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
  * @param {Element} form
- * @param {'disconnected'|'unproven'|'in_flight'} reason
+ * @param {'disconnected'|'unproven'} reason
  */
 function dropSubmit(form, reason) {
-    if (reason !== 'in_flight') console.warn(`[arizona] az-submit dropped: ${reason}`);
+    console.warn(`[arizona] az-submit dropped: ${reason}`);
     form.dispatchEvent(
         new CustomEvent('arizona:submit-dropped', { bubbles: true, detail: { reason } }),
     );
@@ -509,7 +458,7 @@ export function bindDocumentEvents(target, signal, abort) {
                 return;
             }
             const raw = form.getAttribute('az-submit');
-            /** @type {{event?: boolean, fetch?: Array<*>[], nav?: Array<*>}} */
+            /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
             let needs = {};
             try {
                 const cmds = raw ? JSON.parse(raw) : null;
@@ -531,33 +480,22 @@ export function bindDocumentEvents(target, signal, abort) {
                     dropSubmit(form, 'disconnected');
                     return;
                 }
-                // The form's previous fetch has not settled: a second click or Enter
-                // would post it twice, so the repeat is dropped whole (none of its
-                // other commands run, nothing resets). Held from here, not from the
-                // fetch, so a view transition deferring the commands leaves no gap.
-                const g = submitGesture(/** @type {SubmitEvent} */ (e));
-                if (needs.fetch && !holdSubmit(g, form, needs.fetch)) {
-                    dropSubmit(form, 'in_flight');
-                    return;
+                // Flush pending debounced inputs so the server sees them before the
+                // submit. Only while connected: a flush now would send them into a
+                // closed socket, while a still-armed timer can deliver them later.
+                // `form.elements` too: a control associated by `form="id"` sits
+                // outside the form element, and a missed flush lands after the submit.
+                if (host.ready()) {
+                    const sel = '[az-debounce],[az-throttle]';
+                    const pending = new Set(form.querySelectorAll(sel));
+                    // The form's own slots too: a form-level az-debounce paces the
+                    // field events it delegates.
+                    if (form.matches(sel)) pending.add(form);
+                    for (const el of /** @type {HTMLFormElement} */ (form).elements)
+                        if (el.matches(sel)) pending.add(el);
+                    for (const el of pending) flushTimer(el);
                 }
-                inGesture(g, () => {
-                    // Flush pending debounced inputs so the server sees them before the
-                    // submit. Only while connected: a flush now would send them into a
-                    // closed socket, while a still-armed timer can deliver them later.
-                    // `form.elements` too: a control associated by `form="id"` sits
-                    // outside the form element, and a missed flush lands after the submit.
-                    if (host.ready()) {
-                        const sel = '[az-debounce],[az-throttle]';
-                        const pending = new Set(form.querySelectorAll(sel));
-                        // The form's own slots too: a form-level az-debounce paces the
-                        // field events it delegates.
-                        if (form.matches(sel)) pending.add(form);
-                        for (const el of /** @type {HTMLFormElement} */ (form).elements)
-                            if (el.matches(sel)) pending.add(el);
-                        for (const el of pending) flushTimer(el);
-                    }
-                    if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
-                });
+                if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 warnOnce(
@@ -625,10 +563,7 @@ export function bindDocumentEvents(target, signal, abort) {
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
             try {
-                const cmds = JSON.parse(raw);
-                inGesture(newGesture(), () =>
-                    executeJS(container, e, withTransitionAttr(container, cmds)),
-                );
+                executeJS(container, e, withTransitionAttr(container, JSON.parse(raw)));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 warnOnce(`[arizona] az-drop did not run as a command list: ${detail}`, 'az-drop');
