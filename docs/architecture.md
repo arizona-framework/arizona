@@ -978,9 +978,20 @@ handle_event(~"inc", _P, B) ->
 
 **Commands:**
 
-- `push_event/1,2` -- send event to server (template-only). Without explicit payload, auto-collects
+- `push_event/1,2,3` -- send event to server. Without explicit payload, auto-collects
   from element context (see below). Explicit payload is merged on top of auto-collected (explicit
-  wins).
+  wins). `push_event/3` takes options, carried as the command's fourth element only when one
+  differs from its default (`[0, Event, Payload, Opts]`, so a client reading the event at 1 and
+  the payload at 2 is unaffected): `on_repeat` (`allow`, the default, or `drop`) decides what a
+  repeat does while the previous send awaits its reply -- the same event to the same view from
+  the same holder (the trigger; the form for `az_submit`; the page for a handler effect). `drop`
+  sends none and dispatches `arizona:event-dropped` instead, judged as the event goes out (after
+  `az-debounce`/`az-throttle`). The frame of a `drop` send carries a reply ref; the guard ends
+  when the reply lands, before its effects run, or when the socket closes, and the holder
+  carries `az-busy` meanwhile, as for a `fetch` in flight. A UI guard, not exactly-once
+  delivery. Web client only: the native clients track no replies, so `arizona_android` has no
+  `push_event/3` and a `?json` client ignores the option. See "Event attributes & effects" in
+  `CLAUDE.md`.
 - `toggle/1`, `show/1`, `hide/1` -- element visibility via `hidden` attribute
 - `add_class/2`, `remove_class/2`, `toggle_class/2` -- CSS class manipulation
 - `set_attr/3`, `remove_attr/2`, `toggle_attr/2,4` -- attribute manipulation (`toggle_attr/2`
@@ -1010,7 +1021,8 @@ handle_event(~"inc", _P, B) ->
   the default, or `drop`) decides what a repeat does while the previous request is in flight -- the
   same method and URL from the same holder (the form the request posts, else the trigger); `drop`
   issues none and dispatches `arizona:fetch-dropped` instead. The holder carries `az-busy` while a
-  request it holds is in flight, under either policy; a reconnect resync moves the request, and a
+  request it holds is in flight, under either policy (and while a `push_event` it holds under
+  `drop` awaits its reply); a reconnect resync moves the request, and a
   pending `az-form-reset`, onto the node that replaces its holder. See "HTTP fetch" in `CLAUDE.md`.
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
@@ -2336,7 +2348,10 @@ known child view, dispatches to child; otherwise dispatches to root handler. Ret
 `{ok, Ops, Effects}`. Ops are scoped with `"viewId:target"` format. The response is sent as a JSON
 envelope `{"o": scopedOps, "e": effects}`, or not at all when the event changed nothing. A client
 that waits on the reply appends a reply ref (`[target, eventName, payload, ref]`): the envelope
-then carries `"r": ref`, and an event that changed nothing is answered by `{"r": ref}` alone.
+then carries `"r": ref`, and an event that changed nothing is answered by `{"r": ref}` alone. The
+web client tags an event whose reply something waits on -- a view transition, the server-owned
+controls it carries, or the `on_repeat => drop` guard of a `push_event` -- with one ref shared by
+all of them.
 
 **SPA navigation + unmount:** Client clicks `[az-navigate]` link -> JS intercepts, calls
 `history.pushState`, sends `["navigate", {path, qs}, ref]` over WebSocket. `arizona_socket`'s navigate

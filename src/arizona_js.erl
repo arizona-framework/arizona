@@ -502,8 +502,9 @@ cookie for the *same* identity (e.g. password change) needs no reload.
   newer request matters. Only the fetch is dropped: the commands beside it run.
   There is no client timeout: a hung request keeps its slot until the browser
   fails it or the holder is re-rendered. Under either value the holder carries
-  an `az-busy` attribute while a request it holds is in flight (never the
-  document root `<html>` or a detached element).
+  an `az-busy` attribute while a request it holds is in flight, or a
+  `push_event/3` under `drop` it holds awaits its reply (never the document
+  root `<html>` or a detached element).
 
 To send the user elsewhere, return an `arizona_js:navigate/1` effect from the
 controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
