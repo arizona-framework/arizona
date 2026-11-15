@@ -654,7 +654,7 @@ implied_attrs(Tag, Names) ->
             []
     end.
 
--spec selection_role(arizona_renderer:tag(), atom()) ->
+-spec selection_role(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     none
     | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
     | {choice, #{value := binary(), selected := binary()}}.

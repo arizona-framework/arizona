@@ -280,12 +280,15 @@ compile_choices_need_mark_choices(Config) when is_list(Config) ->
         {error,
             [
                 {_File, [
-                    {6, arizona_parse_transform,
-                        {missing_callback, Backend, {mark_choices, 2}, choices}}
+                    {
+                        {6, 10},
+                        arizona_parse_transform,
+                        {missing_callback, Backend, {mark_choices, 2}, choices}
+                    }
                 ]}
             ],
             []},
-        arizona_parse_transform:parse_transform(forms(Source), [])
+        arizona_parse_transform:parse_transform(forms(Source, {1, 1}), [])
     ),
     %% Choices the transform rewrites need no marking at render.
     _ = compile(
@@ -839,7 +842,11 @@ source(Mod, Body) ->
         Body ++ ".".
 
 forms(Source) ->
-    {ok, Tokens, _} = erl_scan:string(Source),
+    forms(Source, 1).
+
+%% `Location` `{1, 1}` gives every form a column too.
+forms(Source, Location) ->
+    {ok, Tokens, _} = erl_scan:string(Source, Location),
     [
         begin
             {ok, F} = erl_parse:parse_form(Toks),

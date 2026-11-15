@@ -4790,7 +4790,7 @@ compile_mixed_non_static(Item, Module, State) ->
 
 compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
     DynAST = make_nodiff_dynamic_ast(Item, Module, line(Item), Backend, State#state.content_ctx),
-    flush(State, with_choices(DynAST, State));
+    flush(State, with_choices(DynAST, Item, State));
 compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% A bare (non-element) dynamic at the fragment top level. Allocate it a
     %% unique az from the shared element counter and wrap it in content-slot markers,
@@ -4805,7 +4805,7 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     DynAST = make_esc_text_dynamic_ast(
         Az, Item, Module, line(Item), Backend, State0#state.content_ctx
     ),
-    State3 = flush(State2, with_choices(DynAST, State0)),
+    State3 = flush(State2, with_choices(DynAST, Item, State0)),
     State3#state{buf = [Backend:content_slot_close()]}.
 
 %% A BINARY tag is taken verbatim, exactly as a binary attribute name is
@@ -6006,7 +6006,7 @@ emit_child_dynamic(
             DynAST = make_nodiff_dynamic_ast(
                 Child, Module, line(Child), Backend, State0#state.content_ctx
             ),
-            {flush(State0, with_choices(DynAST, State0)), Slot + 1}
+            {flush(State0, with_choices(DynAST, Child, State0)), Slot + 1}
     end;
 emit_child_dynamic(Child, ElemAz, State0, Slot) ->
     emit_marked_child(Child, ElemAz, State0, Slot).
@@ -6061,17 +6061,16 @@ emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = St
     DynAST = make_esc_text_dynamic_ast(
         MarkerAz, Child, Module, line(Child), Backend, State0#state.content_ctx
     ),
-    State2 = flush(State1, with_choices(DynAST, State0)),
+    State2 = flush(State1, with_choices(DynAST, Child, State0)),
     {State2#state{buf = [Backend:content_slot_close()]}, Slot + 1}.
 
 %% The slot of a chooser's child the compiler cannot see into: its value goes to
 %% arizona_template:choices/3 with the chooser's value, read lazily (only the SSR render
 %% calls it), and whether the slot escapes, which the child decided (esc_spec/2).
-with_choices(DynAST, #state{choices = none}) ->
+with_choices(DynAST, _Child, #state{choices = none}) ->
     DynAST;
-with_choices({tuple, L, [Az, Spec, Loc]}, #state{choices = {Value, Multiple}} = State) ->
-    {tuple, _, [_Module, {integer, _, Line}]} = Loc,
-    ok = needs_callback(State#state.backend, {mark_choices, 2}, choices, Line),
+with_choices({tuple, L, [Az, Spec, Loc]}, Child, #state{choices = {Value, Multiple}} = State) ->
+    ok = needs_callback(State#state.backend, {mark_choices, 2}, choices, anno(Child)),
     Picks = {'fun', L, {clauses, [{clause, L, [], [], [{tuple, L, [Value, Multiple]}]}]}},
     {tuple, L, [Az, choices_spec(Spec, Picks), Loc]}.
 
@@ -8233,7 +8232,6 @@ needs_markup_text(Backend, L) ->
 %% one a capability makes required): refused where the template uses it, rather than
 %% as a crash of the transform or `undef` at render.
 needs_callback(Backend, {Fun, Arity} = Callback, Need, L) ->
-    _ = code:ensure_loaded(Backend),
     case erlang:function_exported(Backend, Fun, Arity) of
         true -> ok;
         false -> parse_error({missing_callback, Backend, Callback, Need}, L)
