@@ -55,6 +55,7 @@ and the select keeps its value for the client to apply after.
     authored_selected_is_refused/1,
     choice_text_needs_markup_text/1,
     foreign_select_is_no_chooser/1,
+    fragment_follows_svg_breakout/1,
     shadowing_parameter_is_renamed/1,
     user_map_keyed_s_is_not_a_template/1,
     shadowing_hoisted_read_is_refused/1,
@@ -129,6 +130,7 @@ groups() ->
             authored_selected_is_refused,
             choice_text_needs_markup_text,
             foreign_select_is_no_chooser,
+            fragment_follows_svg_breakout,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
@@ -1087,6 +1089,36 @@ foreign_select_is_no_chooser(Config) when is_list(Config) ->
     Back = iolist_to_binary(arizona_render:render_to_iolist(Mod:back(B))),
     ?assertEqual(1, count_selected(Back), Back),
     ?assertEqual(1, length(binary:matches(Back, ~"value=\"b\"")), Back).
+
+%% The fragment is read in the content context the parser reads it in: a breakout tag
+%% (`div`) inside `<svg>` holds HTML, so an option there is a real one; a `/` closes an
+%% element only when that element is foreign (`<svg/>`, `<foreignObject/>`), never an
+%% HTML one, where the parser ignores it (`<div/>` inside `<svg>` stays open).
+fragment_follows_svg_breakout(Config) when is_list(Config) ->
+    Count = fun(Fragment) ->
+        count_selected(iolist_to_binary(arizona_html:mark_choices(Fragment, [~"a"])))
+    end,
+    ?assertEqual(1, Count(~"<svg><div><option value=a>A</option></div></svg>")),
+    ?assertEqual(1, Count(~"<svg/><option value=a>A</option>")),
+    ?assertEqual(1, Count(~"<svg><div/><option value=a>A</option></svg>")),
+    ?assertEqual(0, Count(~"<svg><option value=a>A</option></svg>")),
+    ?assertEqual(0, Count(~"<svg><foreignObject/><option value=a>A</option></svg>")),
+    %% End to end: a raw child of a select carrying a value.
+    lists:foreach(
+        fun({N, Raw}) ->
+            Mod = compile_module(
+                select_src_mod(
+                    "sel_breakout_" ++ integer_to_list(N), "arizona_template:raw(" ++ Raw ++ ")"
+                )
+            ),
+            HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"b"}))),
+            ?assertEqual([~"b"], selected_values(HTML), HTML)
+        end,
+        [
+            {1, "<<\"<svg/><option value=\\\"b\\\">B</option>\">>"},
+            {2, "<<\"<svg><div/><option value=\\\"b\\\">B</option></svg>\">>"}
+        ]
+    ).
 
 args(0) -> "";
 args(A) -> lists:join(", ", ["A" ++ integer_to_list(N) || N <- lists:seq(1, A)]).

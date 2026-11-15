@@ -52,6 +52,54 @@ identical to the previous inlined emission.
 -export([embed_attrs/2]).
 -export([format_error/1]).
 
+%% A start tag that makes the parser leave foreign content (content_context_name/2).
+-define(IS_BREAKOUT(Tag),
+    (Tag =:= ~"b" orelse
+        Tag =:= ~"big" orelse
+        Tag =:= ~"blockquote" orelse
+        Tag =:= ~"body" orelse
+        Tag =:= ~"br" orelse
+        Tag =:= ~"center" orelse
+        Tag =:= ~"code" orelse
+        Tag =:= ~"dd" orelse
+        Tag =:= ~"div" orelse
+        Tag =:= ~"dl" orelse
+        Tag =:= ~"dt" orelse
+        Tag =:= ~"em" orelse
+        Tag =:= ~"embed" orelse
+        Tag =:= ~"h1" orelse
+        Tag =:= ~"h2" orelse
+        Tag =:= ~"h3" orelse
+        Tag =:= ~"h4" orelse
+        Tag =:= ~"h5" orelse
+        Tag =:= ~"h6" orelse
+        Tag =:= ~"head" orelse
+        Tag =:= ~"hr" orelse
+        Tag =:= ~"i" orelse
+        Tag =:= ~"img" orelse
+        Tag =:= ~"li" orelse
+        Tag =:= ~"listing" orelse
+        Tag =:= ~"menu" orelse
+        Tag =:= ~"meta" orelse
+        Tag =:= ~"nobr" orelse
+        Tag =:= ~"ol" orelse
+        Tag =:= ~"p" orelse
+        Tag =:= ~"pre" orelse
+        Tag =:= ~"ruby" orelse
+        Tag =:= ~"s" orelse
+        Tag =:= ~"small" orelse
+        Tag =:= ~"span" orelse
+        Tag =:= ~"strong" orelse
+        Tag =:= ~"strike" orelse
+        Tag =:= ~"sub" orelse
+        Tag =:= ~"sup" orelse
+        Tag =:= ~"table" orelse
+        Tag =:= ~"tt" orelse
+        Tag =:= ~"u" orelse
+        Tag =:= ~"ul" orelse
+        Tag =:= ~"var")
+).
+
 %% This module implements the whole renderer contract, one export per callback, so it
 %% legitimately exceeds the god-module function count.
 -elvis([{elvis_style, no_god_modules, disable}]).
@@ -334,6 +382,13 @@ rawtext_names() ->
 content_context(Tag, Parent) ->
     content_context_name(tag_name(Tag), Parent).
 
+%% Whether an element is itself foreign: `<svg>` anywhere, or any tag but a breakout one
+%% inside foreign content.
+is_foreign_element(~"svg", _Content) -> true;
+is_foreign_element(_Name, undefined) -> false;
+is_foreign_element(Name, _Foreign) when ?IS_BREAKOUT(Name) -> false;
+is_foreign_element(_Name, _Foreign) -> true.
+
 %% `<svg>` switches the parser into foreign content; `<foreignObject>`, `<desc>` and
 %% `<title>` (its HTML integration points) switch back for their children. MathML is
 %% deliberately not tracked: it would need its own integration points (`mtext` and
@@ -348,52 +403,7 @@ content_context(Tag, Parent) ->
 %% attribute, which this callback cannot see, so it stays foreign here.
 content_context_name(~"svg", _Parent) ->
     foreign;
-content_context_name(Tag, foreign) when
-    Tag =:= ~"b";
-    Tag =:= ~"big";
-    Tag =:= ~"blockquote";
-    Tag =:= ~"body";
-    Tag =:= ~"br";
-    Tag =:= ~"center";
-    Tag =:= ~"code";
-    Tag =:= ~"dd";
-    Tag =:= ~"div";
-    Tag =:= ~"dl";
-    Tag =:= ~"dt";
-    Tag =:= ~"em";
-    Tag =:= ~"embed";
-    Tag =:= ~"h1";
-    Tag =:= ~"h2";
-    Tag =:= ~"h3";
-    Tag =:= ~"h4";
-    Tag =:= ~"h5";
-    Tag =:= ~"h6";
-    Tag =:= ~"head";
-    Tag =:= ~"hr";
-    Tag =:= ~"i";
-    Tag =:= ~"img";
-    Tag =:= ~"li";
-    Tag =:= ~"listing";
-    Tag =:= ~"menu";
-    Tag =:= ~"meta";
-    Tag =:= ~"nobr";
-    Tag =:= ~"ol";
-    Tag =:= ~"p";
-    Tag =:= ~"pre";
-    Tag =:= ~"ruby";
-    Tag =:= ~"s";
-    Tag =:= ~"small";
-    Tag =:= ~"span";
-    Tag =:= ~"strong";
-    Tag =:= ~"strike";
-    Tag =:= ~"sub";
-    Tag =:= ~"sup";
-    Tag =:= ~"table";
-    Tag =:= ~"tt";
-    Tag =:= ~"u";
-    Tag =:= ~"ul";
-    Tag =:= ~"var"
-->
+content_context_name(Tag, foreign) when ?IS_BREAKOUT(Tag) ->
     undefined;
 content_context_name(~"foreignobject", foreign) ->
     undefined;
@@ -846,7 +856,9 @@ choices_after(Bin, Name, Close, {Content, Stack} = Ctx, Picked, Marks) ->
             choices(Bin, Next, Ctx, Picked, Marks);
         parsed ->
             Inner = content_context_name(Name, Content),
-            Self = binary:at(Bin, Close - 1) =:= $/ andalso Content =/= undefined,
+            %% A `/` closes only a foreign element (`<svg/>`, `<foreignObject/>`): the
+            %% parser ignores it on an HTML one, a breakout inside `<svg>` included.
+            Self = binary:at(Bin, Close - 1) =:= $/ andalso is_foreign_element(Name, Content),
             case Inner of
                 Content ->
                     choices(Bin, Close + 1, Ctx, Picked, Marks);
