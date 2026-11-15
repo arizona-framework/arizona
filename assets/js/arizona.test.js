@@ -15,6 +15,7 @@ import {
     setAll,
 } from './arizona.js';
 import { applyChoosers } from './arizona-attrs.js';
+import { maybeResetForm } from './arizona-commands.js';
 import { embedAttrs, TEST_ATTRS } from './test-proofs.js';
 
 // ---------------------------------------------------------------------------
@@ -9553,9 +9554,10 @@ describe('executeJS -- fetch', () => {
                     '<input id="t" name="t" value="a&#10;b" />' +
                     '<input type="date" id="d" name="d" value="bad" />' +
                     '<select id="s" name="s"><optgroup disabled><option>pick</option>' +
-                    '</optgroup><option>a</option></select>',
+                    '</optgroup><option>a</option></select>' +
+                    '<textarea id="ta" name="ta">a&#13;b</textarea>',
             );
-            const out = outsideAtReset(form, ['r', 'c', 'n', 'e', 't', 'd', 's']);
+            const out = outsideAtReset(form, ['r', 'c', 'n', 'e', 't', 'd', 's', 'ta']);
             await answer();
             expect(out).toEqual([]);
             expect($('#a').value).toBe('');
@@ -9574,6 +9576,52 @@ describe('executeJS -- fetch', () => {
             expect($('#x').checked).toBe(true);
             expect($('#rb').checked).toBe(true);
             expect($('#a').value).toBe('');
+        });
+
+        it('a fetch the reset listener runs sends every field, kept ones too', async () => {
+            for (const method of ['post', 'get']) {
+                document.body.innerHTML =
+                    '<form az-form-reset><input id="to" name="to" />' +
+                    '<textarea id="msg" name="msg"></textarea></form>';
+                $('#to').value = 'ada';
+                $('#msg').value = 'message 1';
+                const form = $('form');
+                form.addEventListener(
+                    'reset',
+                    (/** @type {Event} */ e) => executeJS(form, e, [22, '/inner', { method }]),
+                    { once: true },
+                );
+                const answer = sendHeld(form);
+                $('#msg').value = 'message 2';
+                await answer();
+                const [url, init] = globalThis.fetch.mock.calls[1];
+                const sent = method === 'get' ? url : String(init.body);
+                expect(sent).toContain('to=ada');
+                expect(sent).toContain('msg=message+2');
+                expect($('#msg').form).toBe(form);
+            }
+        });
+
+        it('a reset nested in its reset listener hands the outer one back', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input id="a" name="a" /><input id="b" name="b" /></form>';
+            $('#a').value = 'sent';
+            const form = $('form');
+            form.addEventListener('reset', () => maybeResetForm(form), { once: true });
+            /** @type {string[]} */
+            const read = [];
+            form.addEventListener('reset', (/** @type {Event} */ e) => {
+                executeJS(form, e, [22, '/inner', {}]);
+                read.push(String(globalThis.fetch.mock.calls.at(-1)[1].body));
+            });
+            const answer = sendHeld(form);
+            $('#b').value = 'typed';
+            await answer();
+            // The inner reset's event (before it resets a), then the outer one's:
+            // both read b, which the outer reset set aside.
+            expect(read).toEqual(['a=sent&b=typed', 'a=&b=typed']);
+            expect($('#b').value).toBe('typed');
+            expect($('#b').form).toBe(form);
         });
 
         it('a button added in flight does not keep anything from form.reset()', async () => {
@@ -9846,6 +9894,12 @@ describe('fetch + az-form-reset via the submit listener', () => {
         expect(ev?.[2]).toMatchObject({ to: 'ada', msg: 'message 2' });
         expect(carried).toEqual([to, msg]);
         expect(msg.value).toBe('message 2');
+        expect(msg.form).toBe(form);
+
+        // Once the reset is over, a form-level event reads the form as it is.
+        mod.executeJS(form, null, [0, 'custom']);
+        const custom = mock.getSentMessages().find((m) => m[1] === 'custom');
+        expect(custom?.[2]).toMatchObject({ to: '', msg: 'message 2' });
         expect(msg.form).toBe(form);
 
         mock.restore();

@@ -453,12 +453,17 @@ export function maybeResetForm(form, sent) {
             temp: group ? /** @type {string} */ (temp.get(group)) : null,
         };
     });
+    // A reset its own `reset` listener starts on the same form (a requestSubmit whose
+    // push_event resets it) reads the outer one's controls too, and hands it back
+    // when it ends.
+    const prev = _resetting;
+    const outer = prev?.form === form ? prev.detached : [];
     try {
         detach(detached);
-        _resetting = { form, detached };
+        _resetting = { form, detached: [...outer, ...detached] };
         f.reset();
     } finally {
-        _resetting = null;
+        _resetting = prev;
         attach(detached);
     }
 }
@@ -889,6 +894,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const url = cmd[1];
             const opts = cmd[2] || {};
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
+            // Every field, those a reset in progress set aside included (a fetch its
+            // `reset` listener runs).
+            const formData = (/** @type {HTMLFormElement} */ f) =>
+                withAllControls(f, () => new FormData(f, submitter(event)));
             const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
             // What a repeat is: the same method and URL from the same holder -- the
             // form the request posts, else the trigger (the page root for a server
@@ -916,9 +925,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 let params = null;
                 if (opts.body !== undefined) params = bodyQuery(opts.body);
                 else if (form) {
-                    params = new URLSearchParams(
-                        /** @type {any} */ (new FormData(form, submitter(event))),
-                    );
+                    params = new URLSearchParams(/** @type {any} */ (formData(form)));
                 }
                 const qs = params ? params.toString() : '';
                 if (qs) target = appendQuery(url, qs);
@@ -928,9 +935,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             } else if (form) {
                 // Mirror a normal form POST: application/x-www-form-urlencoded.
                 // (multipart / file uploads are a documented non-goal.)
-                body = new URLSearchParams(
-                    /** @type {any} */ (new FormData(form, submitter(event))),
-                );
+                body = new URLSearchParams(/** @type {any} */ (formData(form)));
             }
             const onError = (/** @type {object} */ detail) => {
                 // Contained: a throw from the response leg would fall into the
@@ -945,7 +950,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             };
             // What the form showed as it was sent, for a reset on the 2xx to keep what
             // the user changed while the request was in flight.
-            const sent = form?.hasAttribute('az-form-reset') ? formSnapshot(form) : undefined;
+            const sent = form?.hasAttribute('az-form-reset')
+                ? withAllControls(form, () => formSnapshot(form))
+                : undefined;
             // A synchronous throw here leaves nothing in flight: the slot and the
             // frame origin are taken once the request is out.
             const req = fetch(target, {
