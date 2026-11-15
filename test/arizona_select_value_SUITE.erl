@@ -495,6 +495,11 @@ mark_choices_reads_the_fragment(Config) when is_list(Config) ->
             ~"<template><template></template><option value=a></template>"
         ]
     ),
+    %% A `<template>` holding other elements ends at its own end tag.
+    ?assertEqual(
+        ~"<template><b>t</b></template><option value=a selected>",
+        Mark(~"<template><b>t</b></template><option value=a>", [~"a"])
+    ),
     ?assertEqual(
         ~"<svg><title>t</title></svg><option value=a selected>",
         Mark(~"<svg><title>t</title></svg><option value=a>", [~"a"])

@@ -910,7 +910,7 @@ past_template(Bin, Pos, Depth) ->
                     past_template(Bin, Close + 1, Depth - 1);
                 {Skip, Next} when Skip =:= skip; Skip =:= skip_text ->
                     past_template(Bin, Next, Depth);
-                {_Tag, _Name, _Attrs, Close} when is_integer(Close) ->
+                {start, _Name, _Attrs, Close, _Self} when is_integer(Close) ->
                     past_template(Bin, Close + 1, Depth);
                 {_Tag, _Name, Close} when is_integer(Close) ->
                     past_template(Bin, Close + 1, Depth);
