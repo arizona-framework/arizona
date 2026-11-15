@@ -1020,7 +1020,8 @@ handle_event(~"inc", _P, B) ->
   safe no-op
 - `select/1` -- select (highlight) the first matching `<input>`/`<textarea>`'s text
   (`HTMLInputElement.select`); a non-input match is a safe no-op
-- `copy_to_clipboard/1` -- copy the first match's `value` (form control) or `textContent` to the
+- `copy_to_clipboard/1` -- copy the first match's `value` (an `input`, `textarea`, `select` or
+  `output`, or a custom element's string `value`) or else its `textContent` to the
   clipboard (`navigator.clipboard.writeText`); needs a secure context + user gesture, so it is an
   **event command only** (not a handler effect); a missing/blocked clipboard is a safe no-op
 - `show_modal/1`, `close_modal/1` -- open the first matching `<dialog>` as a true modal

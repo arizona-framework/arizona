@@ -2793,6 +2793,35 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         }
     });
 
+    it('copy_to_clipboard copies the text of an element whose value is no field value', () => {
+        // An <li>'s value is its ordinal (0 unless set), a <button>'s the data it submits.
+        document.body.innerHTML =
+            '<ul><li id="i">Item text</li></ul><button id="b" value="">Label</button>';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#i']);
+        executeJS(document.body, null, [27, '#b']);
+        expect(writeText.mock.calls).toEqual([['Item text'], ['Label']]);
+    });
+
+    it('copy_to_clipboard copies the value of an output and of a custom field element', () => {
+        if (!customElements.get('x-copy-field'))
+            customElements.define(
+                'x-copy-field',
+                class extends HTMLElement {
+                    get value() {
+                        return 'field value';
+                    }
+                },
+            );
+        document.body.innerHTML =
+            '<output id="o">5</output><x-copy-field id="x">shown</x-copy-field>';
+        /** @type {HTMLOutputElement} */ (document.getElementById('o')).value = '7';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#o']);
+        executeJS(document.body, null, [27, '#x']);
+        expect(writeText.mock.calls).toEqual([['7'], ['field value']]);
+    });
+
     it('copy_to_clipboard falls back to textContent for a non-form element', () => {
         document.body.innerHTML = '<code id="t">npm i arizona</code>';
         const writeText = stubClipboard();

@@ -297,6 +297,26 @@ function shownState(el) {
 }
 
 /**
+ * What a field shows as its value: an input's, textarea's, select's or output's, or a
+ * custom element's string `value`. Anything else has none here -- an <li>'s `value` is
+ * its ordinal, a <button>'s the data it submits, and a form's a control named `value`.
+ * @param {Element} el
+ * @returns {string|undefined}
+ */
+function fieldValue(el) {
+    const v = /** @type {any} */ (el).value;
+    switch (el.localName) {
+        case 'input':
+        case 'textarea':
+        case 'select':
+        case 'output':
+            return v;
+        default:
+            return el.localName.includes('-') && typeof v === 'string' ? v : undefined;
+    }
+}
+
+/**
  * @param {unknown} a
  * @param {unknown} b
  */
@@ -1202,9 +1222,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // (event command only); a missing/blocked clipboard is a safe no-op. Not
             // a DOM mutation, so no notifyUpdated.
             withQuery(cmd[1], (t) => {
-                // A form has no value: its `value` is a control named so.
-                const value = t.localName === 'form' ? undefined : /** @type {any} */ (t).value;
-                const text = value ?? t.textContent ?? '';
+                const text = fieldValue(t) ?? t.textContent ?? '';
                 // writeText rejects without permission / a secure context; catch it
                 // (like JS_OS) so a blocked copy is a logged no-op, not an unhandled
                 // rejection.

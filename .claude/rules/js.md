@@ -27,7 +27,8 @@ and throws where there is none (`value`, `reset`). On an element that is or may 
 `getAttribute('id')`, its controls with `formControls`, reset it with `resetForm` (`arizona-util.js`,
 through the prototype), and test or toggle `hidden` through the attribute -- never read
 `form.<prop>`; a property
-a form lacks (`value`) is read only off an element that is not a form. jsdom
+a form lacks (`value`) is read only off a field (`fieldValue`: input, textarea, select, output, or a
+custom element's string `value`). jsdom
 does not shadow, so a test that must hold on a real page uses `shadowNamedControls`
 (`test-shadow.js`), which gives every form markup parses its controls as named properties, as
 Chromium and Firefox do (`test-shadow.test.js` pins that).
