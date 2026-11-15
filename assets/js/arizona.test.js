@@ -9322,6 +9322,213 @@ describe('executeJS -- fetch', () => {
         await vi.waitFor(() => expect(input.value).toBe(''));
     });
 
+    describe('az-form-reset keeps what changed while the request was in flight', () => {
+        /** Send `form` by fetch; the returned function answers it with a 2xx. */
+        function sendHeld(form) {
+            /** @type {() => void} */
+            let answer = () => {};
+            globalThis.fetch = vi.fn(
+                () =>
+                    new Promise((res) => {
+                        answer = () => res(okResponse([]));
+                    }),
+            );
+            executeJS(form, null, [22, '/x', {}]);
+            return async () => {
+                answer();
+                // The reset runs after the effects body is read.
+                await new Promise((r) => setTimeout(r, 0));
+            };
+        }
+
+        const $ = (/** @type {string} */ s) => /** @type {any} */ (document.querySelector(s));
+
+        it('resets with form.reset() itself when nothing changed', async () => {
+            document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
+            $('#a').value = 'sent';
+            const form = $('form');
+            const reset = vi.spyOn(form, 'reset');
+            const answer = sendHeld(form);
+            await answer();
+            expect(reset).toHaveBeenCalledTimes(1);
+            expect($('#a').value).toBe('');
+        });
+
+        it('keeps a text field and a textarea typed into, resets the rest', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input id="a" name="a" value="d" />' +
+                '<input id="b" name="b" /><textarea id="t" name="t">dt</textarea>' +
+                '<textarea id="u" name="u"></textarea></form>';
+            $('#a').value = 'sent a';
+            $('#b').value = 'sent b';
+            $('#t').value = 'sent t';
+            $('#u').value = 'sent u';
+            const form = $('form');
+            const reset = vi.spyOn(form, 'reset');
+            const answer = sendHeld(form);
+            $('#b').value = 'next';
+            $('#u').value = 'next u';
+            await answer();
+            expect(reset).not.toHaveBeenCalled();
+            expect($('#a').value).toBe('d');
+            expect($('#b').value).toBe('next');
+            expect($('#t').value).toBe('dt');
+            expect($('#u').value).toBe('next u');
+        });
+
+        it('keeps a checkbox toggled in flight, resets an untouched one', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input type="checkbox" id="c1" name="c1" checked />' +
+                '<input type="checkbox" id="c2" name="c2" /><input id="x" name="x" /></form>';
+            $('#c1').checked = false;
+            const answer = sendHeld($('form'));
+            $('#c2').checked = true;
+            await answer();
+            expect($('#c1').checked).toBe(true);
+            expect($('#c2').checked).toBe(true);
+        });
+
+        it('keeps a radio group changed in flight whole, resets an untouched group', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset>' +
+                '<input type="radio" id="ra" name="r" value="a" checked />' +
+                '<input type="radio" id="rb" name="r" value="b" />' +
+                '<input type="radio" id="rc" name="r" value="c" />' +
+                '<input type="radio" id="sa" name="s" value="a" checked />' +
+                '<input type="radio" id="sb" name="s" value="b" /></form>';
+            $('#rb').checked = true;
+            $('#sb').checked = true;
+            const answer = sendHeld($('form'));
+            // Moved from b to c: only b and c changed, but resetting a would check it.
+            $('#rc').checked = true;
+            await answer();
+            expect([$('#ra').checked, $('#rb').checked, $('#rc').checked]).toEqual([
+                false,
+                false,
+                true,
+            ]);
+            expect([$('#sa').checked, $('#sb').checked]).toEqual([true, false]);
+        });
+
+        it('keeps a select (multiple too) changed in flight, resets an untouched one', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset>' +
+                '<select id="m" name="m" multiple><option selected>a</option>' +
+                '<option>b</option><option>c</option></select>' +
+                '<select id="s" name="s"><option>a</option><option selected>b</option>' +
+                '<option>c</option></select>' +
+                '<select id="n" name="n"><option>a</option><option>b</option></select></form>';
+            const m = $('#m');
+            m.options[1].selected = true;
+            $('#s').value = 'c';
+            $('#n').value = 'b';
+            const answer = sendHeld($('form'));
+            m.options[2].selected = true;
+            await answer();
+            expect(Array.from(m.selectedOptions, (o) => o.value)).toEqual(['a', 'b', 'c']);
+            expect($('#s').value).toBe('b');
+            // No default selected: the reset shows the first option.
+            expect($('#n').value).toBe('a');
+        });
+
+        it('keeps a file input re-picked in flight, clears an untouched one', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input type="file" id="f1" name="f1" />' +
+                '<input type="file" id="f2" name="f2" /></form>';
+            /** @param {any} input @param {File[]} files */
+            const pick = (input, files) => {
+                Object.defineProperty(input, 'files', { configurable: true, get: () => files });
+                const value = vi.fn();
+                Object.defineProperty(input, 'value', {
+                    configurable: true,
+                    get: () => '',
+                    set: value,
+                });
+                return value;
+            };
+            const cleared1 = pick($('#f1'), [new File(['1'], 'one.txt')]);
+            pick($('#f2'), [new File(['2'], 'two.txt')]);
+            const answer = sendHeld($('form'));
+            const cleared2 = pick($('#f2'), [new File(['3'], 'three.txt')]);
+            await answer();
+            expect(cleared1).toHaveBeenCalledWith('');
+            expect(cleared2).not.toHaveBeenCalled();
+        });
+
+        it('keeps a control added in flight and typed into; one removed is skipped', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input id="a" name="a" /><input id="gone" name="gone" />' +
+                '</form>';
+            $('#a').value = 'sent';
+            $('#gone').value = 'sent';
+            const form = $('form');
+            const answer = sendHeld(form);
+            $('#gone').remove();
+            form.insertAdjacentHTML('beforeend', '<input id="b" name="b" /><button>Go</button>');
+            $('#b').value = 'typed';
+            await answer();
+            expect($('#a').value).toBe('');
+            expect($('#b').value).toBe('typed');
+        });
+
+        it('a button added in flight does not keep anything from form.reset()', async () => {
+            document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
+            $('#a').value = 'sent';
+            const form = $('form');
+            const reset = vi.spyOn(form, 'reset');
+            const answer = sendHeld(form);
+            form.insertAdjacentHTML('beforeend', '<button>Go</button><fieldset></fieldset>');
+            await answer();
+            expect(reset).toHaveBeenCalledTimes(1);
+        });
+
+        it('fires a cancelable reset event; a cancelled one resets nothing', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input id="a" name="a" /><input id="b" name="b" /></form>';
+            $('#a').value = 'sent';
+            const form = $('form');
+            const seen = vi.fn((/** @type {Event} */ e) => e.preventDefault());
+            form.addEventListener('reset', seen);
+            const answer = sendHeld(form);
+            $('#b').value = 'typed';
+            await answer();
+            expect(seen).toHaveBeenCalledTimes(1);
+            expect(seen.mock.calls[0][0].bubbles).toBe(true);
+            expect($('#a').value).toBe('sent');
+            expect($('#b').value).toBe('typed');
+        });
+
+        it('resets an untouched server-owned (az-ctl) control to what the server rendered', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input id="a" name="a" value="srv" az="0" az-ctl="value" />' +
+                '<textarea id="t" name="t" az="1" az-ctl="content">srv t</textarea></form>';
+            $('#a').value = 'sent';
+            $('#t').value = 'sent t';
+            const answer = sendHeld($('form'));
+            $('#t').value = 'next';
+            await answer();
+            expect($('#a').value).toBe('srv');
+            expect($('#t').value).toBe('next');
+        });
+
+        it('resets a form-associated custom element it was not told changed', async () => {
+            document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
+            const form = $('form');
+            const resetCb = vi.fn();
+            const custom = { localName: 'x-field', constructor: { formAssociated: true } };
+            /** @type {any} */ (custom).formResetCallback = resetCb;
+            const plain = { localName: 'x-plain', formResetCallback: vi.fn() };
+            const elements = [$('#a'), custom, plain];
+            // jsdom lists no form-associated custom element in form.elements.
+            Object.defineProperty(form, 'elements', { configurable: true, get: () => elements });
+            const answer = sendHeld(form);
+            elements.push(Object.assign(document.createElement('input'), { value: 'new' }));
+            await answer();
+            expect(resetCb).toHaveBeenCalledTimes(1);
+            expect(plain.formResetCallback).not.toHaveBeenCalled();
+        });
+    });
+
     it('keeps the form on a non-2xx even with az-form-reset', async () => {
         document.title = 'Old';
         document.body.innerHTML = '<form az-form-reset><input id="note" name="note" /></form>';
@@ -9430,6 +9637,46 @@ describe('fetch + az-form-reset via the submit listener', () => {
         // Resolve the 2xx -> now az-form-reset applies.
         resolveFetch();
         await vi.waitFor(() => expect(input.value).toBe(''));
+
+        mock.restore();
+    });
+
+    it('keeps what the user typed while the fetch was in flight (a chat)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="f" az-submit=\'[22,"/x",{}]\' az-form-reset>' +
+            '<input id="to" name="to" /><textarea id="msg" name="msg"></textarea>' +
+            '<button type="submit">Go</button></form>';
+        const to = /** @type {HTMLInputElement} */ (document.querySelector('#to'));
+        const msg = /** @type {HTMLTextAreaElement} */ (document.querySelector('#msg'));
+        to.value = 'ada';
+        msg.value = 'message 1';
+
+        let resolveFetch = () => {};
+        globalThis.fetch = vi.fn(
+            () =>
+                new Promise((res) => {
+                    resolveFetch = () =>
+                        res({ ok: true, status: 200, text: () => Promise.resolve('') });
+                }),
+        );
+
+        document
+            .querySelector('#f')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        // The user starts the next message before the first one's reply.
+        msg.value = 'message 2';
+        resolveFetch();
+
+        // The sent, untouched field resets; the one typed into since keeps the text.
+        await vi.waitFor(() => expect(to.value).toBe(''));
+        expect(msg.value).toBe('message 2');
 
         mock.restore();
     });

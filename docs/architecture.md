@@ -2047,7 +2047,7 @@ Roadrunner and Cowboy have all four.
 
 - `reply_effects/1(Effects)` -- a `200` whose body is the `{"e": [...]}` effects wire payload, the
   same shape the WebSocket sends. A fetch form auto-resets on this leg (`az-form-reset` fires only
-  on a 2xx)
+  on a 2xx, and leaves a control the user changed while the request was in flight)
 - `reply_effects/2(Status, Effects)` -- the same with an explicit status. The `fetch` command
   applies response effects on **any** status, so an error leg returns a real `422`: the effects
   still run (inline validation) while the form's typed fields survive

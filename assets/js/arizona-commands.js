@@ -270,13 +270,107 @@ export function osHost() {
 }
 
 /**
+ * What a form control shows that the user can change: a checkbox or radio's
+ * checkedness, a select's selected options, a file input's files, else its value.
+ * `undefined` for a listed element with nothing to edit (a button, a fieldset).
+ * @param {Element} el
+ * @returns {unknown}
+ */
+function shownState(el) {
+    const c = /** @type {any} */ (el);
+    switch (el.localName) {
+        case 'select':
+            return Array.from(c.selectedOptions);
+        case 'textarea':
+        case 'output':
+            return c.value;
+        case 'input':
+            if (c.type === 'checkbox' || c.type === 'radio') return c.checked;
+            return c.type === 'file' ? Array.from(c.files ?? []) : c.value;
+        default:
+            return undefined;
+    }
+}
+
+/**
+ * @param {unknown} a
+ * @param {unknown} b
+ */
+const sameState = (a, b) =>
+    Array.isArray(a) && Array.isArray(b)
+        ? a.length === b.length && a.every((x, i) => x === b[i])
+        : a === b;
+
+/**
+ * What each of a form's controls shows as a `fetch` sends it, so its `az-form-reset`
+ * can tell the controls the user changed while the request was in flight.
+ * @param {HTMLFormElement} form
+ * @returns {Map<Element, unknown>}
+ */
+function formSnapshot(form) {
+    return new Map(Array.from(form.elements, (c) => [c, shownState(c)]));
+}
+
+/**
+ * What `form.reset()` does to one control: back to its default value, checkedness or
+ * selection (a single select left with none selected shows its first option, as the
+ * reset's own selectedness pass does).
+ * @param {Element} el
+ */
+function resetControl(el) {
+    const c = /** @type {any} */ (el);
+    const name = el.localName;
+    if (name === 'select') {
+        for (const o of c.options)
+            if (o.selected !== o.defaultSelected) o.selected = o.defaultSelected;
+    } else if (name === 'input' && (c.type === 'checkbox' || c.type === 'radio')) {
+        if (c.checked !== c.defaultChecked) c.checked = c.defaultChecked;
+    } else if (name === 'input' && c.type === 'file') {
+        if (c.files?.length) c.value = '';
+    } else if (name === 'input' || name === 'textarea' || name === 'output') {
+        // An input whose value is its attribute (hidden, button) equals its default,
+        // so is never written.
+        if (c.value !== c.defaultValue) c.value = c.defaultValue;
+    } else if (c.constructor?.formAssociated && typeof c.formResetCallback === 'function') {
+        // A form-associated custom element resets itself.
+        c.formResetCallback();
+    }
+}
+
+/**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
  * Shared by the submit listener (synchronous, for push_event-style commands) and the
  * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
+ * A deferred reset passes `sent`, what the controls showed when the request went out:
+ * one the user changed since (or added) keeps what it shows now -- the next chat
+ * message typed while the last one was in flight -- with its whole radio group, and
+ * the rest reset as `form.reset()` resets them, after a cancelable `reset` event.
+ * With nothing changed it is `form.reset()` itself.
  * @param {Element} form
+ * @param {Map<Element, unknown>} [sent]
  */
-export function maybeResetForm(form) {
-    if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+export function maybeResetForm(form, sent) {
+    if (!form.hasAttribute('az-form-reset')) return;
+    const f = /** @type {HTMLFormElement} */ (form);
+    const ctls = Array.from(f.elements);
+    const changed = (/** @type {Element} */ c) => {
+        const now = shownState(c);
+        return sent?.has(c)
+            ? !sameState(now, sent.get(c))
+            : sent !== undefined && now !== undefined;
+    };
+    const kept = new Set(ctls.filter(changed));
+    if (!kept.size) {
+        f.reset();
+        return;
+    }
+    // A radio group is kept whole: resetting a member the user left would check its
+    // default and uncheck the one they picked.
+    const group = (/** @type {any} */ c) => c.localName === 'input' && c.type === 'radio' && c.name;
+    const groups = new Set([...kept].map(group).filter(Boolean));
+    for (const c of ctls) if (groups.has(group(c))) kept.add(c);
+    if (!f.dispatchEvent(new Event('reset', { bubbles: true, cancelable: true }))) return;
+    for (const c of ctls) if (!kept.has(c)) resetControl(c);
 }
 
 /**
@@ -759,6 +853,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 }
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
+            // What the form showed as it was sent, for a reset on the 2xx to keep what
+            // the user changed while the request was in flight.
+            const sent = form?.hasAttribute('az-form-reset') ? formSnapshot(form) : undefined;
             // A synchronous throw here leaves nothing in flight: the slot and the
             // frame origin are taken once the request is out.
             const req = fetch(target, {
@@ -821,11 +918,12 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             }
                         } else onError({ url, status: resp.status });
                         // Honor az-form-reset only on a 2xx success, so a validation
-                        // error (a non-2xx) keeps the typed fields. Same isolation as
-                        // the effects above.
+                        // error (a non-2xx) keeps the typed fields, and only the
+                        // fields still showing what was sent. Same isolation as the
+                        // effects above.
                         if (resp.ok && form) {
                             try {
-                                maybeResetForm(form);
+                                maybeResetForm(form, sent);
                             } catch (err) {
                                 console.error('[arizona] az-form-reset failed', err);
                             }
