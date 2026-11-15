@@ -5469,13 +5469,19 @@ utf8_bytes(Value) ->
 is_literal_value({bin, _, Elements}) ->
     lists:all(fun is_literal_bin_element/1, Elements);
 is_literal_value({cons, _, Head, Tail}) ->
-    is_literal_value(Head) andalso is_literal_value(Tail);
-is_literal_value({Kind, _, _}) when Kind =:= string; Kind =:= integer; Kind =:= char ->
+    is_literal_item(Head) andalso is_literal_item(Tail);
+is_literal_value({string, _, _}) ->
     true;
 is_literal_value({nil, _}) ->
     true;
 is_literal_value(_Computed) ->
     false.
+
+%% A list's item may also be a character code.
+is_literal_item({Kind, _, _}) when Kind =:= integer; Kind =:= char ->
+    true;
+is_literal_item(Item) ->
+    is_literal_value(Item).
 
 is_literal_bin_element({bin_element, _, Value, Size, _Type}) ->
     (element(1, Value) =:= string orelse code_point_literal(Value) =/= error) andalso

@@ -2079,6 +2079,17 @@ local_attr_dynamic_raw_error(Config) when is_list(Config) ->
         "            arizona_template:local(<<\"id\">>, <<\"1\">>)]}], [<<\"e\">>]}"
         "    ). ",
         fun(R) -> R =:= local_attr_mixed end
+    ),
+    %% A raw of a bare number is no literal text either.
+    assert_parse_error(
+        "-module(pt_local_attr_num_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{href, [arizona_template:raw(5), "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>)]}], [<<\"e\">>]}"
+        "    ). ",
+        fun(R) -> R =:= local_attr_mixed end
     ).
 
 %% Several static segments around the local concatenate into one prefix/suffix.
