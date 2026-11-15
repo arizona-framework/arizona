@@ -1038,7 +1038,7 @@ choice_text_needs_markup_text(Config) when is_list(Config) ->
         "[{option, [], [arizona_template:get(label, Bindings)]}]}). "
     ]),
     assert_parse_error(Source, fun
-        ({select_value, {no_markup_text, sel_no_markup_text, _Tag}}) -> true;
+        ({missing_callback, sel_no_markup_text, {markup_text, 2}, {choice_text, _Tag}}) -> true;
         (_) -> false
     end),
     %% Static text needs no reading at render, so the same backend compiles it.

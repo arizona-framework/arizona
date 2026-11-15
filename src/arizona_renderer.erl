@@ -271,7 +271,8 @@ runs; a live client applies the chooser's value after. For HTML: `selected` on e
 `<option>` in the fragment whose value (its `value`, else its text) is a pick, read as
 the parser reads it (newlines and NUL preprocessed, references decoded).
 
-Optional, and required of a backend that implements `selection_role/1`.
+Optional, and required of a backend that implements `selection_role/1`: a chooser's
+child that needs it is refused at compile time (`missing_callback`), where it is written.
 """.
 -callback mark_choices(Fragment :: iodata(), Picks :: [binary()]) -> iodata().
 
@@ -299,9 +300,10 @@ normalized, NUL replaced) and its character references decoded as an attribute
 value's are.
 
 Optional, except for a backend whose `supports_local/0` is `true`, which needs it for
-the fixed text beside an attribute `?local`. A backend that
+the fixed text beside an attribute `?local` (one there is a `missing_callback` compile
+error without it). A backend that
 implements `selection_role/1` without it cannot compile a
-choice whose text holds a value (a `select_value` compile error), its static text
+choice whose text holds a value (a `missing_callback` compile error), its static text
 holding markup syntax is left for `mark_choices/2`, and a markup value compares as
 written, as an escaped one does.
 """.

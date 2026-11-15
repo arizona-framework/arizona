@@ -1262,9 +1262,11 @@ format_error(az_view_not_allowed) ->
 %% The authored-attribute errors live in their own function, like the ?each family
 %% below, to keep format_error/1 under the cyclomatic limit.
 format_error({Kind, Detail}) when
-    Kind =:= reserved_attr; Kind =:= duplicate_attr; Kind =:= select_value
+    Kind =:= reserved_attr; Kind =:= duplicate_attr
 ->
     format_attr_error(Kind, Detail);
+format_error({missing_callback, Backend, Callback, Need}) ->
+    format_missing_callback(Backend, Callback, Need);
 format_error({invalid_child, ValueStr}) ->
     lists:flatten(
         io_lib:format(
@@ -1345,28 +1347,14 @@ format_error(local_key_reused) ->
 %% complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
-format_error(local_attr_multiple) ->
-    "an attribute value can interpolate at most one ?local -- multiple ?local in "
-    "one attribute can't be recomposed client-side";
-format_error({local_attr_raw_not_utf8, Bytes}) ->
-    lists:flatten(
-        io_lib:format(
-            "this ?raw beside an attribute ?local builds ~W, which is not UTF-8 text. A "
-            "?raw's argument is a runtime value whose bytes Erlang builds (an integer "
-            "segment is a byte, a bare <<\"...\">> is Latin-1), and beside a ?local "
-            "those bytes are folded into the text the client composes the attribute "
-            "with, so they must be UTF-8. Write the text as ~~\"...\" or "
-            "<<\"...\"/utf8>>",
-            [Bytes, 20]
-        )
-    );
-format_error(local_attr_mixed) ->
-    "a ?local in an attribute value can only be combined with fixed parts -- static "
-    "text, or a ?raw of literal text -- not a value the server computes (a dynamic, "
-    "or a ?raw of one): the client owns the attribute and recomposes it from the fixed "
-    "parts the page carries, and the slot is never diffed, so a computed part would "
-    "render once and then disagree with its bindings. Compute it into the ?local's "
-    "initial value instead, or render it in another attribute";
+%% The attribute `?local` errors, kept apart to keep format_error/1 under the
+%% cyclomatic limit.
+format_error(Reason) when
+    Reason =:= local_attr_multiple;
+    Reason =:= local_attr_mixed;
+    element(1, Reason) =:= local_attr_raw_not_utf8
+->
+    format_local_error(Reason);
 %% Render-target errors: nesting one target in another, and a `target/2` call
 %% declare_target/2 refused (tagged `target`).
 format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
@@ -1428,22 +1416,65 @@ format_attr_error(duplicate_attr, Name) ->
             "one list value, e.g. {class, [~~\"btn \", ?get(kind)]}",
             [Name]
         )
-    );
-format_attr_error(select_value, Detail) ->
-    format_select_error(Detail).
+    ).
 
-%% Raised for a backend that lacks a callback, so the core words it: an
-%% `option_selected` is the backend's (parse_error/3).
-format_select_error({no_markup_text, Backend, Tag}) ->
+%% A backend lacks a callback this template needs, so the core words it, naming the
+%% callback and what asked for it.
+format_missing_callback(Backend, {Fun, Arity}, Need) ->
     lists:flatten(
         io_lib:format(
-            "a ~ts without a value attribute is valued by its text, and a value in "
-            "this one's text may render markup, whose text the render target ~ts cannot "
-            "read: it names the selection roles (selection_role/1) but does not export "
-            "markup_text/2. Implement it, or give the ~ts a value attribute",
-            [Tag, Backend, Tag]
+            "~ts Implement ~ts/~w in the render target ~ts.",
+            [missing_callback_need(Need, Backend, Fun, Arity), Fun, Arity, Backend]
         )
     ).
+
+missing_callback_need({choice_text, Tag}, Backend, Fun, Arity) ->
+    io_lib:format(
+        "a ~ts without a value attribute is valued by its text, and a value in this "
+        "one's text may render markup, whose text the render target ~ts cannot read: it "
+        "names the selection roles (selection_role/1) but does not export ~ts/~w. Or give "
+        "the ~ts a value attribute.",
+        [Tag, Backend, Fun, Arity, Tag]
+    );
+missing_callback_need(local_affix, Backend, Fun, Arity) ->
+    io_lib:format(
+        "the fixed text beside an attribute ?local is folded into the text the client "
+        "composes the attribute with, as the page holds it, which only the render "
+        "target ~ts can read: it supports ?local (supports_local/0) but does not export "
+        "~ts/~w.",
+        [Backend, Fun, Arity]
+    );
+missing_callback_need(choices, Backend, Fun, Arity) ->
+    io_lib:format(
+        "this child of an element choosing by a value may render choices the transform "
+        "cannot see (a component, a remote helper, a runtime value, raw markup), which "
+        "the render target ~ts marks in the child's rendered output: it names the "
+        "selection roles (selection_role/1) but does not export ~ts/~w.",
+        [Backend, Fun, Arity]
+    ).
+
+format_local_error(local_attr_multiple) ->
+    "an attribute value can interpolate at most one ?local -- multiple ?local in "
+    "one attribute can't be recomposed client-side";
+format_local_error({local_attr_raw_not_utf8, Bytes}) ->
+    lists:flatten(
+        io_lib:format(
+            "this ?raw beside an attribute ?local builds ~W, which is not UTF-8 text. A "
+            "?raw's argument is a runtime value whose bytes Erlang builds (an integer "
+            "segment is a byte, a bare <<\"...\">> is Latin-1), and beside a ?local "
+            "those bytes are folded into the text the client composes the attribute "
+            "with, so they must be UTF-8. Write the text as ~~\"...\" or "
+            "<<\"...\"/utf8>>",
+            [Bytes, 20]
+        )
+    );
+format_local_error(local_attr_mixed) ->
+    "a ?local in an attribute value can only be combined with fixed parts -- static "
+    "text, or a ?raw of literal text -- not a value the server computes (a dynamic, "
+    "or a ?raw of one): the client owns the attribute and recomposes it from the fixed "
+    "parts the page carries, and the slot is never diffed, so a computed part would "
+    "render once and then disagree with its bindings. Compute it into the ?local's "
+    "initial value instead, or render it in another attribute".
 
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
@@ -5442,6 +5473,7 @@ is_literal_bin_element({bin_element, _, Value, Size, _Type}) ->
 %% A static part is the text the page holds once it is escaped, which differs where the
 %% parser cannot hold a character (a NUL reads U+FFFD).
 affix_part_text(Backend, Part) ->
+    ok = needs_callback(Backend, {markup_text, 2}, local_affix, anno(Part)),
     case raw_affix_markup(Part) of
         {ok, Markup} -> attr_markup_text(Backend, Markup);
         error -> attr_markup_text(Backend, Backend:escape(extract_binary_value(Part)))
@@ -5964,7 +5996,9 @@ emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = St
 %% calls it), and whether the slot escapes, which the child decided (esc_spec/2).
 with_choices(DynAST, #state{choices = none}) ->
     DynAST;
-with_choices({tuple, L, [Az, Spec, Loc]}, #state{choices = {Value, Multiple}}) ->
+with_choices({tuple, L, [Az, Spec, Loc]}, #state{choices = {Value, Multiple}} = State) ->
+    {tuple, _, [_Module, {integer, _, Line}]} = Loc,
+    ok = needs_callback(State#state.backend, {mark_choices, 2}, choices, Line),
     Picks = {'fun', L, {clauses, [{clause, L, [], [], [{tuple, L, [Value, Multiple]}]}]}},
     {tuple, L, [Az, choices_spec(Spec, Picks), Loc]}.
 
@@ -8070,9 +8104,16 @@ choice_text(Backend, [Children]) ->
 %% (arizona_renderer:markup_text/2): refused here rather than as `undef` the first time
 %% one does.
 needs_markup_text(Backend, L) ->
-    case erlang:function_exported(Backend, markup_text, 2) of
+    needs_callback(Backend, {markup_text, 2}, {choice_text, Backend:name(option)}, L).
+
+%% A callback the backend need implement only for what this template uses (an optional
+%% one a capability makes required): refused where the template uses it, rather than
+%% as a crash of the transform or `undef` at render.
+needs_callback(Backend, {Fun, Arity} = Callback, Need, L) ->
+    _ = code:ensure_loaded(Backend),
+    case erlang:function_exported(Backend, Fun, Arity) of
         true -> ok;
-        false -> parse_error({select_value, {no_markup_text, Backend, Backend:name(option)}}, L)
+        false -> parse_error({missing_callback, Backend, Callback, Need}, L)
     end.
 
 %% What one child adds to an option's text. A static binary is spliced as markup, so
