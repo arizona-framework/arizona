@@ -1,22 +1,42 @@
-// A browser's form is [LegacyOverrideBuiltIns]: a control named (or with the id)
-// `id`, `elements`, `reset`, `hidden`, `value`, ... is what the form's own property
-// of that name returns, ahead of the prototype. jsdom does not do this, so tests
-// that must hold on a real page give their forms the same named properties.
+// A browser's form is [LegacyOverrideBuiltIns]: a control associated with it (one of
+// its listed elements, `form="id"` ones outside it included, or an <img> in it) named
+// or with the id `id`, `elements`, `reset`, `hidden`, `value`, ... is what the form's
+// own property of that name returns, ahead of the prototype. Assigning to such a name
+// still runs the prototype's setter where there is one (`form.hidden = true` sets the
+// attribute) and throws where there is none (`value`, `reset`) in module code. jsdom
+// does none of this, so tests that must hold on a real page give their forms the same
+// named properties.
 
 const NAMES = ['id', 'elements', 'reset', 'hidden', 'value'];
+
+/** The real `elements` getter: what a form's listed elements are. */
+const ELEMENTS = /** @type {() => HTMLFormControlsCollection} */ (
+    Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, 'elements')?.get
+);
 
 /**
  * @param {object} proto
  * @param {string} k
- * @returns {PropertyDescriptor}
+ * @returns {PropertyDescriptor|undefined}
  */
 function inherited(proto, k) {
     for (let p = proto; p; p = Object.getPrototypeOf(p)) {
         const d = Object.getOwnPropertyDescriptor(p, k);
         if (d) return d;
     }
-    // None (a form has no `value`): an expando is a plain property.
-    return { value: undefined, writable: true };
+    return undefined;
+}
+
+/**
+ * The element a browser's form names `k`: an associated listed element or an <img>
+ * in it, by id or name.
+ * @param {Element} form
+ * @param {string} k
+ * @returns {Element|undefined}
+ */
+function named(form, k) {
+    const cands = [...ELEMENTS.call(form), ...form.querySelectorAll('img')];
+    return cands.find((c) => c.getAttribute('id') === k || c.getAttribute('name') === k);
 }
 
 /** @param {Element} form */
@@ -27,16 +47,23 @@ function shadowForm(form) {
         Object.defineProperty(form, k, {
             configurable: true,
             get() {
-                const named = this.querySelector(`[name="${k}"],[id="${k}"]`);
-                if (named) return named;
-                return d.get ? d.get.call(this) : d.value;
+                const el = named(this, k);
+                if (el) return el;
+                return d?.get ? d.get.call(this) : d?.value;
             },
-            // A named property is read-only: assigning over it throws in module
-            // (strict) code, as a browser's does.
             set(v) {
-                if (this.querySelector(`[name="${k}"],[id="${k}"]`))
+                // A setter on the prototype runs; otherwise the assignment defines an
+                // own property, which a named property refuses.
+                if (d?.set) d.set.call(this, v);
+                else if (named(this, k))
                     throw new TypeError(`Cannot assign to read only property '${k}'`);
-                d.set?.call(this, v);
+                else
+                    Object.defineProperty(this, k, {
+                        value: v,
+                        writable: true,
+                        configurable: true,
+                        enumerable: true,
+                    });
             },
         });
     }

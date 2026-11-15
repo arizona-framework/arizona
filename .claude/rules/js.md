@@ -21,13 +21,16 @@ declares it (an ES import is read-only), through a setter when another module mu
 
 **Never read a form's own properties.** `HTMLFormElement` is `[LegacyOverrideBuiltIns]`: a control
 named (or with the id) `id`, `elements`, `reset`, `hidden`, `value`, ... is what the form's property of
-that name returns, ahead of the prototype, and assigning to it throws (an edit form's
-`<input type=hidden name=id>` is its `id`). On an element that is or may be a form, read its id with
+that name returns, ahead of the prototype (an edit form's `<input type=hidden name=id>` is its
+`id`); an assignment still runs the prototype's setter where there is one (`form.hidden = true`)
+and throws where there is none (`value`, `reset`). On an element that is or may be a form, read its id with
 `getAttribute('id')`, its controls with `formControls`, reset it with `resetForm` (`arizona-util.js`,
-through the prototype), and toggle it with the `hidden` attribute -- never `form.<prop>`; a property
+through the prototype), and test or toggle `hidden` through the attribute -- never read
+`form.<prop>`; a property
 a form lacks (`value`) is read only off an element that is not a form. jsdom
 does not shadow, so a test that must hold on a real page uses `shadowNamedControls`
-(`test-shadow.js`), which gives every form markup parses its controls as named properties.
+(`test-shadow.js`), which gives every form markup parses its controls as named properties, as
+Chromium and Firefox do (`test-shadow.test.js` pins that).
 
 **Static entry.** `assets/js/arizona-static.js` is a second entry, built to
 `priv/static/assets/js/arizona-static.min.js` (a second Vite pass, `ARIZONA_BUILD_PASS=static`) and

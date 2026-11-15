@@ -2771,7 +2771,10 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         }
     });
 
-    it('toggle, show and hide a form with a control named hidden', () => {
+    // Toggle reads `hidden`, which a control named so is: `!form.hidden` is false, so
+    // the form never hid. Show and hide only assign, which runs the prototype setter
+    // in a browser too; they write the attribute for the same reading.
+    it('toggles, shows and hides a form with a control named hidden', () => {
         document.body.innerHTML =
             '<form id="f"><input type="hidden" name="hidden" value="x" /></form>';
         const unshadow = shadowNamedControls();
