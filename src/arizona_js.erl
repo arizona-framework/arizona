@@ -455,6 +455,21 @@ cookie for the *same* identity (e.g. password change) needs no reload.
   browser's `fetch(url, { keepalive: true })`. Absent or `false` is the current
   behaviour (the navigation cancels an in-flight fetch). The browser caps a
   keepalive request's inflight body at ~64KB.
+- `on_repeat` -- what a repeat does while this fetch's previous request is still
+  in flight. A repeat is the same method and URL (resolved against the page, its
+  fragment and any GET query left out) from the same holder: the form the request posts (no
+  explicit `body`), else the trigger element; a server effect's fetch holds the
+  whole page. `allow` (default) issues it, so concurrent requests may be
+  committed and applied in any order. `drop` does not issue it and dispatches a
+  bubbling `arizona:fetch-dropped` `CustomEvent` (`detail` `url`, `method`,
+  `reason => in_flight`) on the holder, or on `document` when the holder is the
+  document root (`<html>`) or detached. Use `drop` for actions a duplicate would repeat (login,
+  delete, place an order), never for state sync (autosave) or search, where the
+  newer request matters. Only the fetch is dropped: the commands beside it run.
+  There is no client timeout: a hung request keeps its slot until the browser
+  fails it or the holder is re-rendered. Under either value the holder carries
+  an `az-busy` attribute while a request it holds is in flight (never the
+  document root `<html>` or a detached element).
 
 To send the user elsewhere, return an `arizona_js:navigate/1` effect from the
 controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
@@ -468,9 +483,13 @@ controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
         headers => #{binary() => binary()},
         credentials => same_origin | include | omit,
         on_error => arizona_effect:cmd() | arizona_effect:cmds(),
-        keep_alive => boolean()
+        keep_alive => boolean(),
+        on_repeat => allow | drop
     }.
-fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, nest_on_error(Opts)]}.
+fetch(Url, #{on_repeat := Repeat} = Opts) when Repeat =/= allow, Repeat =/= drop ->
+    erlang:error({bad_on_repeat, Repeat}, [Url, Opts], [{error_info, #{module => ?MODULE}}]);
+fetch(Url, Opts) ->
+    {arizona_effect, [?EFFECT_FETCH, Url, nest_on_error(Opts)]}.
 
 -doc "Focuses the first element matching the selector.".
 -spec focus(Selector) -> arizona_effect:cmd() when
@@ -712,6 +731,8 @@ format_error({not_a_selector, Fun, Sel}, _Stacktrace) ->
     #{general => io_lib:format("~ts: a selector must be a binary, got ~tp", [Fun, Sel])};
 format_error({not_a_name, Fun, Attr}, _Stacktrace) ->
     #{general => io_lib:format("~ts: an attribute name must be a binary, got ~tp", [Fun, Attr])};
+format_error({bad_on_repeat, Value}, _Stacktrace) ->
+    #{general => io_lib:format("fetch: on_repeat must be allow or drop, got ~tp", [Value])};
 format_error({mixed_toggle_values, Attr}, _Stacktrace) ->
     #{
         general => io_lib:format(

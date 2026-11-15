@@ -246,6 +246,7 @@ const AZ_DIRECTIVES = new Set([
     'navigate',
     'patch',
     'ctl',
+    'busy',
 ]);
 
 /**

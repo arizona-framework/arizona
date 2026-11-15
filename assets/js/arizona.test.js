@@ -7985,6 +7985,402 @@ describe('form submit', () => {
 });
 
 // ---------------------------------------------------------------------------
+// fetch in flight: az-busy and on_repeat
+// ---------------------------------------------------------------------------
+
+describe('fetch in flight', () => {
+    /** @type {ReturnType<typeof setupMockWorker>|null} */
+    let mock = null;
+    /** @type {any} */
+    let originalFetch;
+    /** @type {Array<{resolve: Function, reject: Function}>} */
+    let pending;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+        pending = [];
+        globalThis.fetch = vi.fn(
+            () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+        );
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        mock?.restore();
+        mock = null;
+        vi.restoreAllMocks();
+    });
+
+    /** A fake Response; `body` is the raw text. */
+    function response(status, body) {
+        return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body) };
+    }
+
+    /** @returns {Promise<any>} a fresh module with `html` as an open live page */
+    async function page(html) {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', html);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        return mod;
+    }
+
+    function submit(id) {
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        document.getElementById(id).dispatchEvent(ev);
+        return ev;
+    }
+
+    /** The URLs fetch() was called with, in order. */
+    const urls = () => globalThis.fetch.mock.calls.map(([url]) => url);
+
+    /** Let the settled requests' promise chains run. */
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+
+    const DROP = { on_repeat: 'drop' };
+    const cmd = (c) => JSON.stringify(c).replace(/'/g, '&#39;');
+
+    it('issues every repeat under the default policy, busy until the last one settles', async () => {
+        await page(`<form id="f" method="post" az-submit='[22,"/save",{}]'></form>`);
+        const form = document.getElementById('f');
+        expect(form.hasAttribute('az-busy')).toBe(false);
+        submit('f');
+        submit('f');
+        expect(urls()).toEqual(['/save', '/save']);
+        expect(form.hasAttribute('az-busy')).toBe(true);
+        pending[0].resolve(response(200, ''));
+        await flush();
+        expect(form.hasAttribute('az-busy')).toBe(true);
+        pending[1].resolve(response(200, ''));
+        await flush();
+        expect(form.hasAttribute('az-busy')).toBe(false);
+    });
+
+    it('drops a repeat under drop, reporting it on the holder', async () => {
+        await page(`<form id="f" method="post" az-submit='${cmd([22, '/login', DROP])}'></form>`);
+        const form = document.getElementById('f');
+        const dropped = [];
+        const onDropped = (e) => dropped.push(e);
+        document.addEventListener('arizona:fetch-dropped', onDropped);
+        const submitDropped = vi.fn();
+        form.addEventListener('arizona:submit-dropped', submitDropped);
+        const warn = vi.spyOn(console, 'warn');
+        try {
+            const first = submit('f');
+            const second = submit('f');
+            expect(urls()).toEqual(['/login']);
+            expect(first.defaultPrevented).toBe(true);
+            expect(second.defaultPrevented).toBe(true);
+            expect(dropped).toHaveLength(1);
+            // Bubbles from the form, so a page-level listener sees it.
+            expect(dropped[0].target).toBe(form);
+            expect(dropped[0].cancelable).toBe(false);
+            expect(dropped[0].detail).toEqual({
+                url: '/login',
+                method: 'POST',
+                reason: 'in_flight',
+            });
+            expect(submitDropped).not.toHaveBeenCalled();
+            expect(warn).not.toHaveBeenCalled();
+            pending[0].resolve(response(200, '{"e":[]}'));
+            await flush();
+            submit('f');
+            expect(urls()).toEqual(['/login', '/login']);
+        } finally {
+            document.removeEventListener('arizona:fetch-dropped', onDropped);
+        }
+    });
+
+    it('releases a request before its effects run', async () => {
+        await page(`<form id="f" method="post" az-submit='${cmd([22, '/save', DROP])}'></form>`);
+        const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+        const again = () => form.requestSubmit();
+        document.addEventListener('again', again, { once: true });
+        submit('f');
+        pending[0].resolve(response(200, '{"e":[[9,"again",{}]]}'));
+        await flush();
+        expect(urls()).toEqual(['/save', '/save']);
+    });
+
+    it.each([
+        ['a network failure', (p) => p.reject(new TypeError('Failed to fetch'))],
+        ['an empty non-2xx', (p) => p.resolve(response(500, ''))],
+    ])('releases a request before its on_error runs after %s', async (_label, settle) => {
+        await page(
+            `<form id="f" method="post"
+                az-submit='${cmd([22, '/save', { ...DROP, on_error: [22, '/save', DROP] }])}'></form>`,
+        );
+        const failed = vi.fn();
+        document.addEventListener('arizona:fetch-error', failed);
+        try {
+            submit('f');
+            settle(pending[0]);
+            await flush();
+            expect(urls()).toEqual(['/save', '/save']);
+            expect(failed).toHaveBeenCalledTimes(1);
+        } finally {
+            document.removeEventListener('arizona:fetch-error', failed);
+        }
+    });
+
+    describe('what counts as a repeat', () => {
+        it('is per form: another form posting the same URL is not one', async () => {
+            await page(
+                `<form id="a" method="post" az-submit='${cmd([22, '/x', DROP])}'></form>
+                 <form id="b" method="post" az-submit='${cmd([22, '/x', DROP])}'></form>`,
+            );
+            submit('a');
+            submit('b');
+            submit('a');
+            expect(urls()).toEqual(['/x', '/x']);
+        });
+
+        it('is per URL and per method within one holder', async () => {
+            await page(
+                `<form id="f" method="post" az-submit='${cmd([
+                    [22, '/a', DROP],
+                    [22, '/b', DROP],
+                    [22, '/a', { ...DROP, method: 'put' }],
+                ])}'></form>`,
+            );
+            submit('f');
+            expect(globalThis.fetch.mock.calls.map(([u, i]) => `${i.method} ${u}`)).toEqual([
+                'POST /a',
+                'POST /b',
+                'PUT /a',
+            ]);
+            submit('f');
+            expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+        });
+
+        it('names one endpoint the same, relative or absolute', async () => {
+            const abs = new URL('/save', document.baseURI).href;
+            await page(
+                `<form id="f" method="post"
+                    az-submit='${cmd([
+                        [22, '/save', DROP],
+                        [22, abs, DROP],
+                    ])}'></form>`,
+            );
+            submit('f');
+            expect(urls()).toEqual(['/save']);
+        });
+
+        it('leaves the fragment out: fetch never sends it', async () => {
+            await page(
+                `<form id="f" method="post"
+                    az-submit='${cmd([
+                        [22, '/s#a', DROP],
+                        [22, '/s#b', DROP],
+                    ])}'></form>`,
+            );
+            submit('f');
+            expect(urls()).toEqual(['/s#a']);
+        });
+
+        it('leaves a GET query out: what is typed is not the request', async () => {
+            await page(
+                `<form id="f" method="get" az-submit='${cmd([22, '/search', DROP])}'>
+                    <input name="q" value="a" />
+                </form>`,
+            );
+            submit('f');
+            document.querySelector('input').value = 'b';
+            submit('f');
+            expect(urls()).toEqual(['/search?q=a']);
+        });
+
+        it('shares the form between a submit button click and the submit it causes', async () => {
+            await page(
+                `<form id="f" method="post" az-submit='${cmd([22, '/save', DROP])}'>
+                    <button id="go" az-click='${cmd([22, '/save', DROP])}'>Go</button>
+                </form>`,
+            );
+            const form = document.getElementById('f');
+            const dropped = vi.fn();
+            form.addEventListener('arizona:fetch-dropped', dropped);
+            document.getElementById('go').click();
+            expect(urls()).toEqual(['/save']);
+            expect(dropped).toHaveBeenCalledTimes(1);
+        });
+
+        it('holds the trigger for a fetch posting its own body', async () => {
+            await page(
+                `<form id="f" method="post">
+                    <button type="button" id="a" az-click='${cmd([22, '/x', { ...DROP, body: { n: 1 } }])}'>A</button>
+                    <button type="button" id="b" az-click='${cmd([22, '/x', { ...DROP, body: { n: 2 } }])}'>B</button>
+                </form>`,
+            );
+            const a = document.getElementById('a');
+            a.click();
+            document.getElementById('b').click();
+            a.click();
+            expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+            expect(a.hasAttribute('az-busy')).toBe(true);
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+        });
+    });
+
+    it('holds a server effect fetch page-wide, marking nothing', async () => {
+        const mod = await page('<div id="x"></div>');
+        const dropped = [];
+        const onDropped = (e) => dropped.push(e.target);
+        document.addEventListener('arizona:fetch-dropped', onDropped);
+        try {
+            mod.applyEffects([[22, '/ping', DROP]]);
+            mod.applyEffects([[22, '/ping', DROP]]);
+            expect(urls()).toEqual(['/ping']);
+            expect(document.documentElement.hasAttribute('az-busy')).toBe(false);
+            expect(dropped).toEqual([document]);
+        } finally {
+            document.removeEventListener('arizona:fetch-dropped', onDropped);
+        }
+    });
+
+    it('marks nothing for a fetch a response carries, reporting its drop on the document', async () => {
+        await page(`<form id="f" method="post" az-submit='[22,"/save",{}]'></form>`);
+        const dropped = [];
+        const onDropped = (e) => dropped.push(e.target);
+        document.addEventListener('arizona:fetch-dropped', onDropped);
+        try {
+            submit('f');
+            pending[0].resolve(
+                response(
+                    200,
+                    JSON.stringify({
+                        e: [
+                            [22, '/next', DROP],
+                            [22, '/next', DROP],
+                        ],
+                    }),
+                ),
+            );
+            await flush();
+            expect(urls()).toEqual(['/save', '/next']);
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+            expect(document.documentElement.hasAttribute('az-busy')).toBe(false);
+            // Its holder is a detached stand-in no listener can reach.
+            expect(dropped).toEqual([document]);
+        } finally {
+            document.removeEventListener('arizona:fetch-dropped', onDropped);
+        }
+    });
+
+    it('runs the commands beside a dropped fetch', async () => {
+        await page(
+            `<div id="m" hidden></div>
+             <form id="f" method="post" az-submit='${cmd([
+                 [22, '/x', DROP],
+                 [1, '#m'],
+             ])}'></form>`,
+        );
+        const m = document.getElementById('m');
+        submit('f');
+        expect(m.hidden).toBe(false);
+        submit('f');
+        expect(urls()).toEqual(['/x']);
+        expect(m.hidden).toBe(true);
+    });
+
+    it('treats a re-rendered form as a new holder', async () => {
+        await page(`<form id="f" method="post" az-submit='${cmd([22, '/x', DROP])}'></form>`);
+        submit('f');
+        const old = document.getElementById('f');
+        old.outerHTML = `<form id="f" method="post" az-submit='${cmd([22, '/x', DROP])}'></form>`;
+        submit('f');
+        expect(urls()).toEqual(['/x', '/x']);
+        const fresh = document.getElementById('f');
+        expect(fresh).not.toBe(old);
+        expect(fresh.hasAttribute('az-busy')).toBe(true);
+        pending[0].resolve(response(200, ''));
+        await flush();
+        expect(fresh.hasAttribute('az-busy')).toBe(true);
+        submit('f');
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops a repeat a view transition deferred', async () => {
+        /** @type {Function[]} */
+        const updates = [];
+        document.startViewTransition = (fn) => {
+            updates.push(typeof fn === 'function' ? fn : fn.update);
+            return { ready: Promise.resolve() };
+        };
+        try {
+            await page(
+                `<button id="b" az-click='${cmd([20, {}, [22, '/x', { ...DROP, body: {} }]])}'>B</button>`,
+            );
+            const b = document.getElementById('b');
+            b.click();
+            b.click();
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+            for (const update of updates) update();
+            expect(urls()).toEqual(['/x']);
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
+    it('calls updated() on a hooked holder when az-busy comes and goes', async () => {
+        const updated = vi.fn();
+        const mod = await page(
+            `<form id="f" method="post" az-hook="Busy" az-submit='[22,"/x",{}]'></form>`,
+        );
+        mod.hooks.Busy = {
+            mounted() {},
+            updated() {
+                updated(this.el.hasAttribute('az-busy'));
+            },
+        };
+        mod.mountHooks(document);
+        submit('f');
+        expect(updated.mock.calls).toEqual([[true]]);
+        pending[0].resolve(response(200, ''));
+        await flush();
+        expect(updated.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('runs a throwing on_error once and still reports the failure', async () => {
+        await page(
+            `<form id="f" method="post"
+                az-submit='[22,"/save",{"on_error":[[22,"/retry",{}],[7,"[[[bad","x","y"]]}]'></form>`,
+        );
+        const failed = vi.fn();
+        document.addEventListener('arizona:fetch-error', failed);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            submit('f');
+            pending[0].resolve(response(500, '<h1>boom</h1>'));
+            await flush();
+            expect(failed).toHaveBeenCalledTimes(1);
+            expect(urls()).toEqual(['/save', '/retry']);
+            // The network-failure leg too.
+            submit('f');
+            pending[2].reject(new TypeError('Failed to fetch'));
+            await flush();
+            expect(failed).toHaveBeenCalledTimes(2);
+            expect(urls()).toEqual(['/save', '/retry', '/save', '/retry']);
+        } finally {
+            document.removeEventListener('arizona:fetch-error', failed);
+        }
+    });
+
+    it('leaves nothing in flight when fetch() throws', async () => {
+        await page(`<form id="f" method="post" az-submit='${cmd([22, '/x', DROP])}'></form>`);
+        globalThis.fetch = vi.fn(() => {
+            throw new TypeError('bad init');
+        });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        submit('f');
+        submit('f');
+        warn.mockRestore();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Drag and drop
 // ---------------------------------------------------------------------------
 

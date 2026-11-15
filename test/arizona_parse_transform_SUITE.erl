@@ -449,6 +449,7 @@
     reserved_az_attr_raises/1,
     reserved_az_local_attr_raises/1,
     reserved_az_ctl_attr_raises/1,
+    reserved_az_busy_attr_raises/1,
     az_prefixed_user_attrs_allowed/1,
     az_view_case_in_render/1,
     az_view_if_in_render/1,
@@ -1323,6 +1324,7 @@ groups() ->
             reserved_az_attr_raises,
             reserved_az_local_attr_raises,
             reserved_az_ctl_attr_raises,
+            reserved_az_busy_attr_raises,
             az_prefixed_user_attrs_allowed,
             az_view_case_in_render,
             az_view_if_in_render,
@@ -9414,6 +9416,36 @@ reserved_az_ctl_attr_raises(Config) when is_list(Config) ->
             {"pt_res_ctl_und", "az_ctl"},
             {"pt_res_ctl_bin", "<<\"AZ-CTL\">>"},
             {"pt_res_ctl_val", "{az_ctl, <<\"x\">>}"}
+        ]
+    ).
+
+%% `az-busy` is the client's in-flight marker on a fetch holder; an authored one
+%% would show a form busy with nothing in flight, and the client's removal on
+%% settle would strip it.
+reserved_az_busy_attr_raises(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(_Bindings) -> ",
+                    "arizona_template:target(arizona_html, {form, [",
+                    Attr,
+                    "], []}). "
+                ]),
+                fun
+                    ({reserved_attr, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        [
+            {"pt_res_busy", "'az-busy'"},
+            {"pt_res_busy_und", "az_busy"},
+            {"pt_res_busy_bin", "<<\"az-busy\">>"},
+            {"pt_res_busy_upper", "<<\"AZ-BUSY\">>"},
+            {"pt_res_busy_val", "{az_busy, <<\"x\">>}"}
         ]
     ).
 

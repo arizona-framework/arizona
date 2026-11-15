@@ -44,7 +44,11 @@ render(Bindings) ->
             {form,
                 [
                     {id, ~"account-form"},
-                    {az_submit, arizona_js:fetch(~"/fetch-account/submit", #{method => post})}
+                    %% A repeat while the save is in flight would post it twice.
+                    {az_submit,
+                        arizona_js:fetch(~"/fetch-account/submit", #{
+                            method => post, on_repeat => drop
+                        })}
                 ],
                 [
                     {input, [{id, ~"note"}, {name, ~"note"}, {type, ~"text"}], []},

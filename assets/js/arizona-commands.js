@@ -308,6 +308,75 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
+ * The fetch requests in flight, per holder (see `JS_FETCH`): the count of each slot,
+ * `METHOD url`, it holds. Keyed by the node, so a holder a re-render replaces is a
+ * new one with nothing in flight.
+ * @type {WeakMap<Element, Map<string, number>>}
+ */
+const _inFlight = new WeakMap();
+
+/**
+ * Whether `holder` carries `az-busy` while a request it holds is in flight: a
+ * page element, never the page root (a server effect's holder) or a detached one
+ * (a response's stand-in), which no app styles.
+ * @param {Element} holder
+ * @returns {boolean}
+ */
+function busyMarks(holder) {
+    return holder.isConnected && holder !== holder.ownerDocument.documentElement;
+}
+
+/**
+ * A fetch's URL as a slot names it: resolved against the page, so a relative and
+ * an absolute spelling of one endpoint are the same slot, and without its fragment,
+ * which fetch() never sends. A URL that does not parse is taken as written; the
+ * request itself reports it.
+ * @param {Element} holder
+ * @param {string} url
+ * @returns {string}
+ */
+function fetchHref(holder, url) {
+    try {
+        const u = new URL(url, holder.ownerDocument.baseURI);
+        u.hash = '';
+        return u.href;
+    } catch {
+        return url;
+    }
+}
+
+/**
+ * Count a request in `slot` of `holder` as in flight, marking the holder busy.
+ * Returns its release, which takes effect once however often it is called.
+ * @param {Element} holder
+ * @param {string} slot
+ * @returns {() => void}
+ */
+function enterSlot(holder, slot) {
+    const slots = _inFlight.get(holder) ?? new Map();
+    _inFlight.set(holder, slots);
+    slots.set(slot, (slots.get(slot) ?? 0) + 1);
+    if (busyMarks(holder) && !holder.hasAttribute('az-busy')) {
+        holder.setAttribute('az-busy', '');
+        notifyUpdated(holder);
+    }
+    let settled = false;
+    return () => {
+        if (settled) return;
+        settled = true;
+        const n = /** @type {number} */ (slots.get(slot)) - 1;
+        if (n > 0) slots.set(slot, n);
+        else slots.delete(slot);
+        if (slots.size > 0) return;
+        _inFlight.delete(holder);
+        if (holder.hasAttribute('az-busy')) {
+            holder.removeAttribute('az-busy');
+            notifyUpdated(holder);
+        }
+    };
+}
+
+/**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
  * searched across the main document and any PiP documents. First-match only --
  * the single-target effects `focus`/`blur`/`scroll_to` use this, since those act
@@ -619,6 +688,22 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const opts = cmd[2] || {};
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
             const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
+            // What a repeat is: the same method and URL from the same holder -- the
+            // form the request posts, else the trigger (the page root for a server
+            // effect's, a response's detached stand-in for one it carries).
+            const holder =
+                opts.body === undefined && form ? form : (el ?? document.documentElement);
+            const slot = `${method} ${fetchHref(holder, url)}`;
+            if (opts.on_repeat === 'drop' && _inFlight.get(holder)?.has(slot)) {
+                // Dropped, not queued: a queued repeat is the duplicate request.
+                (busyMarks(holder) ? holder : document).dispatchEvent(
+                    new CustomEvent('arizona:fetch-dropped', {
+                        bubbles: true,
+                        detail: { url, method, reason: 'in_flight' },
+                    }),
+                );
+                break;
+            }
             const headers = { accept: 'application/json', ...(opts.headers || {}) };
             let target = url;
             let body;
@@ -646,78 +731,95 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 );
             }
             const onError = (/** @type {object} */ detail) => {
-                if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                // Contained: a throw from the response leg would fall into the
+                // network .catch and run on_error a second time, and the DOM event
+                // must still report the failure.
+                try {
+                    if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
+                } catch (err) {
+                    console.error('[arizona] fetch on_error threw', err);
+                }
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
-            const later = host.holdReplay();
-            fetch(target, {
+            // A synchronous throw here leaves nothing in flight: the slot and the
+            // replay hold are taken once the request is out.
+            const req = fetch(target, {
                 method,
                 body,
                 credentials: CREDENTIALS[opts.credentials] || 'same-origin',
                 headers,
                 keepalive: opts.keep_alive === true,
-            })
-                .then((resp) =>
-                    resp.text().then((text) =>
-                        later(() => {
-                            // Apply the effects body whenever it parses -- even on a 4xx, so
-                            // the server can drive inline validation with a real status. The
-                            // effects run against a stand-in for the trigger that names the view
-                            // its own events go to (its az-target, else its enclosing view), so a
-                            // `push_event` in the response re-renders that view via handle_event
-                            // (no pubsub) -- without scraping the form's fields into the event
-                            // payload (the stand-in is no form or field, so autoPayload is
-                            // empty; the controller passes any result explicitly). An empty 2xx
-                            // body (a cookie-only response) applies nothing. on_error runs only
-                            // when there is no usable effects body: a non-JSON page or an empty
-                            // non-2xx.
-                            let effects = null;
-                            if (text) {
-                                try {
-                                    effects = JSON.parse(text).e || [];
-                                } catch {
-                                    effects = null;
-                                }
-                            } else if (resp.ok) {
-                                effects = [];
+            });
+            const later = host.holdReplay();
+            const release = enterSlot(holder, slot);
+            req.then((resp) =>
+                resp.text().then((text) =>
+                    later(() => {
+                        // Apply the effects body whenever it parses -- even on a 4xx, so
+                        // the server can drive inline validation with a real status. The
+                        // effects run against a stand-in for the trigger that names the view
+                        // its own events go to (its az-target, else its enclosing view), so a
+                        // `push_event` in the response re-renders that view via handle_event
+                        // (no pubsub) -- without scraping the form's fields into the event
+                        // payload (the stand-in is no form or field, so autoPayload is
+                        // empty; the controller passes any result explicitly). An empty 2xx
+                        // body (a cookie-only response) applies nothing. on_error runs only
+                        // when there is no usable effects body: a non-JSON page or an empty
+                        // non-2xx.
+                        let effects = null;
+                        if (text) {
+                            try {
+                                effects = JSON.parse(text).e || [];
+                            } catch {
+                                effects = null;
                             }
-                            // Effect application is isolated from the trailing network
-                            // .catch: a throw here is an app bug on a request that
-                            // SUCCEEDED (the body parsed), so it is logged -- letting it
-                            // flow into the .catch would fire on_error/arizona:fetch-error
-                            // as a phantom network failure, after effects partially applied.
-                            if (effects !== null) {
-                                // A detached stand-in carrying the trigger's target, never
-                                // a live element: as a push_event trigger a form or a field
-                                // would put what was typed in the payload, and any element
-                                // inside a <form> (a view nested in one too) would hand a
-                                // fetch in the response that form's fields to post.
-                                let trigger = el;
-                                if (el) {
-                                    const id = resolveTarget(el);
-                                    trigger = el.ownerDocument.createElement('div');
-                                    if (id) trigger.setAttribute('az-target', id);
-                                }
-                                try {
-                                    executeJS(trigger, null, effects);
-                                } catch (err) {
-                                    console.error('[arizona] fetch response effect threw', err);
-                                }
-                            } else onError({ url, status: resp.status });
-                            // Honor az-form-reset only on a 2xx success, so a validation
-                            // error (a non-2xx) keeps the typed fields. Same isolation as
-                            // the effects above.
-                            if (resp.ok && form) {
-                                try {
-                                    maybeResetForm(form);
-                                } catch (err) {
-                                    console.error('[arizona] az-form-reset failed', err);
-                                }
+                        } else if (resp.ok) {
+                            effects = [];
+                        }
+                        // Settled before its effects or on_error run, so either (or
+                        // the user, at once) may issue the same request again.
+                        release();
+                        // Effect application is isolated from the trailing network
+                        // .catch: a throw here is an app bug on a request that
+                        // SUCCEEDED (the body parsed), so it is logged -- letting it
+                        // flow into the .catch would fire on_error/arizona:fetch-error
+                        // as a phantom network failure, after effects partially applied.
+                        if (effects !== null) {
+                            // A detached stand-in carrying the trigger's target, never
+                            // a live element: as a push_event trigger a form or a field
+                            // would put what was typed in the payload, and any element
+                            // inside a <form> (a view nested in one too) would hand a
+                            // fetch in the response that form's fields to post.
+                            let trigger = el;
+                            if (el) {
+                                const id = resolveTarget(el);
+                                trigger = el.ownerDocument.createElement('div');
+                                if (id) trigger.setAttribute('az-target', id);
                             }
-                        }),
-                    ),
-                )
-                .catch((error) => later(() => onError({ url, error })));
+                            try {
+                                executeJS(trigger, null, effects);
+                            } catch (err) {
+                                console.error('[arizona] fetch response effect threw', err);
+                            }
+                        } else onError({ url, status: resp.status });
+                        // Honor az-form-reset only on a 2xx success, so a validation
+                        // error (a non-2xx) keeps the typed fields. Same isolation as
+                        // the effects above.
+                        if (resp.ok && form) {
+                            try {
+                                maybeResetForm(form);
+                            } catch (err) {
+                                console.error('[arizona] az-form-reset failed', err);
+                            }
+                        }
+                    }),
+                ),
+            ).catch((error) =>
+                later(() => {
+                    release();
+                    onError({ url, error });
+                }),
+            );
             break;
         }
         case JS_FOCUS:

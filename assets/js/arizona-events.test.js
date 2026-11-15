@@ -253,6 +253,22 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([['v', 'opened', {}]]);
     });
 
+    // az-busy is the client's in-flight marker: whatever host markup holds under
+    // that name is never a command, so the scan proves no `busy` event.
+    it('proves no event through mountHooks from an az-busy attribute', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+
+        document.getElementById('v').innerHTML = `<form id="f" az-busy='[0,"busy"]'></form>`;
+        mod.mountHooks(document.getElementById('v'));
+
+        fire(document.getElementById('f'), 'busy', true);
+        expect(w.sent()).toEqual([]);
+    });
+
     it('fires a non-bubbling event only for the element that declares it', async () => {
         const mod = await fresh();
         document.body.innerHTML =

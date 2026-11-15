@@ -162,11 +162,13 @@ keeps its meaning as a value: it is escaped exactly as the runtime would escape 
 bare binary literal child, which is spliced as raw markup. Inside raw-text elements
 (`script`/`style`/`textarea`/`title`) it is not folded and keeps the dynamic-slot rules.
 
-Three names are reserved because the transform emits them itself: `az` (the element's diff
+Four names are reserved because the framework writes them itself: `az` (the element's diff
 address) and `az-local` (the `?local` descriptor), where a duplicate would misroute a patch,
-and `az-ctl`, where an authored one would mark a control the server does not render. Any of
-them in a template is a compile error (`reserved_attr`), in any form (`{az, V}`, bare `az`,
-`<<"az">>`, `az_local`, `az_ctl`).
+`az-ctl`, where an authored one would mark a control the server does not render, and
+`az-busy`, the client's marker on a `fetch` holder while a request it holds is in flight,
+where an authored one would show a form busy with nothing in flight. Any of them in a
+template is a compile error (`reserved_attr`), in any form (`{az, V}`, bare `az`,
+`<<"az">>`, `az_local`, `az_ctl`, `az_busy`).
 
 `az-ctl` marks a server-owned control: an element holding a diffable dynamic for a part the
 backend's optional `controlled/3` names (HTML: `value` on `input`/`select`,

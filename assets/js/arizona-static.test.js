@@ -98,6 +98,34 @@ describe('static client (no server)', () => {
         expect(q.value).toBe('');
     });
 
+    // A generated page has no socket, but its fetch still posts: a repeat under
+    // `drop` is dropped while the first is in flight, and the form shows az-busy.
+    it('drops a repeat fetch under drop while the first is in flight', async () => {
+        const { start } = await fresh();
+        /** @type {Array<(r: any) => void>} */
+        const pending = [];
+        const fetch = vi.fn(() => new Promise((resolve) => pending.push(resolve)));
+        vi.stubGlobal('fetch', fetch);
+        try {
+            document.body.innerHTML =
+                `<form id="f" method="post" az-submit='${attr([22, '/save', { on_repeat: 'drop' }])}'></form>` +
+                embed(['az-submit']);
+            stop = start();
+            const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+            form.requestSubmit();
+            form.requestSubmit();
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(form.hasAttribute('az-busy')).toBe(true);
+            pending[0]({ ok: true, status: 200, text: () => Promise.resolve('') });
+            await new Promise((r) => setTimeout(r, 0));
+            expect(form.hasAttribute('az-busy')).toBe(false);
+            form.requestSubmit();
+            expect(fetch).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('switches a ?local tab in the browser', async () => {
         const { start, get } = await fresh();
         document.body.innerHTML =
