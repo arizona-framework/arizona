@@ -398,8 +398,9 @@ is_foreign_element(_Name, _Foreign) -> true.
 %%
 %% A breakout start tag in foreign content (`div`, `p`, `span`, `ul`, ...) makes the
 %% parser leave it: that element is HTML, and so are its descendants. Two limits a
-%% template tree cannot model: the parser also moves the breakout's following siblings
-%% out of the `<svg>`, and `font` breaks out only with a `color`, `face` or `size`
+%% template tree cannot model: the parser also takes everything after the breakout up to
+%% the `</svg>` out of it (what follows the breakout and what follows its ancestors
+%% inside the `<svg>`), and `font` breaks out only with a `color`, `face` or `size`
 %% attribute, which this callback cannot see, so it stays foreign here.
 content_context_name(~"svg", _Parent) ->
     foreign;

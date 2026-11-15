@@ -296,12 +296,13 @@ rename `attr_dyn_name/1` to `attr_dynamic_prefix/1`, `text_az/2` to `content_slo
 `raw_text/4` to `neutralize_raw_text/4`, `live_root/0` to `supports_live_root/0` and
 `keyed_item_ops/0` to `supports_keyed_item_ops/0`; take `element_open_end/2` (the tag and its
 content context) instead of `element_open_end/0`; implement the new required `format_error/1`;
-and read the root content context as `undefined` (`content_context()` is any atom, no longer
-`html | foreign`). A backend written against a later commit may also carry names that were
-added and changed since: `static_document/2` is now `embed_attrs/2`, `markup_text/1` is
-`markup_text/2` (it adds the `text | attribute` reading), `controlled/2` is `controlled/3` and
-`selection_role/1` is `selection_role/2` (each adds the content context), and `attr_markup/1` is
-gone (`markup_text/2` in `attribute` reads a fixed part as the page holds it).
+implement `markup_text/2` if `supports_local/0` answers `true` (a terminal's does not); and read the
+root content context as `undefined` (`content_context()` is any atom, no longer `html | foreign`). A
+backend written against a later commit may also carry names that were added and changed since:
+`static_document/2` is now `embed_attrs/2`, `markup_text/1` is `markup_text/2` (it adds the `text |
+attribute` reading), `controlled/2` is `controlled/3` and `selection_role/1` is `selection_role/2`
+(each adds the content context), and `attr_markup/1` is gone (`markup_text/2` in `attribute` reads a
+fixed part as the page holds it).
 
 The backend also words the errors whose explanation lives in its vocabulary,
 `c:arizona_renderer:format_error/1`. The core raises them with neutral reasons and never
@@ -2909,8 +2910,9 @@ context (`raw_text_kind/2`, second argument `undefined | foreign`: HTML content 
 threaded through the transform by `content_context/2`: `<svg>` opens foreign content and its HTML
 integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their children. A
 breakout start tag (`div`, `p`, `span`, `ul`, `table`, `b`, `h1`, ... -- the parser's list) leaves
-foreign content too: that element's descendants are HTML content. The parser also moves the
-breakout's following siblings out of the `<svg>`, which a template tree cannot model, and `font`
+foreign content too: that element's descendants are HTML content. The parser also takes
+everything after the breakout up to the `</svg>` out of it (what follows the breakout and what
+follows its ancestors inside the `<svg>`), which a template tree cannot model, and `font`
 breaks out only with a `color`, `face` or `size` attribute, which the callback cannot see, so it
 stays foreign. In foreign content an element is ordinary parsed markup -- comments really are
 comments -- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`,

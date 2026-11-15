@@ -249,10 +249,11 @@ Static attributes this backend adds to an element because of what its own
 attributes imply, given the tag and the wire names of the attributes it carries
 (a `false` one excluded: it renders nothing). Emitted after the author's
 attributes. HTML gives a method-less `az-submit` form `method="post"`; a backend
-with nothing to imply returns `[]`. HTML implies it in any content context: the
-parser may take a form out of foreign content (a breakout tag such as `<div>` inside
-`<svg>`) where the template tree cannot tell, and an SVG `form` ignores the attribute,
-so implying it everywhere is the safe answer.
+with nothing to imply returns `[]`. HTML implies it in any content context: inside
+`<svg>` the parser takes everything after a breakout tag (such as `<div>`) up to the
+`</svg>` out of foreign content, which the template tree cannot tell (it knows only a
+breakout's own descendants are HTML), and an SVG `form` ignores the attribute, so
+implying it everywhere is the safe answer.
 """.
 -callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
 

@@ -2092,7 +2092,8 @@ local_attr_raw_affix_layout_error(Config) when is_list(Config) ->
             "<<\"a\":8/utf8>>",
             "<<(1 + 1)>>",
             "<<1:(4 + 4)>>",
-            "<<(<<1:4>>)/bitstring>>"
+            "<<(<<1:4>>)/bitstring>>",
+            "<<a>>"
         ]
     ),
     %% `:8` and `/utf8` spell bytes the transform builds as Erlang does.

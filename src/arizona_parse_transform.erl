@@ -1480,7 +1480,8 @@ format_local_error(local_attr_multiple) ->
     "one attribute can't be recomposed client-side";
 format_local_error(local_attr_raw_layout) ->
     "this ?raw beside an attribute ?local lays its bytes out with a size, a unit, a "
-    "type or an operator expression the transform does not build. Beside a ?local the "
+    "type, an operator expression or a value other than an integer, a character or a "
+    "string, which the transform does not build. Beside a ?local the "
     "raw's bytes are folded at compile time into the text the client composes the "
     "attribute with, and the transform builds them itself, never evaluating the "
     "literal: spell each segment as a literal integer, character or string, unsized, as "
