@@ -312,40 +312,55 @@ function formSnapshot(form) {
 }
 
 /**
- * What `form.reset()` does to one control: back to its default value, checkedness or
- * selection (a single select left with none selected shows its first option, as the
- * reset's own selectedness pass does).
+ * Does a control added after the request went out show what a reset would give it?
+ * Anything else the user put there. A listed element with nothing to edit (a button,
+ * a custom element) is at its default.
  * @param {Element} el
+ * @returns {boolean}
  */
-function resetControl(el) {
+function atDefault(el) {
     const c = /** @type {any} */ (el);
-    const name = el.localName;
-    if (name === 'select') {
-        for (const o of c.options)
-            if (o.selected !== o.defaultSelected) o.selected = o.defaultSelected;
-    } else if (name === 'input' && (c.type === 'checkbox' || c.type === 'radio')) {
-        if (c.checked !== c.defaultChecked) c.checked = c.defaultChecked;
-    } else if (name === 'input' && c.type === 'file') {
-        if (c.files?.length) c.value = '';
-    } else if (name === 'input' || name === 'textarea' || name === 'output') {
-        // An input whose value is its attribute (hidden, button) equals its default,
-        // so is never written.
-        if (c.value !== c.defaultValue) c.value = c.defaultValue;
-    } else if (c.constructor?.formAssociated && typeof c.formResetCallback === 'function') {
-        // A form-associated custom element resets itself.
-        c.formResetCallback();
+    switch (el.localName) {
+        case 'select': {
+            /** @type {any[]} */
+            const opts = Array.from(c.options);
+            if (c.multiple || c.size > 1)
+                return opts.every((o) => o.selected === o.defaultSelected);
+            // One shown option: the last default-selected one, else the first enabled.
+            const dflt = opts.filter((o) => o.defaultSelected);
+            const want = dflt.length ? dflt[dflt.length - 1] : opts.find((o) => !o.disabled);
+            return c.selectedOptions[0] === want;
+        }
+        case 'textarea':
+        case 'output':
+            return c.value === c.defaultValue;
+        case 'input':
+            if (c.type === 'checkbox' || c.type === 'radio') return c.checked === c.defaultChecked;
+            return c.type === 'file' ? !c.files?.length : c.value === c.defaultValue;
+        default:
+            return true;
     }
 }
+
+/** @param {Element} c a named radio's name, else `''` */
+const radioName = (c) =>
+    c.localName === 'input' && /** @type {any} */ (c).type === 'radio'
+        ? /** @type {any} */ (c).name
+        : '';
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
  * Shared by the submit listener (synchronous, for push_event-style commands) and the
  * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
  * A deferred reset passes `sent`, what the controls showed when the request went out:
- * one the user changed since (or added) keeps what it shows now -- the next chat
- * message typed while the last one was in flight -- with its whole radio group, and
- * the rest reset as `form.reset()` resets them, after a cancelable `reset` event.
- * With nothing changed it is `form.reset()` itself.
+ * one the user changed since, or added since and filled, keeps what it shows -- the
+ * next chat message typed while the last one was in flight -- with its whole radio
+ * group. The rest get the browser's own `form.reset()` (its trusted `reset` event,
+ * defaults, dirty and user-validity flags): the kept controls sit outside the form
+ * for that call, a `form` attribute naming no element taking them out with their
+ * value, focus and caret untouched. A kept radio group also takes a name no other
+ * radio has, so it never joins a formless group of its own name meanwhile, where
+ * a checked one would uncheck the radios there.
  * @param {Element} form
  * @param {Map<Element, unknown>} [sent]
  */
@@ -353,24 +368,36 @@ export function maybeResetForm(form, sent) {
     if (!form.hasAttribute('az-form-reset')) return;
     const f = /** @type {HTMLFormElement} */ (form);
     const ctls = Array.from(f.elements);
-    const changed = (/** @type {Element} */ c) => {
-        const now = shownState(c);
-        return sent?.has(c)
-            ? !sameState(now, sent.get(c))
-            : sent !== undefined && now !== undefined;
-    };
-    const kept = new Set(ctls.filter(changed));
-    if (!kept.size) {
-        f.reset();
-        return;
-    }
+    const kept = sent
+        ? ctls.filter((c) => (sent.has(c) ? !sameState(shownState(c), sent.get(c)) : !atDefault(c)))
+        : [];
     // A radio group is kept whole: resetting a member the user left would check its
     // default and uncheck the one they picked.
-    const group = (/** @type {any} */ c) => c.localName === 'input' && c.type === 'radio' && c.name;
-    const groups = new Set([...kept].map(group).filter(Boolean));
-    for (const c of ctls) if (groups.has(group(c))) kept.add(c);
-    if (!f.dispatchEvent(new Event('reset', { bubbles: true, cancelable: true }))) return;
-    for (const c of ctls) if (!kept.has(c)) resetControl(c);
+    const groups = new Set(kept.map(radioName).filter(Boolean));
+    for (const c of ctls) if (!kept.includes(c) && groups.has(radioName(c))) kept.push(c);
+    let token = 'az-form-reset-detached';
+    while (kept.some((c) => /** @type {any} */ (c.getRootNode()).getElementById?.(token)))
+        token += '-';
+    const temp = new Map(Array.from(groups, (g, i) => [g, `${token}-${i}`]));
+    /** @type {Array<[Element, string|null, string|null]>} */
+    const detached = [];
+    try {
+        for (const c of kept) {
+            const group = radioName(c);
+            const was = [c, c.getAttribute('form'), group ? c.getAttribute('name') : null];
+            detached.push(/** @type {[Element, string|null, string|null]} */ (was));
+            // Renamed before it leaves the form, so it never joins a formless group.
+            if (group) c.setAttribute('name', /** @type {string} */ (temp.get(group)));
+            c.setAttribute('form', token);
+        }
+        f.reset();
+    } finally {
+        for (const [c, owner, name] of detached.reverse()) {
+            if (owner === null) c.removeAttribute('form');
+            else c.setAttribute('form', owner);
+            if (name !== null) c.setAttribute('name', name);
+        }
+    }
 }
 
 /**

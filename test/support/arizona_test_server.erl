@@ -242,6 +242,13 @@ routes() ->
             layouts => Layouts
         }},
         {post, <<"/fetch-push/submit">>, arizona_fetch_push_controller, #{}},
+        %% arizona_js:fetch + az-form-reset -- the reset waits for the 2xx, and keeps what
+        %% the user typed while the request was in flight.
+        {live, <<"/fetch-reset">>, arizona_fetch_reset, #{
+            bindings => #{title => <<"Fetch reset">>},
+            layouts => Layouts
+        }},
+        {post, <<"/fetch-reset/submit">>, arizona_fetch_reset_controller, #{}},
         %% Form-aware payload -- one az_submit push_event on a two-submit-button form; the
         %% payload carries the form's fields plus which named submit button fired.
         {live, <<"/form-submitter">>, arizona_form_submitter, #{
