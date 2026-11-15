@@ -447,8 +447,10 @@ export function bindDocumentEvents(target, signal, abort) {
             const form = submitted.closest('[az-submit]');
             if (!form) return;
             // A submit bubbles, but az-submit belongs on the <form>: one on an element
-            // around this form is not its, so the form submits as the page wrote it.
-            if (form !== submitted) {
+            // around this form is not its, so the form submits as the page wrote it,
+            // and one on an element that is no form (a submit app code dispatched) has
+            // nothing to post.
+            if (form !== submitted || submitted.localName !== 'form') {
                 warnOnce(
                     `[arizona] az-submit on a <${form.localName}> is ignored: it belongs on the <form> itself`,
                     'az-submit-outside-form',

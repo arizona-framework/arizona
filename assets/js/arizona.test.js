@@ -2822,6 +2822,33 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         expect(writeText.mock.calls).toEqual([['7'], ['field value']]);
     });
 
+    it('copy_to_clipboard copies what a textarea and a select show', () => {
+        document.body.innerHTML =
+            '<textarea id="t">default</textarea><select id="s"><option>a</option><option>b</option></select>';
+        /** @type {HTMLTextAreaElement} */ (document.getElementById('t')).value = 'typed';
+        /** @type {HTMLSelectElement} */ (document.getElementById('s')).value = 'b';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#t']);
+        executeJS(document.body, null, [27, '#s']);
+        expect(writeText.mock.calls).toEqual([['typed'], ['b']]);
+    });
+
+    it('copy_to_clipboard copies the text of a custom element whose value is no string', () => {
+        if (!customElements.get('x-copy-count'))
+            customElements.define(
+                'x-copy-count',
+                class extends HTMLElement {
+                    get value() {
+                        return 3;
+                    }
+                },
+            );
+        document.body.innerHTML = '<x-copy-count id="x">three items</x-copy-count>';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#x']);
+        expect(writeText).toHaveBeenCalledWith('three items');
+    });
+
     it('copy_to_clipboard falls back to textContent for a non-form element', () => {
         document.body.innerHTML = '<code id="t">npm i arizona</code>';
         const writeText = stubClipboard();
@@ -7952,6 +7979,34 @@ describe('form submit', () => {
         }
     });
 
+    // A submit app code dispatches on an element that is no form: nothing to post.
+    it('leaves a submit on an az-submit element that is not a form alone', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<div id="w" az-submit='[0,"go"]' az-form-reset><input name="q" value="kept"></div>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const errors = vi.fn();
+        window.addEventListener('error', errors);
+        try {
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            document.getElementById('w').dispatchEvent(ev);
+            expect(ev.defaultPrevented).toBe(false);
+            expect(errors).not.toHaveBeenCalled();
+            expect(mock.getSentMessages()).toHaveLength(0);
+            expect(warn.mock.calls).toEqual([
+                ['[arizona] az-submit on a <div> is ignored: it belongs on the <form> itself'],
+            ]);
+        } finally {
+            window.removeEventListener('error', errors);
+            warn.mockRestore();
+        }
+    });
+
     // A one-time console line is invisible to the user who pressed submit; every
     // drop warns and tells the app on the form, so it can show feedback.
     it('warns and dispatches arizona:submit-dropped on every dropped submit', async () => {
@@ -8656,6 +8711,20 @@ describe('fetch in flight', () => {
             pending[0].resolve(response(200, ''));
             pending[1].resolve(response(200, ''));
             await flush();
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+        });
+
+        it('finds no field in an element the resync renders under the form id that is no form', async () => {
+            await page(RESET_FORM());
+            q().focus();
+            submit('f');
+            expect(() =>
+                reconnect(
+                    '<fieldset id="f"><input name="q" value=""></fieldset><p id="after"></p>',
+                ),
+            ).not.toThrow();
+            expect(document.getElementById('after')).not.toBeNull();
+            expect(document.activeElement).toBe(document.body);
             expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
         });
 

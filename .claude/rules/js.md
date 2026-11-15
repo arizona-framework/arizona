@@ -238,7 +238,8 @@ is a drop like the disconnected one below (a warning and `arizona:submit-dropped
 `az-submit` belongs on the `<form>`: a submit bubbles, so one on an element around a form would
 catch that form's submit, but it is not the form's -- the listener leaves the submit alone (no
 `preventDefault`, nothing run, no drop) and warns once, naming the element, so a plain form inside
-an element whose `az-submit` holds app data submits natively as the page wrote it.
+an element whose `az-submit` holds app data submits natively as the page wrote it. A `submit`
+event app code dispatches on a non-form element carrying `az-submit` is left alone the same way.
 
 - **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
   its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
