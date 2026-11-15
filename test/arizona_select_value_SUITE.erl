@@ -618,7 +618,9 @@ fragment_reads_as_the_parser_preprocesses(Config) when is_list(Config) ->
     ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 0>>])),
     ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 16#FFFD/utf8>>])),
     ?assertEqual(1, One(~"<option>a<template>b</template></option>", [~"a"])),
-    ?assertEqual(0, One(~"<option>a<template>b</template></option>", [~"ab"])).
+    ?assertEqual(0, One(~"<option>a<template>b</template></option>", [~"ab"])),
+    %% An element inside the template is skipped with it, so the text after it counts.
+    ?assertEqual(1, One(~"<option>a<template><b>x</b></template>c</option>", [~"ac"])).
 
 %% --------------------------------------------------------------------
 %% Diff
