@@ -486,6 +486,8 @@
     local_attr_dynamic_raw_error/1,
     local_attr_raw_affix_reads_alone/1,
     local_attr_static_affix_reads_as_page/1,
+    local_attr_raw_affix_builds_bytes/1,
+    local_attr_raw_affix_not_utf8_error/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -767,6 +769,8 @@ groups() ->
             local_attr_dynamic_raw_error,
             local_attr_raw_affix_reads_alone,
             local_attr_static_affix_reads_as_page,
+            local_attr_raw_affix_builds_bytes,
+            local_attr_raw_affix_not_utf8_error,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -1987,6 +1991,80 @@ local_attr_static_affix_reads_as_page(Config) when is_list(Config) ->
         decode_local_descriptor(SSR),
         SSR
     ).
+
+%% A raw's argument is a runtime value whose bytes Erlang builds, beside a `?local` as
+%% anywhere else: an integer segment is a byte, so `<<16#C3, 16#A9>>` is the UTF-8 of
+%% `é` and `<<55296>>` the byte 0 (a NUL, which an attribute holds as U+FFFD), exactly
+%% as the same raw renders beside a `?get`.
+local_attr_raw_affix_builds_bytes(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, Raw, Affix}) ->
+            Mod = compile_module(
+                "-module(pt_local_attr_raw_bytes_" ++ integer_to_list(N) ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> "
+                    "    arizona_template:target(arizona_html, "
+                    "        {'a', [{title, [arizona_template:raw(" ++ Raw ++
+                    "), arizona_template:local(id, <<\"1\">>)]}], [<<\"e\">>]}"
+                    "    ). "
+            ),
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+            ?assertEqual(
+                #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => [Affix, ~""]}},
+                decode_local_descriptor(SSR),
+                SSR
+            )
+        end,
+        [
+            {1, "<<16#C3, 16#A9>>", <<"é"/utf8>>},
+            {2, "<<\"é\"/utf8>>", <<"é"/utf8>>},
+            {3, "<<55296>>", <<16#FFFD/utf8>>},
+            {4, "[<<16#C3, 16#A9>>, $x]", <<"éx"/utf8>>}
+        ]
+    ).
+
+%% The client composes the attribute from its affixes as text, so a raw beside a
+%% `?local` that builds bytes that are not UTF-8 (a Latin-1 literal, a byte above 127)
+%% has no text to fold to: refused at the raw, not misread as a computed part.
+local_attr_raw_affix_not_utf8_error(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Raw) ->
+            Result = raw_affix_parse(Raw),
+            ?assertMatch(
+                {error, [{_File, [{6, arizona_parse_transform, {local_attr_raw_not_utf8, _}}]}],
+                    []},
+                Result,
+                Raw
+            ),
+            {error, [{_, [{_, _, Reason}]}], []} = Result,
+            Msg = lists:flatten(arizona_parse_transform:format_error(Reason)),
+            ?assertNotEqual(nomatch, string:find(Msg, "UTF-8"), Msg)
+        end,
+        ["<<255>>", "<<\"é\">>", "<<233>>", "[<<255>>]", "<<255:8>>"]
+    ).
+
+%% The transform's result for a `?raw` of `Raw` beside an attribute `?local`, the raw on
+%% line 6.
+raw_affix_parse(Raw) ->
+    Source =
+        "-module(pt_local_attr_raw_not_utf8).\n"
+        "-export([render/1]).\n"
+        "render(Bindings) ->\n"
+        "    arizona_template:target(arizona_html,\n"
+        "        {'a', [{title, [<<\"x\">>,\n"
+        "            arizona_template:raw(" ++ Raw ++
+            "),\n"
+            "            arizona_template:local(id, <<\"1\">>)]}], [<<\"e\">>]}).\n",
+    {ok, Tokens, _} = erl_scan:string(Source),
+    Forms = [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- split_forms(Tokens)
+    ],
+    arizona_parse_transform:parse_transform(Forms, []).
 
 %% A raw the server computes beside a `?local` has no meaning the client can keep:
 %% the client recomposes the attribute from affixes fixed in the page, so a part that

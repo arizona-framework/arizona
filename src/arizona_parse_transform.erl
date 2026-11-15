@@ -1348,6 +1348,18 @@ format_error({HelperReason, Name, Arity}) ->
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
+format_error({local_attr_raw_not_utf8, Bytes}) ->
+    lists:flatten(
+        io_lib:format(
+            "this ?raw beside an attribute ?local builds ~W, which is not UTF-8 text. A "
+            "?raw's argument is a runtime value whose bytes Erlang builds (an integer "
+            "segment is a byte, a bare <<\"...\">> is Latin-1), and beside a ?local "
+            "those bytes are folded into the text the client composes the attribute "
+            "with, so they must be UTF-8. Write the text as ~~\"...\" or "
+            "<<\"...\"/utf8>>",
+            [Bytes, 20]
+        )
+    );
 format_error(local_attr_mixed) ->
     "a ?local in an attribute value can only be combined with fixed parts -- static "
     "text, or a ?raw of literal text -- not a value the server computes (a dynamic, "
@@ -5360,22 +5372,66 @@ attr_interp_spec(Elems, Line) ->
 %% part the server computes has no channel to reach the client's copy, so it would
 %% render once and then silently disagree with the binding it reads.
 assert_all_fixed(Elems, Line) ->
-    case lists:all(fun is_fixed_affix_part/1, Elems) of
+    lists:foreach(fun(Part) -> assert_fixed(Part, Line) end, Elems).
+
+assert_fixed(Part, Line) ->
+    case is_static_binary(Part) orelse raw_affix_markup(Part) of
         true -> ok;
-        false -> parse_error(local_attr_mixed, Line)
+        {ok, _Markup} -> ok;
+        {not_utf8, Bytes} -> parse_error({local_attr_raw_not_utf8, Bytes}, anno(Part));
+        error -> parse_error(local_attr_mixed, Line)
     end.
 
-is_fixed_affix_part(Part) ->
-    is_static_binary(Part) orelse raw_affix_markup(Part) =/= error.
-
-%% The markup a literal `?raw` of literal text splices: `{ok, Bin}`, else `error`.
+%% The markup a literal `?raw` splices: `{ok, Bin}`, `{not_utf8, Bytes}` when it is not
+%% text, else `error`. A raw's argument is a runtime value whose bytes Erlang builds
+%% (an integer segment a byte, a bare `<<"...">>` Latin-1) wherever the raw sits, so
+%% the bytes folded here are the ones it builds -- what the same raw renders beside a
+%% dynamic, converted as the render converts it (arizona_template:to_bin/1). The affix
+%% is text the client composes with, so bytes that are not UTF-8 have none to fold to.
 raw_affix_markup({call, _, _, [Arg]} = Part) ->
-    case is_raw_call(Part) of
-        true -> literal_text(Arg);
+    case is_raw_call(Part) andalso is_literal_value(Arg) of
+        true -> raw_literal_bytes(Arg);
         false -> error
     end;
 raw_affix_markup(_Part) ->
     error.
+
+raw_literal_bytes(Arg) ->
+    try erl_eval:expr(Arg, erl_eval:new_bindings()) of
+        {value, Value, _Bindings} when is_binary(Value); is_list(Value) ->
+            utf8_bytes(Value);
+        {value, Value, _Bindings} ->
+            {not_utf8, Value}
+    catch
+        error:_NotBuilt -> error
+    end.
+
+utf8_bytes(Value) ->
+    try arizona_template:to_bin(Value) of
+        Bin ->
+            case unicode:characters_to_binary(Bin) of
+                Bin -> {ok, Bin};
+                _NotUtf8 -> {not_utf8, Value}
+            end
+    catch
+        error:_NotText -> {not_utf8, Value}
+    end.
+
+%% A binary or a list built from literals alone: nothing in it is read at runtime.
+is_literal_value({bin, _, Elements}) ->
+    lists:all(fun is_literal_bin_element/1, Elements);
+is_literal_value({cons, _, Head, Tail}) ->
+    is_literal_value(Head) andalso is_literal_value(Tail);
+is_literal_value({Kind, _, _}) when Kind =:= string; Kind =:= integer; Kind =:= char ->
+    true;
+is_literal_value({nil, _}) ->
+    true;
+is_literal_value(_Computed) ->
+    false.
+
+is_literal_bin_element({bin_element, _, Value, Size, _Type}) ->
+    (element(1, Value) =:= string orelse code_point_literal(Value) =/= error) andalso
+        (Size =:= default orelse element(1, Size) =:= integer).
 
 %% The text one fixed part means: static text as written, a literal raw as the text
 %% its markup reads as on its own (the backend's `markup_text/2`, in `attribute`). A

@@ -1161,8 +1161,12 @@ content slots, freely mixed with static text and other dynamic children. An attr
 may also **interpolate** one `?local` with static text around it (the statics become a
 prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server-owned
 dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). A literal
-`?raw` of literal text is static and may be an affix part: the transform folds it to the
-text its markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
+`?raw` of literal text is static and may be an affix part. Its argument means what it means
+anywhere else, a runtime value whose bytes Erlang builds (an integer segment a byte, a bare
+`<<"...">>` Latin-1), so the transform builds those bytes, as the render would, and refuses
+bytes that are not UTF-8 with `local_attr_raw_not_utf8` at the raw (the affix is text the
+client composes with); it folds valid ones to the
+text their markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
 treats that as static text, which the page holds exactly once escaped (HTML writes a CR
 as `&#13;`, see "Output is UTF-8"). Every affix is the text the page reads back
 (`markup_text/2` of the escaped part), so a static NUL, which no attribute can hold, is
