@@ -5509,99 +5509,156 @@ describe('crash and mount-failure recovery', () => {
         expect(ackRequests(m)).toBe(0);
     });
 
-    it('acknowledges only after a replayed event a view transition deferred', async () => {
-        // A transition around a plain command runs it in the transition's update,
-        // later; the push_event nested there must go out before the ping.
-        const deferred =
-            '<div id="page" az-view><form id="f" az-change=\'[20,{},[20,{},[0,"changed"]]]\'>' +
-            '<input name="q" value=""></form></div>';
+    /** A view whose one form `f` has `az-change` `change` (plus `extra` markup). */
+    const formView = (change, extra = '') =>
+        `<div id="page" az-view><form id="f"${extra} az-change='${change}'>` +
+        '<input name="q" value=""></form></div>';
+    /** Connect on `view`, type into `q`, crash, and reconnect on `view` again. */
+    async function crashAndRemount(view) {
         const m = await start();
-        document.body.innerHTML = deferred;
+        document.body.innerHTML = view;
         m.simulateOpen();
         m.simulateMessage(null, null);
-        /** @type {Array<() => void>} */
-        const updates = [];
-        document.startViewTransition = (arg) => {
-            updates.push(typeof arg === 'function' ? arg : arg.update);
-            return {};
-        };
+        field('q').value = 'typed';
+        m.simulateClose(4500);
+        const before = m.posted.length;
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', view]], null, true);
+        return { m, after: m.posted.slice(before) };
+    }
+    /** Run `body` with `fetch` stubbed by a never-settling spy. */
+    async function withFetch(body) {
+        const originalFetch = globalThis.fetch;
+        const spy = vi.fn(() => new Promise(() => {}));
+        globalThis.fetch = spy;
         try {
-            field('q').value = 'v';
-            m.simulateClose(4500);
-            m.simulateOpen(true);
-            m.simulateMessage([[8, 'page', deferred]], null, true);
-            expect(changeSends(m)).toBe(0);
-            expect(ackRequests(m)).toBe(0); // the replayed event is still pending
-            for (const update of updates.splice(0)) update();
-            const sends = m.posted.filter((d) => d[0] === 1 || d[0] === 4);
-            const change = sends.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
-            expect(change).toBeGreaterThanOrEqual(0);
-            expect(sends.findIndex((d) => d[0] === 4)).toBeGreaterThan(change);
+            await body(spy);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    }
+    /** Run `body` with `document.startViewTransition` stubbed by a spy. */
+    async function withViewTransition(body) {
+        const spy = vi.fn((arg) => {
+            (typeof arg === 'function' ? arg : arg.update)();
+            return {};
+        });
+        document.startViewTransition = spy;
+        try {
+            await body(spy);
         } finally {
             delete document.startViewTransition;
         }
+    }
+    const sends = (after) => after.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+
+    it('never re-sends a fetch az-change, and asks for no acknowledgement', async () => {
+        await withFetch(async (fetchSpy) => {
+            const { m, after } = await crashAndRemount(formView('[22,"/save",{}]'));
+            expect(field('q').value).toBe('typed');
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(ackRequests(m)).toBe(0);
+            expect(sends(after)).toEqual([]);
+        });
     });
 
-    it("acknowledges only after a replayed fetch's response events", async () => {
-        // A fetch az-change posts its response's push_event later; the ping must
-        // follow it.
-        const viaFetch =
-            '<div id="page" az-view><form id="f" az-change=\'[22,"/save",{}]\'>' +
-            '<input name="q" value=""></form></div>';
-        const m = await start();
-        document.body.innerHTML = viaFetch;
-        m.simulateOpen();
-        m.simulateMessage(null, null);
-        /** @type {(v: any) => void} */
-        let respond = () => {};
-        const originalFetch = globalThis.fetch;
-        globalThis.fetch = vi.fn(() => new Promise((resolve) => (respond = resolve)));
-        try {
-            field('q').value = 'v';
-            m.simulateClose(4500);
-            m.simulateOpen(true);
-            m.simulateMessage([[8, 'page', viaFetch]], null, true);
-            expect(ackRequests(m)).toBe(0); // the response is still pending
-            respond({
-                ok: true,
-                status: 200,
-                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'changed']] })),
+    it('replays the push_event beside a fetch, and acknowledges right after it', async () => {
+        await withFetch(async (fetchSpy) => {
+            const { m, after } = await crashAndRemount(formView('[[0,"changed"],[22,"/save",{}]]'));
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(changeSends(m)).toBe(1);
+            const change = after.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+            expect(after[change + 1]).toEqual([4]);
+        });
+    });
+
+    it('replays a push_event inside nested transitions at once, with no view transition', async () => {
+        await withViewTransition(async (vt) => {
+            const { m, after } = await crashAndRemount(formView('[20,{},[20,{},[0,"changed"]]]'));
+            expect(vt).not.toHaveBeenCalled();
+            expect(changeSends(m)).toBe(1);
+            const change = after.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+            expect(after[change + 1]).toEqual([4]);
+        });
+    });
+
+    it('does not re-send a fetch inside a transition', async () => {
+        await withViewTransition(async (vt) => {
+            await withFetch(async (fetchSpy) => {
+                const { m } = await crashAndRemount(formView('[20,{},[22,"/save",{}]]'));
+                expect(fetchSpy).not.toHaveBeenCalled();
+                expect(vt).not.toHaveBeenCalled();
+                expect(ackRequests(m)).toBe(0);
             });
+        });
+    });
+
+    it('does not replay a push_event inside an on_key', async () => {
+        const { m } = await crashAndRemount(formView('[16,".*",[0,"changed"]]'));
+        expect(changeSends(m)).toBe(0);
+        expect(ackRequests(m)).toBe(0);
+    });
+
+    it("does not replay a fetch's on_error push_event", async () => {
+        await withFetch(async (fetchSpy) => {
+            const { m } = await crashAndRemount(
+                formView('[22,"/save",{"on_error":[[0,"changed"]]}]'),
+            );
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(changeSends(m)).toBe(0);
+            expect(ackRequests(m)).toBe(0);
+        });
+    });
+
+    it('keeps the restored fields of an az-form-reset fetch form', async () => {
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('') }),
+        );
+        try {
+            await crashAndRemount(formView('[22,"/save",{}]', ' az-form-reset'));
             for (let i = 0; i < 10; i++) await Promise.resolve();
-            const sends = m.posted.filter((d) => d[0] === 1 || d[0] === 4);
-            const change = sends.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
-            expect(change).toBeGreaterThanOrEqual(0);
-            expect(sends.findIndex((d) => d[0] === 4)).toBeGreaterThan(change);
+            expect(field('q').value).toBe('typed');
         } finally {
             globalThis.fetch = originalFetch;
         }
     });
 
-    it('a deferred replay part finishing after the close acknowledges nothing', async () => {
-        const deferred =
-            '<div id="page" az-view><form id="f" az-change=\'[20,{},[20,{},[0,"changed"]]]\'>' +
+    it('runs none of the client-only commands in az-change', async () => {
+        const view =
+            '<div id="page" az-view><div id="t"></div>' +
+            `<form id="f" az-change='[[1,"#t"],[25,"#f"],[9,"replayed"],[10,"/elsewhere"]]'>` +
             '<input name="q" value=""></form></div>';
-        const m = await start();
-        document.body.innerHTML = deferred;
-        m.simulateOpen();
-        m.simulateMessage(null, null);
-        /** @type {Array<() => void>} */
-        const updates = [];
-        document.startViewTransition = (arg) => {
-            updates.push(typeof arg === 'function' ? arg : arg.update);
-            return {};
-        };
+        const dispatched = vi.fn();
+        const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
+        const push = vi.spyOn(history, 'pushState');
+        document.addEventListener('replayed', dispatched);
         try {
-            field('q').value = 'v';
-            m.simulateClose(4500);
-            m.simulateOpen(true);
-            m.simulateMessage([[8, 'page', deferred]], null, true);
-            m.simulateClose(1006); // the connection goes before the transition runs
-            for (const update of updates.splice(0)) update();
+            const { m, after } = await crashAndRemount(view);
+            expect(field('q').value).toBe('typed');
+            expect(document.getElementById('t').hidden).toBe(false);
+            expect(reset).not.toHaveBeenCalled();
+            expect(dispatched).not.toHaveBeenCalled();
+            expect(push).not.toHaveBeenCalled();
+            expect(sends(after)).toEqual([]);
             expect(ackRequests(m)).toBe(0);
         } finally {
-            delete document.startViewTransition;
+            document.removeEventListener('replayed', dispatched);
+            reset.mockRestore();
+            push.mockRestore();
         }
+    });
+
+    it('a change event on a fetch az-change still fetches', async () => {
+        await withFetch(async (fetchSpy) => {
+            const m = await start();
+            document.body.innerHTML = formView('[22,"/save",{}]');
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            field('q').dispatchEvent(new Event('change', { bubbles: true }));
+            expect(fetchSpy).toHaveBeenCalledTimes(1);
+        });
     });
 
     it('a crash long after the acknowledged replay replays again', async () => {

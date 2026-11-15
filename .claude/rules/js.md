@@ -130,7 +130,8 @@ generic listeners are bound only for proven types, which is the only way one get
 dedicated `submit` and `drop` listeners are bound on every page (they carry bookkeeping), so each
 asks `proven` before parsing its attribute; an unproven `az-submit` is still `preventDefault`ed
 (see below) and runs nothing. The reconnect replay re-runs only a form's `az-change`, and only
-when `az-change` is proven; no field's handler is replayed. A `submit` or `drop` proof is
+when `az-change` is proven; no field's handler is replayed. Of that `az-change` it sends only the
+`push_event`s, looked for through `transition` wrappers (`replayEvents`; see "Reconnect"). A `submit` or `drop` proof is
 recorded beside the others but binds no generic listener (`DEDICATED`).
 
 Deriving the set from rendered bytes instead was tried and abandoned. A regex over serialized HTML
@@ -209,7 +210,7 @@ form: its only pending send is that trailing submission, which its tick delivers
 flush would only reopen the window early. Pacing is a `push_event` mechanism: an
 `arizona_js:fetch` is issued as it is raised, on a submit or any event, and `az-debounce`/
 `az-throttle` do not defer it (a deferred request would need its own answer to the navigate
-epoch and the replay hold, both defined for view events, and a paced double submit still posts
+epoch and the reconnect replay, both defined for view events, and a paced double submit still posts
 twice); `on_repeat => drop` is what stops a repeat (see "HTTP fetch"). A debounce mode the server switches mid-window sends the slot's latest raise in the new
 mode: the old timer neither fires a raise the new one replaced nor drops it.
 
@@ -410,7 +411,7 @@ the field shows the server's state, which is the point.
   `[push_event(add), set_attr(...)]` to clear on Enter) writes through at once; if it changes a
   control in flight, that is the user's change since the send, so the reply leaves it. A
   `fetch` the user starts applies its response effects as write-through; one a server effect
-  started applies them as server writes (the origin rides `holdReplay`). A write to a part
+  started applies them as server writes (the origin rides `keepOrigin`). A write to a part
   the control does not show (a checkbox's `value`) is not held; a textarea's `value` write
   is its live value, so it is. A `?local` control carries
   no `az-ctl`, so it is never held. The static host holds nothing.
@@ -438,7 +439,7 @@ the field shows the server's state, which is the point.
   never passes for the reply's echo. (That frame carries no ref, so a pending `'any'` view
   transition does not wrap it: only the reply after it animates.) A command a frame runs
   later -- a handler's `transition(set_attr(...))` runs in the view transition's update
-  callback -- keeps the frame's origin (`holdReplay` carries `_inFrame`), so it is held like
+  callback -- keeps the frame's origin (`keepOrigin` carries `_inFrame`), so it is held like
   the frame's own writes. A focused but untouched control is not held: it shows
   live updates. The guard ends when an event carries the control (pending, then in flight,
   the note dropped) or when focus leaves it (`focusout` -> `host.ctlEvent`) with nothing
@@ -462,7 +463,8 @@ the field shows the server's state, which is the point.
 
 Out of scope: restoring a control across a reconnect beyond the existing `az-change` replay
 (`saveFormState`/`restoreFormState`), a `fetch` form (its response has no diff to settle
-against; render from state via `push_event`). An unmarked `<textarea>` keeps the user's text
+against; render from state via `push_event`). A `fetch` form's fields are restored on a
+reconnect, but its `fetch` is not replayed. An unmarked `<textarea>` keeps the user's text
 over a content update, as before.
 
 ### Patch nav (`az-patch`) and the `_azNav` tag
@@ -560,7 +562,7 @@ An unflagged reconnect (`init_view(true, false, ...)`) keeps the old behavior: m
 
 The client classifies a close by its code alone. **4500** (the view crashed after it mounted): no reload; the worker's backoff reconnect remounts the view in place. **4501** (the view failed to mount): reload after a random 5-10 s delay, 30 s from the 10th consecutive reload, never giving up. The count lives in `sessionStorage` under one key, `arizona:mount-reloads`, holding `{path, count}`: per tab, surviving that tab's reload (all the count needs) and cleared when the tab closes, so a failing path -- which may carry a secret such as a reset token or invite code -- never outlives the tab. A reload increments the count when the stored path is the one being reloaded and starts a new count of 1 otherwise; an unavailable or corrupt value reads as 0. Tabs do not share it: each tab's jittered delay already spreads them out. Only a successful mount removes it: the first frame of a first connect (the server sends nothing before it mounts), the resync frame (`firstAfterReconnect`) of a reconnect, or a navigate's `OP_REPLACE` reply. The main thread is the one source of that signal: it also posts `[5]` to the worker, whose backoff resets on a close only after a mount, and on a 4500 only when that mount is at least 10 s old. A successful mount also cancels a pending reload; `pagehide` and `disconnect()` only cancel it. Fields saved on a 4501 are lost by the reload unless a reconnect mounts first.
 
-Typed form fields are saved on any non-1000 close (and re-saved just before the resync replaces the view) and restored after the remount, replaying `az-change` once. The resync frame also keeps the user's place: `captureFocus` records each hosting document's focused element by what the fresh markup carries again (its `id`, else its form's `id` plus its `name` and position among that form's same-named fields) with its selection range, and `restoreFocus` -- after the values are restored, since setting a value moves the caret to the end -- refocuses the replacement (`preventScroll`) and restores the range. A field inside a kept az-nodiff element is the same node after the resync, but moving it through the parsed fragment detached it and dropped focus, so it is refocused by reference (no id or form needed). It does nothing when the element still holds focus, when the field is gone, or when something else already holds focus (a resync effect's `focus` wins). The refocus is a real `focus()`, so it fires `focus`/`focusin`: an `az-focus`/`az-focusin` command on that field (a `push_event`) runs again on reconnect. Once every replayed event is posted -- a command that defers its work (a view transition's update, a fetch's response effects) holds the replay open until it ran -- the main thread posts `[4]` to the worker, which sends a ping; the server handles a socket's frames in order and an event synchronously, so that ping's pong (reported back as `[3]`, matched to its ping because pongs come back in ping order) proves the replay was handled. A 4500 before it restores the replayed forms next time **without** the replay -- the values are kept, never dropped; after it, nothing is suspect.
+Typed form fields are saved on any non-1000 close (and re-saved just before the resync replaces the view) and restored after the remount, replaying `az-change` once. The resync frame also keeps the user's place: `captureFocus` records each hosting document's focused element by what the fresh markup carries again (its `id`, else its form's `id` plus its `name` and position among that form's same-named fields) with its selection range, and `restoreFocus` -- after the values are restored, since setting a value moves the caret to the end -- refocuses the replacement (`preventScroll`) and restores the range. A field inside a kept az-nodiff element is the same node after the resync, but moving it through the parsed fragment detached it and dropped focus, so it is refocused by reference (no id or form needed). It does nothing when the element still holds focus, when the field is gone, or when something else already holds focus (a resync effect's `focus` wins). The refocus is a real `focus()`, so it fires `focus`/`focusin`: an `az-focus`/`az-focusin` command on that field (a `push_event`) runs again on reconnect. The replay sends only the form's `push_event`s, looked for through `transition` wrappers and unwrapped (the resync arms no view transition), and nothing else: not one under `on_key`, a fetch's `on_error` or a `set_attr`/`toggle_attr` command value, and no other command. It exists to rebuild the view state the remount discarded, which only an event holds. A `fetch` in particular is never re-sent: its effect (a cookie, a write behind the controller) is not lost by a remount, and re-sending it repeats a mutation with no user action (and, under `az-form-reset`, its 2xx would wipe the fields just restored). View state derived from a fetch's response is rebuilt by the next change, or by a `push_event` beside the fetch. Every replayed event is sent synchronously, so right after the restore the main thread posts `[4]` to the worker, which sends a ping; the server handles a socket's frames in order and an event synchronously, so that ping's pong (reported back as `[3]`, matched to its ping because pongs come back in ping order) proves the replay was handled. A 4500 before it restores the replayed forms next time **without** the replay -- the values are kept, never dropped; after it, nothing is suspect.
 
 ## Connection events (`arizona:connected` / `arizona:disconnected`)
 
