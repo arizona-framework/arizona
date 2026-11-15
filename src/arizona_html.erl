@@ -37,7 +37,7 @@ identical to the previous inlined emission.
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([supports_keyed_item_ops/0]).
--export([implied_attrs/3]).
+-export([implied_attrs/2]).
 -export([selection_role/2]).
 -export([controlled/3]).
 -export([mark_choices/2]).
@@ -636,15 +636,13 @@ supports_nodiff_keep() -> true.
 
 supports_keyed_item_ops() -> true.
 
--spec implied_attrs(arizona_renderer:tag(), [binary()], arizona_renderer:content_context()) ->
-    [{binary(), binary()}].
+-spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [{binary(), binary()}].
 %% The client intercepts every `az-submit` submit, but only once arizona.js runs: a
 %% submit before that (Enter while the deferred module still loads) is native, and a
 %% method-less form submits as a GET -- every field, a password included, in the
 %% URL. As a POST the fields stay in the body (a live route answers 405). The
 %% client's `fetch` already treats a method-less form as POST, so nothing else moves.
-%% Only in HTML content: a `form` in foreign content (inside `<svg>`) is no HTML form.
-implied_attrs(Tag, Names, undefined) ->
+implied_attrs(Tag, Names) ->
     case tag_name(Tag) of
         ~"form" ->
             Lower = [ascii_lowercase(N) || N <- Names],
@@ -654,9 +652,7 @@ implied_attrs(Tag, Names, undefined) ->
             end;
         _Other ->
             []
-    end;
-implied_attrs(_Tag, _Names, _Foreign) ->
-    [].
+    end.
 
 -spec selection_role(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     none

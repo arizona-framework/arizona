@@ -4736,27 +4736,22 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
             Render("pt_sub_div", "{'div', [{az_submit, " ++ Cmd ++ "}], []}"), <<"method">>
         )
     ),
-    %% A form in foreign content (inside `<svg>`) is no HTML form; an integration point
-    %% (`foreignObject`) returns to HTML content, where it is one again.
-    ?assertEqual(
-        nomatch,
-        binary:match(
-            Render("pt_sub_svg", "{svg, [], [{form, [{az_submit, " ++ Cmd ++ "}], []}]}"),
-            <<"method">>
-        )
-    ),
-    ?assertMatch(
-        {_, _},
-        binary:match(
-            Render(
-                "pt_sub_fo",
-                "{svg, [], [{foreignObject, [], [{form, [{az_submit, " ++ Cmd ++ "}], []}]}]}"
-            ),
-            <<" method=\"post\"">>
-        )
+    %% Whatever the content context: a breakout tag (`div`) inside `<svg>` makes the
+    %% form an HTML one, and an SVG `form` ignores the attribute, so the fail-safe is
+    %% to imply it everywhere.
+    lists:foreach(
+        fun({Mod, Form}) ->
+            HTML = Render(Mod, Form),
+            ?assertMatch({_, _}, binary:match(HTML, <<" method=\"post\"">>), HTML)
+        end,
+        [
+            {"pt_sub_svg", "{svg, [], [{form, [{az_submit, " ++ Cmd ++ "}], []}]}"},
+            {"pt_sub_svg_div",
+                "{svg, [], [{'div', [], [{form, [{az_submit, " ++ Cmd ++ "}], []}]}]}"}
+        ]
     ),
     %% Other targets have no native form submission to guard.
-    ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>], undefined)),
+    ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>])),
     NativeMod = compile_module(
         "-module(pt_sub_json). -export([render/1]). render(Bindings) -> "
         "_ = Bindings, arizona_template:target(arizona_json, {form, [{az_submit, "

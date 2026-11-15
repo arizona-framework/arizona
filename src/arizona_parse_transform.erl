@@ -5083,7 +5083,7 @@ compile_static_false(NameAST, State0, ElemLine) ->
     end.
 
 %% The author's attributes, then the static ones the backend implies from them
-%% (`arizona_renderer:implied_attrs/3`), then `az-ctl` on a control whose default
+%% (`arizona_renderer:implied_attrs/2`), then `az-ctl` on a control whose default
 %% the diff renders (controlled/5).
 compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
     DiffsContent = diffs_content(Children, RawKind, ElemAz, State0),
@@ -5091,7 +5091,7 @@ compile_element_attrs(Tag, Attrs, {Children, RawKind}, ElemAz, State0, Line) ->
     State1 = compile_attrs(Attrs, ElemAz, State0#state{dyn_attrs = []}, Line),
     Names = [N || A <- Attrs, N <- [implied_attr_name(Backend, A)], is_binary(N)],
     State2 =
-        case Backend:implied_attrs(Tag, Names, State0#state.content_ctx) of
+        case Backend:implied_attrs(Tag, Names) of
             [] ->
                 State1;
             Implied ->
