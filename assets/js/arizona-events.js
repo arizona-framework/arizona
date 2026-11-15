@@ -392,10 +392,11 @@ function scanEvents(root) {
  * Tell the console and the app that a submit ran nothing: every drop warns and
  * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
  * @param {Element} form
- * @param {'disconnected'|'unproven'} reason
+ * @param {'disconnected'|'unproven'|'not_a_form'} reason
+ * @param {string} [why] what the warning adds after the reason
  */
-function dropSubmit(form, reason) {
-    console.warn(`[arizona] az-submit dropped: ${reason}`);
+function dropSubmit(form, reason, why = '') {
+    console.warn(`[arizona] az-submit dropped: ${reason}${why && ` (${why})`}`);
     form.dispatchEvent(
         new CustomEvent('arizona:submit-dropped', { bubbles: true, detail: { reason } }),
     );
@@ -451,6 +452,16 @@ export function bindDocumentEvents(target, signal, abort) {
             // URL. Before the first open and during reconnect backoff that used to
             // be exactly what happened.
             e.preventDefault();
+            // A submit bubbles: a wrapper carrying az-submit catches the submit of a
+            // form inside it, which it cannot post or reset.
+            if (form.localName !== 'form') {
+                dropSubmit(
+                    form,
+                    'not_a_form',
+                    `az-submit belongs on the <form> itself, not a <${form.localName}>`,
+                );
+                return;
+            }
             // Unproven: the value is app data (or the proof has not arrived, on a
             // page without the embed), and the user still pressed submit.
             if (!_eventTypes.has('submit')) {

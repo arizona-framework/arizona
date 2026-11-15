@@ -1308,8 +1308,12 @@ export function restoreFormState() {
         // out to a PiP window is not reachable from the main document.
         let form = null;
         for (const doc of allDocs()) {
-            form = doc.getElementById(formId);
-            if (form) break;
+            const el = doc.getElementById(formId);
+            // The id may name an element that is no form now: nothing to restore.
+            if (el?.localName === 'form') {
+                form = el;
+                break;
+            }
         }
         if (!form) continue;
         const formEl = /** @type {HTMLFormElement} */ (form);
