@@ -8837,14 +8837,13 @@ module_without_module_attr(Config) when is_list(Config) ->
     Dir = proplists:get_value(priv_dir, Config),
     Include = filename:join(code:lib_dir(arizona), "include"),
     lists:foreach(
-        fun({Name, ModLine, Expected}) ->
+        fun({Name, ModLine, Body, Expected}) ->
             File = filename:join(Dir, Name ++ ".erl"),
             ok = file:write_file(File, [
                 ModLine,
                 "-include(\"arizona_stateless.hrl\").\n"
-                "-export([render/1]).\n"
-                "render(Bindings) -> ?html({p, [{az_click, arizona_js:push_event(~\"go\")}],"
-                " [?get(x)]}).\n"
+                "-export([render/1]).\n",
+                Body
             ]),
             {error, Errors, _Warnings} = compile:file(File, [binary, return, {i, Include}]),
             Descriptors = [D || {_File, Ds} <- Errors, D <- Ds],
@@ -8858,8 +8857,20 @@ module_without_module_attr(Config) when is_list(Config) ->
             )
         end,
         [
-            {"pt_no_module", "", erl_lint},
-            {"pt_bad_module", "-module(bad mod).\n", erl_parse}
+            {Name ++ Suffix, ModLine, Body, Expected}
+         || {Name, ModLine, Expected} <- [
+                {"pt_no_module", "", erl_lint},
+                {"pt_bad_module", "-module(bad mod).\n", erl_parse}
+            ],
+            {Suffix, Body} <- [
+                {"",
+                    "render(Bindings) -> ?html({p, [{az_click, arizona_js:push_event(~\"go\")}],"
+                    " [?get(x)]}).\n"},
+                %% A named `?each` callback is inlined, and its definition suppressed.
+                {"_each",
+                    "render(Bindings) -> ?html({ul, [], [?each(fun row/1, ?get(xs))]}).\n"
+                    "row(X) -> {li, [], [X]}.\n"}
+            ]
         ]
     ).
 

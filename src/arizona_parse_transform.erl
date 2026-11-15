@@ -754,19 +754,12 @@ inject_az_attrs(Forms, Deps) ->
             L -> L
         end
     ),
-    case lists:splitwith(fun(Form) -> not is_module_attr(Form) end, Forms) of
-        {Before, [ModAttr | After]} ->
-            Anno = element(2, ModAttr),
-            %% Also records that this transform built the module (parse_transform/2).
-            Attrs =
-                [{attribute, Anno, ?TRANSFORMED_ATTR, true}] ++
-                    [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
-                    [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
-            Before ++ [ModAttr | Attrs] ++ After;
-        {Forms, []} ->
-            %% No module definition (missing, or malformed): the compiler reports it.
-            Forms
-    end.
+    insert_after_module(Forms, fun(Anno) ->
+        %% Also records that this transform built the module (parse_transform/2).
+        [{attribute, Anno, ?TRANSFORMED_ATTR, true}] ++
+            [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
+            [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []]
+    end).
 
 %% The modules this module can take markup from, as literal atoms: the component
 %% modules its templates name, and every module it calls, imports, or takes a
@@ -926,13 +919,21 @@ record_az_attr(NameBin) ->
     NameBin.
 
 insert_suppression_attrs(Forms, Pairs) ->
-    {Before, [ModAttr | After]} = lists:splitwith(
-        fun(Form) -> not is_module_attr(Form) end, Forms
-    ),
-    Anno = element(2, ModAttr),
-    NowarnAttr = {attribute, Anno, compile, {nowarn_unused_function, Pairs}},
-    IgnoreXrefAttr = {attribute, Anno, ignore_xref, Pairs},
-    Before ++ [ModAttr, NowarnAttr, IgnoreXrefAttr | After].
+    insert_after_module(Forms, fun(Anno) ->
+        [
+            {attribute, Anno, compile, {nowarn_unused_function, Pairs}},
+            {attribute, Anno, ignore_xref, Pairs}
+        ]
+    end).
+
+%% Inserts the attributes `Attrs(Anno)` builds right after the module attribute, at its
+%% annotation. A source with no module definition (missing, or malformed) is left as
+%% it is, for the compiler to report.
+insert_after_module(Forms, Attrs) ->
+    case lists:splitwith(fun(Form) -> not is_module_attr(Form) end, Forms) of
+        {Before, [ModAttr | After]} -> Before ++ [ModAttr | Attrs(element(2, ModAttr))] ++ After;
+        {Forms, []} -> Forms
+    end.
 
 is_module_attr({attribute, _, module, _}) -> true;
 is_module_attr(_) -> false.
