@@ -20,10 +20,12 @@ live one ties every page to the socket. Mutable module state is written only in 
 declares it (an ES import is read-only), through a setter when another module must change it.
 
 **Never read a form's own properties.** `HTMLFormElement` is `[LegacyOverrideBuiltIns]`: a control
-named (or with the id) `id`, `elements`, `reset`, ... is what the form's property of that name returns,
-ahead of the prototype (an edit form's `<input type=hidden name=id>` is its `id`). On an element that
-is or may be a form, read its id with `getAttribute('id')`, its controls with `formControls`, and
-reset it with `resetForm` (`arizona-util.js`, through the prototype) -- never `form.<prop>`. jsdom
+named (or with the id) `id`, `elements`, `reset`, `hidden`, `value`, ... is what the form's property of
+that name returns, ahead of the prototype, and assigning to it throws (an edit form's
+`<input type=hidden name=id>` is its `id`). On an element that is or may be a form, read its id with
+`getAttribute('id')`, its controls with `formControls`, reset it with `resetForm` (`arizona-util.js`,
+through the prototype), and toggle it with the `hidden` attribute -- never `form.<prop>`; a property
+a form lacks (`value`) is read only off an element that is not a form. jsdom
 does not shadow, so a test that must hold on a real page uses `shadowNamedControls`
 (`test-shadow.js`), which gives every form markup parses its controls as named properties.
 

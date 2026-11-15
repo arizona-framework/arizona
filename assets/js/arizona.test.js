@@ -2757,6 +2757,39 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         expect(writeText).toHaveBeenCalledWith('secret-token');
     });
 
+    it('copy_to_clipboard copies the text of a form with a control named value', () => {
+        // A browser's form has its controls as named properties (see test-shadow.js).
+        document.body.innerHTML =
+            '<form id="f">Code 42<input type="hidden" name="value" value="x" /></form>';
+        const unshadow = shadowNamedControls();
+        try {
+            const writeText = stubClipboard();
+            executeJS(document.body, null, [27, '#f']);
+            expect(writeText).toHaveBeenCalledWith('Code 42');
+        } finally {
+            unshadow();
+        }
+    });
+
+    it('toggle, show and hide a form with a control named hidden', () => {
+        document.body.innerHTML =
+            '<form id="f"><input type="hidden" name="hidden" value="x" /></form>';
+        const unshadow = shadowNamedControls();
+        try {
+            const form = /** @type {HTMLElement} */ (document.getElementById('f'));
+            executeJS(document.body, null, [1, '#f']); // toggle
+            expect(form.hasAttribute('hidden')).toBe(true);
+            executeJS(document.body, null, [1, '#f']);
+            expect(form.hasAttribute('hidden')).toBe(false);
+            executeJS(document.body, null, [3, '#f']); // hide
+            expect(form.hasAttribute('hidden')).toBe(true);
+            executeJS(document.body, null, [2, '#f']); // show
+            expect(form.hasAttribute('hidden')).toBe(false);
+        } finally {
+            unshadow();
+        }
+    });
+
     it('copy_to_clipboard falls back to textContent for a non-form element', () => {
         document.body.innerHTML = '<code id="t">npm i arizona</code>';
         const writeText = stubClipboard();

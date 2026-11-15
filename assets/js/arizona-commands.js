@@ -898,21 +898,23 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             }
             break;
         }
+        // The attribute, not the `hidden` property: a form's control named `hidden`
+        // is the form's `hidden`.
         case JS_TOGGLE:
             withQueryAll(cmd[1], (t) => {
-                t.hidden = !t.hidden;
+                t.toggleAttribute('hidden');
                 notifyUpdated(t);
             });
             break;
         case JS_SHOW:
             withQueryAll(cmd[1], (t) => {
-                t.hidden = false;
+                t.removeAttribute('hidden');
                 notifyUpdated(t);
             });
             break;
         case JS_HIDE:
             withQueryAll(cmd[1], (t) => {
-                t.hidden = true;
+                t.setAttribute('hidden', '');
                 notifyUpdated(t);
             });
             break;
@@ -1200,7 +1202,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // (event command only); a missing/blocked clipboard is a safe no-op. Not
             // a DOM mutation, so no notifyUpdated.
             withQuery(cmd[1], (t) => {
-                const text = /** @type {any} */ (t).value ?? t.textContent ?? '';
+                // A form has no value: its `value` is a control named so.
+                const value = t.localName === 'form' ? undefined : /** @type {any} */ (t).value;
+                const text = value ?? t.textContent ?? '';
                 // writeText rejects without permission / a secure context; catch it
                 // (like JS_OS) so a blocked copy is a logged no-op, not an unhandled
                 // rejection.
