@@ -190,6 +190,12 @@ render(Bindings) ->
 %% `undef` at render.
 -define(CHOICES_MARK, '$arizona_choices').
 
+%% The attribute a module this transform has built carries (inject_az_attrs/2), and
+%% its value: one only the transform writes, so an attribute a source authors under the
+%% same name does not make the transform skip the module.
+-define(TRANSFORMED_ATTR, arizona_transformed).
+-define(TRANSFORMED_MARK, {arizona_parse_transform, transformed}).
+
 %% Wraps the `selected` test a choice under a chooser whose value is a `?local` gets
 %% (rewrite_choice/4): the selection is the client's, so the attribute compiles as a
 %% browser-owned slot the page alone renders (compile_dynamic_attr/5) -- never diffed,
@@ -264,6 +270,19 @@ receives additional validation and `az-view` injection.
     Options :: [compile:option()],
     Errors :: [{file:filename(), [{erl_anno:location(), module(), term()}]}].
 parse_transform(Forms, Options) ->
+    %% A module may name the transform beside a header that already does, and the
+    %% compiler then runs it twice. The second run sees the first one's output, whose
+    %% leftover source literals it would warn about again and whose attributes it
+    %% would write again, so it leaves the module as the first run built it.
+    case lists:any(fun is_transformed_attr/1, Forms) of
+        true -> Forms;
+        false -> transform_module(Forms, Options)
+    end.
+
+is_transformed_attr({attribute, _, ?TRANSFORMED_ATTR, ?TRANSFORMED_MARK}) -> true;
+is_transformed_attr(_Form) -> false.
+
+transform_module(Forms, Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
@@ -738,19 +757,12 @@ inject_az_attrs(Forms, Deps) ->
             L -> L
         end
     ),
-    case {Names, Deps} of
-        {[], []} ->
-            Forms;
-        _ ->
-            {Before, [ModAttr | After]} = lists:splitwith(
-                fun(Form) -> not is_module_attr(Form) end, Forms
-            ),
-            Anno = element(2, ModAttr),
-            Attrs =
-                [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
-                    [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
-            Before ++ [ModAttr | Attrs] ++ After
-    end.
+    insert_after_module(Forms, fun(Anno) ->
+        %% Also records that this transform built the module (parse_transform/2).
+        [{attribute, Anno, ?TRANSFORMED_ATTR, ?TRANSFORMED_MARK}] ++
+            [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
+            [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []]
+    end).
 
 %% The modules this module can take markup from, as literal atoms: the component
 %% modules its templates name, and every module it calls, imports, or takes a
@@ -910,13 +922,21 @@ record_az_attr(NameBin) ->
     NameBin.
 
 insert_suppression_attrs(Forms, Pairs) ->
-    {Before, [ModAttr | After]} = lists:splitwith(
-        fun(Form) -> not is_module_attr(Form) end, Forms
-    ),
-    Anno = element(2, ModAttr),
-    NowarnAttr = {attribute, Anno, compile, {nowarn_unused_function, Pairs}},
-    IgnoreXrefAttr = {attribute, Anno, ignore_xref, Pairs},
-    Before ++ [ModAttr, NowarnAttr, IgnoreXrefAttr | After].
+    insert_after_module(Forms, fun(Anno) ->
+        [
+            {attribute, Anno, compile, {nowarn_unused_function, Pairs}},
+            {attribute, Anno, ignore_xref, Pairs}
+        ]
+    end).
+
+%% Inserts the attributes `Attrs(Anno)` builds right after the module attribute, at its
+%% annotation. A source with no module definition (missing, or malformed) is left as
+%% it is, for the compiler to report.
+insert_after_module(Forms, Attrs) ->
+    case lists:splitwith(fun(Form) -> not is_module_attr(Form) end, Forms) of
+        {Before, [ModAttr | After]} -> Before ++ [ModAttr | Attrs(element(2, ModAttr))] ++ After;
+        {Forms, []} -> Forms
+    end.
 
 is_module_attr({attribute, _, module, _}) -> true;
 is_module_attr(_) -> false.
@@ -1008,7 +1028,7 @@ mark_targets_node(Node, Ctx, CCtx) ->
     Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
     case Ctx =/= none andalso is_control_flow_ast(Node) of
         true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
-        false when Ctx =/= none -> push_chooser(Marked, target_backend(Ctx));
+        false when Ctx =/= none -> push_chooser(Marked, target_backend(Ctx), CCtx);
         false -> Marked
     end.
 
@@ -1021,7 +1041,7 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = Backend:content_context(Tag, CCtx),
     Marked = [mark_targets(P, Ctx, ChildCCtx) || P <- unwrap_child_tail_wrappers(Parts, Ctx)],
     %% An `?each` under a chooser compiles before it: hand it the value now.
-    push_chooser({tuple, L, Marked}, Backend).
+    push_chooser({tuple, L, Marked}, Backend, CCtx).
 
 %% A whole-tail `?html`/`?json`/`?terminal` (matching the enclosing target) in a
 %% conditional child is the bare element in a wrapper: unwrap it here, before the
@@ -1237,7 +1257,7 @@ format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
-    "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
+    "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom or a literal binary";
 format_error({void_with_children, Tag}) ->
     lists:flatten(
         io_lib:format(
@@ -1262,9 +1282,11 @@ format_error(az_view_not_allowed) ->
 %% The authored-attribute errors live in their own function, like the ?each family
 %% below, to keep format_error/1 under the cyclomatic limit.
 format_error({Kind, Detail}) when
-    Kind =:= reserved_attr; Kind =:= duplicate_attr; Kind =:= select_value
+    Kind =:= reserved_attr; Kind =:= duplicate_attr
 ->
     format_attr_error(Kind, Detail);
+format_error({missing_callback, Backend, Callback, Need}) ->
+    format_missing_callback(Backend, Callback, Need);
 format_error({invalid_child, ValueStr}) ->
     lists:flatten(
         io_lib:format(
@@ -1345,16 +1367,16 @@ format_error(local_key_reused) ->
 %% complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
-format_error(local_attr_multiple) ->
-    "an attribute value can interpolate at most one ?local -- multiple ?local in "
-    "one attribute can't be recomposed client-side";
-format_error(local_attr_mixed) ->
-    "a ?local in an attribute value can only be combined with fixed parts -- static "
-    "text, or a ?raw of literal text -- not a value the server computes (a dynamic, "
-    "or a ?raw of one): the client owns the attribute and recomposes it from the fixed "
-    "parts the page carries, and the slot is never diffed, so a computed part would "
-    "render once and then disagree with its bindings. Compute it into the ?local's "
-    "initial value instead, or render it in another attribute";
+%% The attribute `?local` errors, kept apart to keep format_error/1 under the
+%% cyclomatic limit.
+format_error(Reason) when
+    Reason =:= local_attr_multiple;
+    Reason =:= local_attr_mixed;
+    Reason =:= local_attr_raw_layout;
+    element(1, Reason) =:= local_attr_raw_not_utf8;
+    element(1, Reason) =:= local_attr_raw_not_code_point
+->
+    format_local_error(Reason);
 %% Render-target errors: nesting one target in another, and a `target/2` call
 %% declare_target/2 refused (tagged `target`).
 format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
@@ -1416,22 +1438,83 @@ format_attr_error(duplicate_attr, Name) ->
             "one list value, e.g. {class, [~~\"btn \", ?get(kind)]}",
             [Name]
         )
-    );
-format_attr_error(select_value, Detail) ->
-    format_select_error(Detail).
+    ).
 
-%% Raised for a backend that lacks a callback, so the core words it: an
-%% `option_selected` is the backend's (parse_error/3).
-format_select_error({no_markup_text, Backend, Tag}) ->
+%% A backend lacks a callback this template needs, so the core words it, naming the
+%% callback and what asked for it.
+format_missing_callback(Backend, {Fun, Arity}, Need) ->
     lists:flatten(
         io_lib:format(
-            "a ~ts without a value attribute is valued by its text, and a value in "
-            "this one's text may render markup, whose text the render target ~ts cannot "
-            "read: it names the selection roles (selection_role/1) but does not export "
-            "markup_text/2. Implement it, or give the ~ts a value attribute",
-            [Tag, Backend, Tag]
+            "~ts Implement ~ts/~w in the render target ~ts.",
+            [missing_callback_need(Need, Backend, Fun, Arity), Fun, Arity, Backend]
         )
     ).
+
+missing_callback_need({choice_text, Tag}, Backend, Fun, Arity) ->
+    io_lib:format(
+        "a ~ts without a value attribute is valued by its text, and a value in this "
+        "one's text may render markup, whose text the render target ~ts cannot read: it "
+        "names the selection roles (selection_role/2) but does not export ~ts/~w. Or give "
+        "the ~ts a value attribute.",
+        [Tag, Backend, Fun, Arity, Tag]
+    );
+missing_callback_need(local_affix, Backend, Fun, Arity) ->
+    io_lib:format(
+        "the fixed text beside an attribute ?local is folded into the text the client "
+        "composes the attribute with, as the page holds it, which only the render "
+        "target ~ts can read: it supports ?local (supports_local/0) but does not export "
+        "~ts/~w.",
+        [Backend, Fun, Arity]
+    );
+missing_callback_need(choices, Backend, Fun, Arity) ->
+    io_lib:format(
+        "this child of an element choosing by a value may render choices the transform "
+        "cannot see (a component, a remote helper, a runtime value, raw markup), which "
+        "the render target ~ts marks in the child's rendered output: it names the "
+        "selection roles (selection_role/2) but does not export ~ts/~w.",
+        [Backend, Fun, Arity]
+    ).
+
+format_local_error(local_attr_multiple) ->
+    "an attribute value can interpolate at most one ?local -- multiple ?local in "
+    "one attribute can't be recomposed client-side";
+format_local_error(local_attr_raw_layout) ->
+    "this ?raw beside an attribute ?local lays its bytes out with a size, a unit, a "
+    "type, an operator expression or a value other than an integer, a character or a "
+    "string, which the transform does not build. Beside a ?local the "
+    "raw's bytes are folded at compile time into the text the client composes the "
+    "attribute with, and the transform builds them itself, never evaluating the "
+    "literal: spell each segment as a literal integer, character or string, unsized, as "
+    ":8 or as /utf8 (<<16#C3, 16#A9>>, <<233:8>>, <<\"é\"/utf8>>), or splice a literal "
+    "binary as /binary, or write the text as ~\"...\"";
+format_local_error({local_attr_raw_not_code_point, N}) ->
+    lists:flatten(
+        io_lib:format(
+            "this ?raw beside an attribute ?local has the /utf8 segment ~w, which is not a "
+            "code point (a surrogate, a negative number, or past 16#10FFFF), so Erlang "
+            "cannot build it. Write the character you mean",
+            [N]
+        )
+    );
+format_local_error({local_attr_raw_not_utf8, Bytes}) ->
+    lists:flatten(
+        io_lib:format(
+            "this ?raw beside an attribute ?local builds ~W, which is not UTF-8 text. A "
+            "?raw's argument is a runtime value whose bytes Erlang builds (an integer "
+            "segment is a byte, a bare <<\"...\">> is Latin-1), and beside a ?local "
+            "those bytes are folded into the text the client composes the attribute "
+            "with, so they must be UTF-8. Write the text as ~~\"...\" or "
+            "<<\"...\"/utf8>>",
+            [Bytes, 20]
+        )
+    );
+format_local_error(local_attr_mixed) ->
+    "a ?local in an attribute value can only be combined with fixed parts -- static "
+    "text, or a ?raw of literal text -- not a value the server computes (a dynamic, "
+    "or a ?raw of one): the client owns the attribute and recomposes it from the fixed "
+    "parts the page carries, and the slot is never diffed, so a computed part would "
+    "render once and then disagree with its bindings. Compute it into the ?local's "
+    "initial value instead, or render it in another attribute".
 
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
@@ -1839,7 +1922,9 @@ transform_node(Node, Module, Inline, FunDefs) ->
             Arg1 = splice_vars(Arg, Inline, Target, undefined),
             {Arg2, HelperCh} = inline_helper_calls(Arg1, Module, FunDefs, Target),
             Arg3 = retransform_spliced(
-                inherit_spliced_nodiff(Inherited, push_choices(Arg2, target_backend(Target))),
+                inherit_spliced_nodiff(
+                    Inherited, push_choices(Arg2, target_backend(Target), undefined)
+                ),
                 map_size(Inline) > 0 orelse HelperCh,
                 Module,
                 FunDefs
@@ -1888,7 +1973,7 @@ transform_each(Inherited, {MarkedFunArg, SourceArg}, {Backend, CCtx}, L, Scope) 
     ),
     {FunArg2, FunCh} = inline_helper_calls(FunArg1, Module, FunDefs, Target),
     FunArg3 = retransform_spliced(
-        inherit_spliced_each_nodiff(Inherited, push_each_choices(Choice, FunArg2, Backend)),
+        inherit_spliced_each_nodiff(Inherited, push_each_choices(Choice, FunArg2, Backend, CCtx)),
         Spliced orelse FunCh,
         Module,
         FunDefs
@@ -2917,7 +3002,7 @@ transform_live_root(Target, Arg, L, Module, Inline, FunDefs) ->
     Arg2 = splice_vars(Arg1, Inline, Target, undefined),
     {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
     Arg4 = retransform_spliced(
-        inherit_spliced_nodiff(false, push_choices(Arg3, target_backend(Target))),
+        inherit_spliced_nodiff(false, push_choices(Arg3, target_backend(Target), undefined)),
         map_size(Inline) > 0 orelse HelperCh,
         Module,
         FunDefs
@@ -4172,7 +4257,7 @@ compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs, Un
             ),
             FunAST = transform_expr(
                 inherit_spliced_each_nodiff(
-                    Inherited, push_each_choices(Choice, FunAST1, Backend)
+                    Inherited, push_each_choices(Choice, FunAST1, Backend, CCtx)
                 ),
                 Module,
                 #{},
@@ -4721,7 +4806,7 @@ compile_mixed_non_static(Item, Module, State) ->
 
 compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
     DynAST = make_nodiff_dynamic_ast(Item, Module, line(Item), Backend, State#state.content_ctx),
-    flush(State, with_choices(DynAST, State));
+    flush(State, with_choices(DynAST, Item, State));
 compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% A bare (non-element) dynamic at the fragment top level. Allocate it a
     %% unique az from the shared element counter and wrap it in content-slot markers,
@@ -4736,7 +4821,7 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     DynAST = make_esc_text_dynamic_ast(
         Az, Item, Module, line(Item), Backend, State0#state.content_ctx
     ),
-    State3 = flush(State2, with_choices(DynAST, State0)),
+    State3 = flush(State2, with_choices(DynAST, Item, State0)),
     State3#state{buf = [Backend:content_slot_close()]}.
 
 %% A BINARY tag is taken verbatim, exactly as a binary attribute name is
@@ -4856,14 +4941,16 @@ is_literal_tag(_Evaluated) -> false.
 
 compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
     Backend = State0#state.backend,
-    {Attrs0, Children} = element_parts(Backend, Tag, AuthoredAttrs, AuthoredChildren, Line),
+    {Attrs0, Children} = element_parts(
+        Backend, {Tag, State0#state.content_ctx}, AuthoredAttrs, AuthoredChildren, Line
+    ),
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_nodiff(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
     %% The descriptor reads the locals as written: a chooser's value is rewritten
     %% to one whole local (kept_value/4) whose affixes the client still needs.
     Attrs = maybe_inject_local_descriptor(
-        Backend, Tag, AuthoredAttrs, Attrs1, Children, RawKind, Line
+        Backend, {Tag, State0#state.content_ctx}, AuthoredAttrs, Attrs1, Children, RawKind, Line
     ),
     State1 = State0#state{root = false, nodiff_mark = none},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
@@ -4913,9 +5000,9 @@ compile_element(Tag, AuthoredAttrs, AuthoredChildren, Line, State0) ->
 
 %% The authored attributes are checked as written; a chooser's value then becomes
 %% the `selected` of the choices under it (choose/4).
-element_parts(Backend, Tag, Attrs, Children, Line) ->
+element_parts(Backend, {Tag, Ctx}, Attrs, Children, Line) ->
     ok = reject_framework_attrs(Backend, Attrs, Line),
-    choose(Backend, Tag, Attrs, Children).
+    choose(Backend, {Tag, Ctx}, Attrs, Children).
 
 %% Folded or marker-anchored, the content of an element with an `az` diffs unless the
 %% element is nodiff (compile_element_children/7).
@@ -5360,22 +5447,150 @@ attr_interp_spec(Elems, Line) ->
 %% part the server computes has no channel to reach the client's copy, so it would
 %% render once and then silently disagree with the binding it reads.
 assert_all_fixed(Elems, Line) ->
-    case lists:all(fun is_fixed_affix_part/1, Elems) of
+    lists:foreach(fun(Part) -> assert_fixed(Part, Line) end, Elems).
+
+assert_fixed(Part, Line) ->
+    case is_static_binary(Part) orelse raw_affix_markup(Part) of
         true -> ok;
-        false -> parse_error(local_attr_mixed, Line)
+        {ok, _Markup} -> ok;
+        {not_utf8, Bytes} -> parse_error({local_attr_raw_not_utf8, Bytes}, anno(Part));
+        {refused, Reason} -> parse_error(Reason, anno(Part));
+        error -> parse_error(local_attr_mixed, Line)
     end.
 
-is_fixed_affix_part(Part) ->
-    is_static_binary(Part) orelse raw_affix_markup(Part) =/= error.
-
-%% The markup a literal `?raw` of literal text splices: `{ok, Bin}`, else `error`.
+%% The markup a literal `?raw` splices: `{ok, Bin}`, `{not_utf8, Bytes}` when it is not
+%% text, `{refused, Reason}` when its literal lays bytes out in a way the transform does
+%% not build or names a character there is none of, else `error`. A raw's argument is a
+%% runtime value whose bytes Erlang builds (an integer segment a byte, a bare
+%% `<<"...">>` Latin-1) wherever the raw sits, so the bytes folded here are the ones it
+%% builds -- what the same raw renders beside a dynamic, converted as the render
+%% converts it (arizona_template:to_bin/1). The affix is text the client composes with,
+%% so bytes that are not UTF-8 have none to fold to.
 raw_affix_markup({call, _, _, [Arg]} = Part) ->
     case is_raw_call(Part) of
-        true -> literal_text(Arg);
+        true -> raw_value_bytes(raw_value(Arg));
         false -> error
     end;
 raw_affix_markup(_Part) ->
     error.
+
+raw_value_bytes({ok, Value}) -> utf8_bytes(Value);
+raw_value_bytes({refused, _Reason} = Refused) -> Refused;
+raw_value_bytes(computed) -> error.
+
+utf8_bytes(Value) ->
+    try arizona_template:to_bin(Value) of
+        Bin ->
+            case unicode:characters_to_binary(Bin) of
+                Bin -> {ok, Bin};
+                _NotUtf8 -> {not_utf8, Value}
+            end
+    catch
+        error:_NotText -> {not_utf8, Value}
+    end.
+
+%% The value a raw's literal argument builds, built here rather than evaluated: only the
+%% layouts that spell bytes one by one are taken (a segment unsized, `:8` or `/utf8`, or
+%% a literal binary spliced as `/binary`), so a literal's size never reaches the
+%% allocator. `{ok, Value}`, `{refused, Reason}` for any other layout of constants (or a
+%% `/utf8` code that names no character), `computed` for a value read at runtime.
+raw_value({bin, _, Elements}) ->
+    fold_raw_parts([raw_segment(E) || E <- Elements], fun erlang:list_to_binary/1);
+raw_value({cons, _, Head, Tail}) ->
+    fold_raw_parts([raw_item(Head), raw_value(Tail)], fun([H, T]) -> [H | T] end);
+raw_value({string, _, Chars}) ->
+    {ok, Chars};
+raw_value({nil, _}) ->
+    {ok, []};
+raw_value(_Computed) ->
+    computed.
+
+%% A list's item may also be a character code.
+raw_item({Kind, _, N}) when Kind =:= integer; Kind =:= char ->
+    {ok, N};
+raw_item(Item) ->
+    raw_value(Item).
+
+fold_raw_parts(Parts, Build) ->
+    case lists:member(computed, Parts) of
+        true ->
+            computed;
+        false ->
+            case [R || {refused, _} = R <- Parts] of
+                [Refused | _] -> Refused;
+                [] -> {ok, Build([V || {ok, V} <:- Parts])}
+            end
+    end.
+
+%% One segment, as Erlang builds it: an integer is its low byte, unsized or `:8`, and
+%% its UTF-8 under `/utf8`; a string the same, character by character; a literal binary
+%% under `/binary` its own bytes.
+raw_segment({bin_element, _, {bin, _, _} = Inner, default, [Type]}) when
+    Type =:= binary; Type =:= bytes
+->
+    raw_value(Inner);
+raw_segment({bin_element, _, Value, Size, Type}) ->
+    case {segment_codes(Value), segment_layout(Size, Type)} of
+        {computed, _Layout} -> computed;
+        {_Codes, computed} -> computed;
+        {_Codes, layout} -> {refused, local_attr_raw_layout};
+        {layout, _Layout} -> {refused, local_attr_raw_layout};
+        {Codes, byte} -> {ok, <<<<(C band 255)>> || C <- Codes>>};
+        {Codes, utf8} -> utf8_segment(Codes)
+    end.
+
+segment_codes({string, _, Chars}) ->
+    Chars;
+segment_codes({op, _, '+', {Kind, _, N}}) when Kind =:= integer; Kind =:= char ->
+    [N];
+segment_codes(Value) ->
+    case code_point_literal(Value) of
+        {ok, N} -> [N];
+        error -> constant_kind(Value)
+    end.
+
+segment_layout(default, default) -> byte;
+segment_layout({integer, _, 8}, default) -> byte;
+segment_layout(default, [utf8]) -> utf8;
+segment_layout(default, _Type) -> layout;
+segment_layout(Size, _Type) -> constant_kind(Size).
+
+%% A value or size built from constants alone is a layout the transform does not build;
+%% anything else may be read at runtime.
+constant_kind(AST) ->
+    case is_constant_expr(AST) of
+        true -> layout;
+        false -> computed
+    end.
+
+is_constant_expr({Kind, _, _}) when
+    Kind =:= integer; Kind =:= char; Kind =:= float; Kind =:= string; Kind =:= atom
+->
+    true;
+is_constant_expr({nil, _}) ->
+    true;
+is_constant_expr({op, _, _Op, A}) ->
+    is_constant_expr(A);
+is_constant_expr({op, _, _Op, A, B}) ->
+    is_constant_expr(A) andalso is_constant_expr(B);
+is_constant_expr({cons, _, H, T}) ->
+    is_constant_expr(H) andalso is_constant_expr(T);
+is_constant_expr({bin, _, Elements}) ->
+    lists:all(
+        fun({bin_element, _, V, Size, _Type}) ->
+            is_constant_expr(V) andalso (Size =:= default orelse is_constant_expr(Size))
+        end,
+        Elements
+    );
+is_constant_expr(_Other) ->
+    false.
+
+%% Erlang raises building a `/utf8` segment that is no code point; so is it refused.
+utf8_segment(Codes) ->
+    case [C || C <- Codes, not is_code_point(C)] of
+        [] -> {ok, <<<<C/utf8>> || C <- Codes>>};
+        [N | _] -> {refused, {local_attr_raw_not_code_point, N}}
+    end.
 
 %% The text one fixed part means: static text as written, a literal raw as the text
 %% its markup reads as on its own (the backend's `markup_text/2`, in `attribute`). A
@@ -5386,6 +5601,7 @@ raw_affix_markup(_Part) ->
 %% A static part is the text the page holds once it is escaped, which differs where the
 %% parser cannot hold a character (a NUL reads U+FFFD).
 affix_part_text(Backend, Part) ->
+    ok = needs_callback(Backend, {markup_text, 2}, local_affix, anno(Part)),
     case raw_affix_markup(Part) of
         {ok, Markup} -> attr_markup_text(Backend, Markup);
         error -> attr_markup_text(Backend, Backend:escape(extract_binary_value(Part)))
@@ -5414,7 +5630,7 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
 %% for the attribute context (the client reads it via getAttribute, which decodes
 %% the entities back). No separate escape here -- that would double-escape.
-maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind, Line) ->
+maybe_inject_local_descriptor(Backend, TagCtx, LocalAttrs, Attrs, Children, RawKind, Line) ->
     AttrLocals = collect_attr_locals(Backend, LocalAttrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
     case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
@@ -5426,7 +5642,7 @@ maybe_inject_local_descriptor(Backend, Tag, LocalAttrs, Attrs, Children, RawKind
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             %% After the support check: the affixes are read through callbacks only a
             %% backend supporting `?local` implements.
-            AttrAffixes = collect_attr_affixes(Backend, Tag, LocalAttrs, Line),
+            AttrAffixes = collect_attr_affixes(Backend, TagCtx, LocalAttrs, Line),
             Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
             Json = iolist_to_binary(json:encode(Desc)),
             [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Json)]} | Attrs]
@@ -5491,9 +5707,9 @@ collect_attr_locals(Backend, Attrs, Line) ->
 %% chooser's value hands over the static parts on either side as lists instead
 %% (`[[Before...], [After...]]`): under `multiple` each one is a pick of its own,
 %% and the client keeps them around the picks the local owns.
-collect_attr_affixes(Backend, Tag, Attrs, Line) ->
+collect_attr_affixes(Backend, {Tag, Ctx}, Attrs, Line) ->
     ChooserValue =
-        case selection_role(Backend, Tag) of
+        case selection_role(Backend, Tag, Ctx) of
             {chooser, #{value := ValueName}} -> attr_key(Backend, ValueName);
             _None -> none
         end,
@@ -5845,7 +6061,7 @@ emit_child_dynamic(
             DynAST = make_nodiff_dynamic_ast(
                 Child, Module, line(Child), Backend, State0#state.content_ctx
             ),
-            {flush(State0, with_choices(DynAST, State0)), Slot + 1}
+            {flush(State0, with_choices(DynAST, Child, State0)), Slot + 1}
     end;
 emit_child_dynamic(Child, ElemAz, State0, Slot) ->
     emit_marked_child(Child, ElemAz, State0, Slot).
@@ -5900,15 +6116,16 @@ emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = St
     DynAST = make_esc_text_dynamic_ast(
         MarkerAz, Child, Module, line(Child), Backend, State0#state.content_ctx
     ),
-    State2 = flush(State1, with_choices(DynAST, State0)),
+    State2 = flush(State1, with_choices(DynAST, Child, State0)),
     {State2#state{buf = [Backend:content_slot_close()]}, Slot + 1}.
 
 %% The slot of a chooser's child the compiler cannot see into: its value goes to
 %% arizona_template:choices/3 with the chooser's value, read lazily (only the SSR render
 %% calls it), and whether the slot escapes, which the child decided (esc_spec/2).
-with_choices(DynAST, #state{choices = none}) ->
+with_choices(DynAST, _Child, #state{choices = none}) ->
     DynAST;
-with_choices({tuple, L, [Az, Spec, Loc]}, #state{choices = {Value, Multiple}}) ->
+with_choices({tuple, L, [Az, Spec, Loc]}, Child, #state{choices = {Value, Multiple}} = State) ->
+    ok = needs_callback(State#state.backend, {mark_choices, 2}, choices, anno(Child)),
     Picks = {'fun', L, {clauses, [{clause, L, [], [], [{tuple, L, [Value, Multiple]}]}]}},
     {tuple, L, [Az, choices_spec(Spec, Picks), Loc]}.
 
@@ -7383,7 +7600,7 @@ extract_directives([Attr | Rest], Opts) ->
 %% HTML has no `value` attribute on `<select>`: the parser ignores it and loads on
 %% the first option, while an update writes the `.value` property, so the page and
 %% every later update disagree. What the parser does read is `selected` on an
-%% option. So for a backend that declares the roles (arizona_renderer:selection_role/1)
+%% option. So for a backend that declares the roles (arizona_renderer:selection_role/2)
 %% the chooser's `value` is not emitted at all, and every choice under it gets a
 %% `selected` attribute testing its own value against it (arizona_template:chosen/4):
 %% an ordinary dynamic attribute, so it renders at SSR, tracks its reads and diffs
@@ -7402,16 +7619,18 @@ extract_directives([Attr | Rest], Opts) ->
 %% renders and diffs see the child as written; the chooser keeps its value
 %% (kept_value/4) and the client applies it to what they render.
 
-selection_role(Backend, Tag) ->
-    case erlang:function_exported(Backend, selection_role, 1) of
-        true -> Backend:selection_role(Tag);
+%% The role is asked in the content context the element sits in: a `select` in
+%% foreign content (inside `<svg>`) is no HTML select.
+selection_role(Backend, Tag, Ctx) ->
+    case erlang:function_exported(Backend, selection_role, 2) of
+        true -> Backend:selection_role(Tag, Ctx);
         false -> none
     end.
 
 %% A chooser element that carries a value: its selection and its attributes without
 %% the value, or `none`. A static `false` value renders nothing and picks nothing.
-chooser_sel(Backend, Tag, Attrs) ->
-    case selection_role(Backend, Tag) of
+chooser_sel(Backend, Tag, Ctx, Attrs) ->
+    case selection_role(Backend, Tag, Ctx) of
         {chooser, #{value := ValueName, multiple := MultipleName, choice := Choice}} ->
             case take_attr(Backend, ValueName, Attrs) of
                 {ok, {tuple, _, [_Name, {atom, _, false}]}, _Rest} ->
@@ -7426,7 +7645,9 @@ chooser_sel(Backend, Tag, Attrs) ->
                         multiple => Multiple,
                         choice => Choice,
                         fold => false,
-                        local => has_local(Value)
+                        local => has_local(Value),
+                        %% The content context the chooser's children sit in.
+                        ctx => Backend:content_context(Tag, Ctx)
                     },
                     {Sel, Rest};
                 error ->
@@ -7563,21 +7784,51 @@ attr_key(Backend, Name) ->
 %% Before anything compiles: hand every `?each` under a chooser with a value the
 %% value (push_each/2). Run where an `?each` can first appear under one -- the
 %% pre-pass, and after a hoisted variable or a helper body is spliced in.
-push_choices({map, _, _} = Map, _Backend) ->
+%% `Ctx` is the content context the node sits in, tracked as mark_targets/3 does: an
+%% element's children sit in the one the backend names for it, and a nested target
+%% starts at the document root's.
+push_choices({map, _, _} = Map, _Backend, _Ctx) ->
     Map;
-push_choices({map, _, _, _} = Map, _Backend) ->
+push_choices({map, _, _, _} = Map, _Backend, _Ctx) ->
     Map;
-push_choices(Node, Backend) when is_tuple(Node) ->
-    push_chooser(list_to_tuple([push_choices(E, Backend) || E <- tuple_to_list(Node)]), Backend);
-push_choices(Nodes, Backend) when is_list(Nodes) ->
-    [push_choices(N, Backend) || N <- Nodes];
-push_choices(Leaf, _Backend) ->
-    Leaf.
-
-push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend) ->
+push_choices(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}} = Callee, [Arg]}, Backend, Ctx
+) when
+    Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD
+->
+    case is_target(Target) of
+        true -> {call, L, Callee, [push_choices(Arg, Backend, undefined)]};
+        false -> {call, L, Callee, [push_choices(Arg, Backend, Ctx)]}
+    end;
+push_choices({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend, Ctx) ->
     case is_element_tuple(Node) andalso element_tag(TagAST) of
         {ok, Tag} ->
-            case chooser_sel(Backend, Tag, ast_list_to_list(AttrsAST, Backend)) of
+            ChildCtx = Backend:content_context(Tag, Ctx),
+            Walked =
+                {tuple, L, [
+                    push_choices(TagAST, Backend, Ctx),
+                    push_choices(AttrsAST, Backend, Ctx),
+                    push_choices(Children, Backend, ChildCtx)
+                ]},
+            push_chooser(Walked, Backend, Ctx);
+        _NotElement ->
+            push_choices_node(Node, Backend, Ctx)
+    end;
+push_choices(Node, Backend, Ctx) when is_tuple(Node) ->
+    push_choices_node(Node, Backend, Ctx);
+push_choices(Nodes, Backend, Ctx) when is_list(Nodes) ->
+    [push_choices(N, Backend, Ctx) || N <- Nodes];
+push_choices(Leaf, _Backend, _Ctx) ->
+    Leaf.
+
+push_choices_node(Node, Backend, Ctx) ->
+    list_to_tuple([push_choices(E, Backend, Ctx) || E <- tuple_to_list(Node)]).
+
+%% `Ctx` is the content context the element sits in.
+push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend, Ctx) ->
+    case is_element_tuple(Node) andalso element_tag(TagAST) of
+        {ok, Tag} ->
+            case chooser_sel(Backend, Tag, Ctx, ast_list_to_list(AttrsAST, Backend)) of
                 {Sel, _Rest} ->
                     {tuple, L, [TagAST, AttrsAST, choice_children(Children, Sel, push)]};
                 none ->
@@ -7586,15 +7837,15 @@ push_chooser({tuple, L, [TagAST, AttrsAST, Children]} = Node, Backend) ->
         _NotElement ->
             Node
     end;
-push_chooser(Node, _Backend) ->
+push_chooser(Node, _Backend, _Ctx) ->
     Node.
 
 %% The callback of an `?each` that renders under a chooser: the chooser's value,
-%% then its own choosers.
-push_each_choices(none, FunArg, Backend) ->
-    push_choices(FunArg, Backend);
-push_each_choices(Sel, FunArg, Backend) ->
-    push_choices(push_each_fun(FunArg, Sel), Backend).
+%% then its own choosers. `CCtx` is the content context the each's items sit in.
+push_each_choices(none, FunArg, Backend, CCtx) ->
+    push_choices(FunArg, Backend, CCtx);
+push_each_choices(Sel, FunArg, Backend, CCtx) ->
+    push_choices(push_each_fun(FunArg, Sel), Backend, CCtx).
 
 element_tag({atom, _, Tag}) ->
     {ok, Tag};
@@ -7691,14 +7942,20 @@ scalar_kind(Child) ->
     end.
 
 choice_element({tuple, L, [TagAST, AttrsAST, Children]} = Child, Tag, Sel, Mode) ->
-    case selection_role(maps:get(backend, Sel), Tag) of
+    #{backend := Backend, ctx := Ctx} = Sel,
+    case selection_role(Backend, Tag, Ctx) of
         {choice, Info} when Mode =:= final -> rewrite_choice(Child, Tag, Info, Sel);
-        {choice, _Info} -> Child;
-        {chooser, _Info} -> Child;
-        none -> {tuple, L, [TagAST, AttrsAST, choice_children(Children, Sel, Mode)]}
+        {choice, _Info} ->
+            Child;
+        {chooser, _Info} ->
+            Child;
+        none ->
+            Inner = Sel#{ctx := Backend:content_context(Tag, Ctx)},
+            {tuple, L, [TagAST, AttrsAST, choice_children(Children, Inner, Mode)]}
     end;
 choice_element({tuple, _, [_TagAST, _AttrsAST]} = Child, Tag, Sel, final) ->
-    case selection_role(maps:get(backend, Sel), Tag) of
+    #{backend := Backend, ctx := Ctx} = Sel,
+    case selection_role(Backend, Tag, Ctx) of
         {choice, Info} -> rewrite_choice(Child, Tag, Info, Sel);
         _Other -> Child
     end;
@@ -7821,7 +8078,8 @@ choice_mark(Sel, FunArg) ->
         value := Value,
         multiple := Multiple,
         choice := Choice,
-        local := Local
+        local := Local,
+        ctx := Ctx
     } = Sel,
     L = anno(FunArg),
     {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, ?CHOICE_MARK}}, [
@@ -7831,12 +8089,20 @@ choice_mark(Sel, FunArg) ->
         Multiple,
         ast_binary(Choice),
         {atom, L, Local},
+        {atom, L, Ctx},
         FunArg
     ]}.
 
 take_choice_mark(
     {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, ?CHOICE_MARK}}, [
-        {atom, _, Backend}, TagAST, Value, Multiple, ChoiceAST, {atom, _, Local}, FunArg
+        {atom, _, Backend},
+        TagAST,
+        Value,
+        Multiple,
+        ChoiceAST,
+        {atom, _, Local},
+        {atom, _, Ctx},
+        FunArg
     ]}
 ) ->
     Sel = #{
@@ -7846,7 +8112,8 @@ take_choice_mark(
         multiple => Multiple,
         choice => binary_text(ChoiceAST),
         fold => false,
-        local => Local
+        local => Local,
+        ctx => Ctx
     },
     {Sel, FunArg};
 take_choice_mark(FunArg) ->
@@ -7892,13 +8159,13 @@ callback_scope(_FunArg, Inline) ->
 %% Where a chooser compiles: drop its value, mark every choice under it. A child
 %% the compiler cannot see into keeps the value on the chooser instead (kept_value/4),
 %% and so does a `?local` value, the client's to change.
-choose(Backend, Tag, Attrs, Children) ->
-    case chooser_sel(Backend, Tag, Attrs) of
+choose(Backend, {Tag, Ctx}, Attrs, Children) ->
+    case chooser_sel(Backend, Tag, Ctx, Attrs) of
         {#{local := Local} = Sel, Rest} ->
             Chosen = [choice_child(C, Sel#{fold := true}, final) || C <- Children],
             case Local orelse holds_choices(Chosen) of
                 false -> {Rest, Chosen};
-                true -> {kept_value(Backend, Tag, Attrs, Sel), Chosen}
+                true -> {kept_value(Backend, {Tag, Ctx}, Attrs, Sel), Chosen}
             end;
         none ->
             {Attrs, Children}
@@ -7911,8 +8178,8 @@ choose(Backend, Tag, Attrs, Children) ->
 %% is the value it stands for (local_inits/2), so under `multiple` an interpolated
 %% one is one pick of the array. Its key and affixes reach the client through the
 %% descriptor, built from the attributes as written (compile_element/5).
-kept_value(Backend, Tag, Attrs, Sel) ->
-    {chooser, #{value := ValueName}} = selection_role(Backend, Tag),
+kept_value(Backend, {Tag, Ctx}, Attrs, Sel) ->
+    {chooser, #{value := ValueName}} = selection_role(Backend, Tag, Ctx),
     {ok, Kept, _Rest} = take_attr(Backend, ValueName, Attrs),
     [
         case Attr of
@@ -8014,9 +8281,15 @@ choice_text(Backend, [Children]) ->
 %% (arizona_renderer:markup_text/2): refused here rather than as `undef` the first time
 %% one does.
 needs_markup_text(Backend, L) ->
-    case erlang:function_exported(Backend, markup_text, 2) of
+    needs_callback(Backend, {markup_text, 2}, {choice_text, Backend:name(option)}, L).
+
+%% A callback the backend need implement only for what this template uses (an optional
+%% one a capability makes required): refused where the template uses it, rather than
+%% as a crash of the transform or `undef` at render.
+needs_callback(Backend, {Fun, Arity} = Callback, Need, L) ->
+    case erlang:function_exported(Backend, Fun, Arity) of
         true -> ok;
-        false -> parse_error({select_value, {no_markup_text, Backend, Backend:name(option)}}, L)
+        false -> parse_error({missing_callback, Backend, Callback, Need}, L)
     end.
 
 %% What one child adds to an option's text. A static binary is spliced as markup, so

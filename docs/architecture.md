@@ -267,6 +267,43 @@ view marker. `supports_keyed_item_ops/0` false lets a stream `?each` body skip `
 nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
 error. Mentions of `?terminal` elsewhere in this document describe that package's target.
 
+The callbacks, by whether a backend must implement them (every one is documented in
+`arizona_renderer`):
+
+| Kind | Callbacks |
+| --- | --- |
+| Required | `name/1`, `element_open/1`, `az_attr/1`, `element_open_end/2`, `element_void_close/0`, `element_close/1`, `attr/2`, `attr_bool/2`, `attr_command/2`, `attr_dynamic_prefix/1`, `children_sep/0`, `each_items/1`, `text_child/1`, `content_slot_az/2`, `content_slot_open/1`, `content_slot_close/0`, `is_void/1`, `raw_text_kind/2`, `content_context/2`, `scope_static/3`, `supports_list_patch/0`, `target/0`, `supports_live_root/0`, `content_type/0`, `supports_local/0`, `supports_nodiff_keep/0`, `implied_attrs/2`, `single_root_document/0`, `supports_keyed_item_ops/0`, `boolean_attrs/0`, `attr_names/0`, `escape/1`, `wire_escape/1`, `neutralize_raw_text/4`, `render_attr/2`, `wire_attr/2`, `format_error/1` |
+| Optional | `selection_role/2`, `controlled/3`, `embed_attrs/2` |
+| Required if | `markup_text/2` when `supports_local/0` is `true`; `mark_choices/2` when `selection_role/2` is implemented |
+
+A required-if callback a template needs but the backend lacks is the compile error
+`{missing_callback, Backend, {Function, Arity}, Need}`, located where the template uses it (an
+attribute `?local` beside fixed text, a choice valued by text that holds a value, a chooser's child
+the transform cannot see into), never an `undef` at render.
+
+A backend refuses what its markup cannot express by raising
+`erlang:error({arizona_render_reject, Message})` from a callback the transform calls while it
+compiles: `name/1`, `element_open/1`, `attr/2`, `attr_bool/2`, `attr_command/2` and
+`attr_dynamic_prefix/1`. The transform reports it as the compile error `{render_reject, Message}`
+at the element's or attribute's line, with the backend's message as written. `arizona_html`
+refuses `<plaintext>` this way, and a tag or attribute name holding `/`, `>`, `=`, `"`, `'` or `<`
+(whitespace and other controls are the core's `tag_not_text` / `attr_name_not_text`);
+`arizona_terminal` refuses a tag or style outside its vocabulary.
+
+**What an external backend must change** since the terminal package's pinned commit (`15bc87f6`):
+rename `attr_dyn_name/1` to `attr_dynamic_prefix/1`, `text_az/2` to `content_slot_az/2`,
+`text_slot_open/1` to `content_slot_open/1`, `text_slot_close/0` to `content_slot_close/0`,
+`raw_text/4` to `neutralize_raw_text/4`, `live_root/0` to `supports_live_root/0` and
+`keyed_item_ops/0` to `supports_keyed_item_ops/0`; take `element_open_end/2` (the tag and its
+content context) instead of `element_open_end/0`; implement the new required `format_error/1`;
+implement `markup_text/2` if `supports_local/0` answers `true` (a terminal's does not); and read the
+root content context as `undefined` (`content_context()` is any atom, no longer `html | foreign`). A
+backend written against a later commit may also carry names that were added and changed since:
+`static_document/2` is now `embed_attrs/2`, `markup_text/1` is `markup_text/2` (it adds the `text |
+attribute` reading), `controlled/2` is `controlled/3` and `selection_role/1` is `selection_role/2`
+(each adds the content context), and `attr_markup/1` is gone (`markup_text/2` in `attribute` reads a
+fixed part as the page holds it).
+
 The backend also words the errors whose explanation lives in its vocabulary,
 `c:arizona_renderer:format_error/1`. The core raises them with neutral reasons and never
 words them itself: HTML's message for `dynamic_in_raw_text` names `<script>` and the XSS it
@@ -287,34 +324,39 @@ other capability answers let reach it: always the `?each` and element-shape advi
 `supports_keyed_item_ops/0` is `true`; the raw-text family (`dynamic_in_raw_text`,
 `local_in_raw_text`, `markup_in_raw_text`, `{markup_in_raw_text, Element, Value}`) when a
 tag's `raw_text_kind/2` is not `none`; and `{select_value, {option_selected, Tag, Name,
-Chooser}}` with `selection_role/1`. Errors whose advice needs no element of the target
+Chooser}}` with `selection_role/2`. Errors whose advice needs no element of the target
 (`duplicate_attr`, `invalid_element`, ...) stay the core's, as does the runtime
 `effect_in_content` a value raises where no backend is known.
 
-A few callbacks are optional, each a capability some targets lack by nature (`selection_role/1`,
-`mark_choices/2`, `markup_text/2`, `controlled/3`, `embed_attrs/2`).
-`c:arizona_renderer:selection_role/1` is for a target whose output has no attribute for an element's
+A few callbacks are optional, each a capability some targets lack by nature (`selection_role/2`,
+`mark_choices/2`, `markup_text/2`, `controlled/3`, `embed_attrs/2`), though `markup_text/2` is
+required of a backend whose `supports_local/0` is `true` and `mark_choices/2` of one implementing
+`selection_role/2`.
+`c:arizona_renderer:selection_role/2` is for a target whose output has no attribute for an element's
 chosen value. HTML is that target: `value` on a `<select>` is ignored by the parser, which loads on
 the first option (or the one marked `selected`), while a diff writes the `.value` property, so the
 page and every later update would disagree. The backend names the roles -- `select` is a `chooser`
 (its `value`, its `multiple`, its `option` choices), `option` a `choice` (its `value`, its
-`selected`) -- and the transform does the rest generically: it drops the chooser's value and appends
-to every choice under it a `selected` calling `arizona_template:chosen(Backend, ChoiceValue,
-ChooserValue, Multiple)` (both read as the text the page holds, `attr_text/2`: an escaped value as
-its own text, a NUL as U+FFFD, `attr_input/1` (the escape writes a CR as a reference, see "Output is
-UTF-8"); a literal `?raw` value, or an interpolated one with a literal `?raw` part assembled as
-`raw_attr/2` renders it, is markup, so its character references are decoded too, through the
-backend's optional `c:arizona_renderer:markup_text/2` in `attribute`; a raw a helper returns renders
-escaped and compares as its text; the transform marks the parts of both values as the attribute
-renders them, so every path compares them alike, and under `multiple` each part of a literal list
-holding a `?raw` is its own pick), folded to a static `true`/`false` when both values are literals
-(text, or a literal `?raw` of text). The choices are found where the chooser compiles
-(`compile_element/5`), after hoisted variables and helper bodies are spliced, through elements,
-content lists and conditional tails. An `?each` compiles bottom-up, before its chooser, so the
-pre-pass (`mark_targets/3`, and again after each splice) wraps an `?each` under a chooser in a
-`'$arizona_choice'` mark carrying the value; the each takes it off and rewrites its item as it
-compiles (`compile_each_clause/11`). A template compiled before the chooser was seen counts as
-reached only when every option element in its statics carries a `chosen/4` call.
+`selected`) -- in the content context the element sits in (`Context`, as `controlled/3` takes it),
+and only in HTML content: a `select` inside `<svg>` is no HTML select, so its `value` stays an
+ordinary attribute and its options get no `selected`. The transform does the rest generically: it
+drops the chooser's value and appends to every choice under it a `selected` calling
+`arizona_template:chosen(Backend, ChoiceValue, ChooserValue, Multiple)` (both read as the text the
+page holds, `attr_text/2`: an escaped value as its own text, a NUL as U+FFFD, `attr_input/1` (the
+escape writes a CR as a reference, see "Output is UTF-8"); a literal `?raw` value, or an
+interpolated one with a literal `?raw` part assembled as `raw_attr/2` renders it, is markup, so its
+character references are decoded too, through the backend's optional
+`c:arizona_renderer:markup_text/2` in `attribute`; a raw a helper returns renders escaped and
+compares as its text; the transform marks the parts of both values as the attribute renders them, so
+every path compares them alike, and under `multiple` each part of a literal list holding a `?raw` is
+its own pick), folded to a static `true`/`false` when both values are literals (text, or a literal
+`?raw` of text). The choices are found where the chooser compiles (`compile_element/5`), after
+hoisted variables and helper bodies are spliced, through elements, content lists and conditional
+tails. An `?each` compiles bottom-up, before its chooser, so the pre-pass (`mark_targets/3`, and
+again after each splice) wraps an `?each` under a chooser in a `'$arizona_choice'` mark carrying the
+value; the each takes it off and rewrites its item as it compiles (`compile_each_clause/11`). A
+template compiled before the chooser was seen counts as reached only when every option element in
+its statics carries a `chosen/4` call.
 
 A choice without a `value` is valued by its text, as the browser values an option (ASCII whitespace
 stripped and collapsed). Both kinds of text are read through the backend's optional
@@ -1107,7 +1149,9 @@ of them gets the static attribute `az-ctl` (via `attr/2`), after the author's at
 the implied ones, naming the parts it renders (`az-ctl="value checked"`): the client syncs
 only those, so a checkbox whose rendered part is only its `value` keeps its checkedness. A
 `?local` (the client's own), an az-nodiff subtree (never updated) and a backend without the
-callback (`?json`, `?terminal`) emit nothing. `az-ctl` is
+callback (`?json`, `?terminal`) emit nothing. The callback takes the content context the element
+sits in, and `arizona_html` marks only an element in HTML content: an SVG `textArea` (foreign
+content) is no form control. `az-ctl` is
 reserved (`reserved_attr`), like `az`, `az-local` and `az-busy`.
 
 **Client.** The guarantee: *once the server has answered an event that carried a control's
@@ -1161,8 +1205,17 @@ content slots, freely mixed with static text and other dynamic children. An attr
 may also **interpolate** one `?local` with static text around it (the statics become a
 prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server-owned
 dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). A literal
-`?raw` of literal text is static and may be an affix part: the transform folds it to the
-text its markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
+`?raw` of literal text is static and may be an affix part. Its argument means what it means
+anywhere else, a runtime value whose bytes Erlang builds (an integer segment a byte, a bare
+`<<"...">>` Latin-1), so the transform builds those bytes, as the render would, and refuses
+bytes that are not UTF-8 with `local_attr_raw_not_utf8` at the raw (the affix is text the
+client composes with). It builds them itself and never evaluates the literal, so a size never
+reaches the allocator: each segment is a literal integer, character or string (a sign
+allowed), unsized, `:8` or `/utf8`, or a literal binary spliced as `/binary`. Any other size,
+unit, type or operator expression of constants is `local_attr_raw_layout`, a `/utf8` segment
+naming no character is `local_attr_raw_not_code_point`, and a part read at runtime stays
+`local_attr_mixed`. It folds valid bytes to the
+text their markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
 treats that as static text, which the page holds exactly once escaped (HTML writes a CR
 as `&#13;`, see "Output is UTF-8"). Every affix is the text the page reads back
 (`markup_text/2` of the escaped part), so a static NUL, which no attribute can hold, is
@@ -2855,15 +2908,19 @@ advanced to the new values when the re-render is suppressed, so nothing drifts.
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
 context (`raw_text_kind/2`, second argument `undefined | foreign`: HTML content or foreign),
 threaded through the transform by `content_context/2`: `<svg>` opens foreign content and its HTML
-integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their
-children. In foreign content an element is ordinary parsed markup -- comments really are comments
--- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`, `script` or
-`style` keeps its slot markers and stays diffable, and an SVG `textArea` is no RCDATA element (no
-newline after its start tag, no `az-ctl`).
-This matters because an SVG `<title>` is a graphic's accessible name, so a bound one would
-otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -- it would need
-its own integration points to be correct, and leaving it in HTML content (`undefined`) keeps
-existing behaviour rather than half-handling it.
+integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their children. A
+breakout start tag (`div`, `p`, `span`, `ul`, `table`, `b`, `h1`, ... -- the parser's list) leaves
+foreign content too: that element's descendants are HTML content. The parser also takes
+everything after the breakout up to the `</svg>` out of it (what follows the breakout and what
+follows its ancestors inside the `<svg>`), which a template tree cannot model, and `font`
+breaks out only with a `color`, `face` or `size` attribute, which the callback cannot see, so it
+stays foreign. In foreign content an element is ordinary parsed markup -- comments really are
+comments -- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`,
+`script` or `style` keeps its slot markers and stays diffable, and an SVG `textArea` is no RCDATA
+element (no newline after its start tag, no `az-ctl`). This matters because an SVG `<title>` is a
+graphic's accessible name, so a bound one would otherwise freeze after SSR with no symptom. MathML
+is deliberately not tracked -- it would need its own integration points to be correct, and leaving
+it in HTML content (`undefined`) keeps existing behaviour rather than half-handling it.
 
 The context reaches a construct compiled elsewhere through the top-down marking pass. A **local
 element helper** is spliced into the caller's element AST before that element compiles, so it

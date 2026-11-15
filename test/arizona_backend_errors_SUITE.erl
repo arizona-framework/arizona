@@ -22,7 +22,9 @@
 -export([compile_effect_in_content/1]).
 -export([compile_each_stream_body_control_flow/1]).
 -export([compile_option_selected/1]).
--export([compile_no_markup_text_is_neutral/1]).
+-export([compile_missing_callback_is_neutral/1]).
+-export([compile_local_needs_markup_text/1]).
+-export([compile_choices_need_mark_choices/1]).
 -export([compile_local_unsupported/1]).
 -export([compile_computed_element_tag/1]).
 -export([compile_element_in_comprehension/1]).
@@ -64,7 +66,9 @@ groups() ->
             compile_effect_in_content,
             compile_each_stream_body_control_flow,
             compile_option_selected,
-            compile_no_markup_text_is_neutral,
+            compile_missing_callback_is_neutral,
+            compile_local_needs_markup_text,
+            compile_choices_need_mark_choices,
             compile_local_unsupported,
             compile_computed_element_tag,
             compile_element_in_comprehension,
@@ -221,10 +225,78 @@ compile_option_selected(Config) when is_list(Config) ->
 
 %% Raised for a backend that lacks a callback, so the core words it, naming no
 %% target's syntax.
-compile_no_markup_text_is_neutral(Config) when is_list(Config) ->
-    Msg = core({select_value, {no_markup_text, some_backend, ~"choice"}}),
-    ?assert(contains(Msg, ~"some_backend")),
-    ?assertNot(contains(Msg, ~"<")).
+compile_missing_callback_is_neutral(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Reason) ->
+            Msg = core(Reason),
+            ?assert(contains(Msg, ~"some_backend"), Msg),
+            ?assertNot(contains(Msg, ~"<"), Msg)
+        end,
+        [
+            {missing_callback, some_backend, {markup_text, 2}, {choice_text, ~"choice"}},
+            {missing_callback, some_backend, {markup_text, 2}, local_affix},
+            {missing_callback, some_backend, {mark_choices, 2}, choices}
+        ]
+    ).
+
+%% A backend supporting `?local` reads the fixed text beside an attribute one through
+%% markup_text/2: one without it is refused where the local is written, not as a crash
+%% of the transform.
+compile_local_needs_markup_text(Config) when is_list(Config) ->
+    Backend = backend_without(be_no_markup_text, [{markup_text, 2}]),
+    Source =
+        "-module(be_local_no_mt).\n-export([render/1]).\nrender(_Bindings) ->\n"
+        "    arizona_template:target(be_no_markup_text, {a, [{title, [\n"
+        "        <<\"x\">>, arizona_template:local(k, <<\"v\">>)]}], []}).\n",
+    ?assertMatch(
+        {error,
+            [
+                {_File, [
+                    {5, arizona_parse_transform,
+                        {missing_callback, Backend, {markup_text, 2}, local_affix}}
+                ]}
+            ],
+            []},
+        arizona_parse_transform:parse_transform(forms(Source), [])
+    ),
+    %% A whole local has no fixed text to read.
+    _ = compile(
+        "be_whole_local_no_mt",
+        "arizona_template:target(be_no_markup_text, "
+        "{a, [{title, arizona_template:local(k, <<\"v\">>)}], []})"
+    ).
+
+%% A chooser's child the transform cannot see into is marked by the backend's
+%% mark_choices/2 when the page renders: a backend naming the selection roles without
+%% it is refused where the child is compiled, not as `undef` at render.
+compile_choices_need_mark_choices(Config) when is_list(Config) ->
+    Backend = backend_without(be_no_mark_choices, [{mark_choices, 2}]),
+    Source =
+        "-module(be_choices_no_mc).\n-export([render/1]).\nrender(Bindings) ->\n"
+        "    arizona_template:target(be_no_mark_choices, {select,\n"
+        "        [{value, arizona_template:get(v, Bindings)}],\n"
+        "        [arizona_template:get(opts, Bindings)]}).\n",
+    ?assertMatch(
+        {error,
+            [
+                {_File, [
+                    {
+                        {6, 10},
+                        arizona_parse_transform,
+                        {missing_callback, Backend, {mark_choices, 2}, choices}
+                    }
+                ]}
+            ],
+            []},
+        arizona_parse_transform:parse_transform(forms(Source, {1, 1}), [])
+    ),
+    %% Choices the transform rewrites need no marking at render.
+    _ = compile(
+        "be_seen_choices_no_mc",
+        "arizona_template:target(be_no_mark_choices, {select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}]})"
+    ).
 
 compile_local_unsupported(Config) when is_list(Config) ->
     {Json, Reason} = compile_error(
@@ -770,7 +842,11 @@ source(Mod, Body) ->
         Body ++ ".".
 
 forms(Source) ->
-    {ok, Tokens, _} = erl_scan:string(Source),
+    forms(Source, 1).
+
+%% `Location` `{1, 1}` gives every form a column too.
+forms(Source, Location) ->
+    {ok, Tokens, _} = erl_scan:string(Source, Location),
     [
         begin
             {ok, F} = erl_parse:parse_form(Toks),
@@ -837,6 +913,24 @@ raised_render(Mod, Bindings) ->
     {Reason, Msg} = raised(fun() -> arizona_render:render_to_iolist(Mod:render(Bindings)) end),
     {arizona_loc, {Mod, _}, Inner} = Reason,
     {Inner, Msg}.
+
+%% An HTML backend lacking `Missing`: every other arizona_html export delegated.
+backend_without(Name, Missing) ->
+    Delegates = [
+        io_lib:format("~s(~s) -> arizona_html:~s(~s). ", [F, args(A), F, args(A)])
+     || {F, A} = FA <- arizona_html:module_info(exports),
+        F =/= module_info,
+        not lists:member(FA, Missing)
+    ],
+    Source = lists:flatten([
+        "-module(", atom_to_list(Name), "). -compile([export_all, nowarn_export_all]). ", Delegates
+    ]),
+    {ok, Name, Bin} = compile:forms(forms(Source), [return_errors]),
+    {module, Name} = code:load_binary(Name, "", Bin),
+    Name.
+
+args(0) -> "";
+args(A) -> lists:join(", ", ["A" ++ integer_to_list(N) || N <- lists:seq(1, A)]).
 
 core(Reason) ->
     unicode:characters_to_binary(arizona_parse_transform:format_error(Reason)).

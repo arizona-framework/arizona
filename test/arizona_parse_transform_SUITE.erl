@@ -129,6 +129,8 @@
     invalid_child_empty_tuple/1,
     invalid_child_mixed/1,
     error_names_included_file/1,
+    module_without_module_attr/1,
+    authored_transformed_attr_still_transforms/1,
     error_after_include_names_main_file/1,
     error_keeps_column/1,
     error_in_included_helper_names_its_file/1,
@@ -486,6 +488,10 @@
     local_attr_dynamic_raw_error/1,
     local_attr_raw_affix_reads_alone/1,
     local_attr_static_affix_reads_as_page/1,
+    local_attr_raw_affix_builds_bytes/1,
+    local_attr_raw_affix_not_utf8_error/1,
+    local_attr_raw_affix_layout_error/1,
+    local_attr_raw_affix_not_code_point_error/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -527,6 +533,7 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    svg_breakout_tag_is_html_content/1,
     raw_text_svg_branch_context/1,
     raw_text_svg_wrapped_branch_context/1,
     wrapped_branch_reads_tracked/1,
@@ -767,6 +774,10 @@ groups() ->
             local_attr_dynamic_raw_error,
             local_attr_raw_affix_reads_alone,
             local_attr_static_affix_reads_as_page,
+            local_attr_raw_affix_builds_bytes,
+            local_attr_raw_affix_not_utf8_error,
+            local_attr_raw_affix_layout_error,
+            local_attr_raw_affix_not_code_point_error,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -960,6 +971,7 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            svg_breakout_tag_is_html_content,
             raw_text_svg_branch_context,
             raw_text_svg_wrapped_branch_context,
             wrapped_branch_reads_tracked,
@@ -1267,6 +1279,8 @@ groups() ->
             improper_template_list_rejected,
             improper_attr_value_is_text,
             error_names_included_file,
+            module_without_module_attr,
+            authored_transformed_attr_still_transforms,
             error_after_include_names_main_file,
             error_keeps_column,
             error_in_included_helper_names_its_file,
@@ -1988,6 +2002,159 @@ local_attr_static_affix_reads_as_page(Config) when is_list(Config) ->
         SSR
     ).
 
+%% A raw's argument is a runtime value whose bytes Erlang builds, beside a `?local` as
+%% anywhere else: an integer segment is a byte, so `<<16#C3, 16#A9>>` is the UTF-8 of
+%% `é` and `<<55296>>` the byte 0 (a NUL, which an attribute holds as U+FFFD), exactly
+%% as the same raw renders beside a `?get`.
+local_attr_raw_affix_builds_bytes(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({N, Raw, Affix}) ->
+            Mod = compile_module(
+                "-module(pt_local_attr_raw_bytes_" ++ integer_to_list(N) ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> "
+                    "    arizona_template:target(arizona_html, "
+                    "        {'a', [{title, [arizona_template:raw(" ++ Raw ++
+                    "), arizona_template:local(id, <<\"1\">>)]}], [<<\"e\">>]}"
+                    "    ). "
+            ),
+            SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+            ?assertEqual(
+                #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => [Affix, ~""]}},
+                decode_local_descriptor(SSR),
+                SSR
+            )
+        end,
+        [
+            {1, "<<16#C3, 16#A9>>", <<"é"/utf8>>},
+            {2, "<<\"é\"/utf8>>", <<"é"/utf8>>},
+            {3, "<<55296>>", <<16#FFFD/utf8>>},
+            {4, "[<<16#C3, 16#A9>>, $x]", <<"éx"/utf8>>},
+            {5, "<<(<<16#C3, 16#A9>>)/binary>>", <<"é"/utf8>>},
+            {6, "<<+16#C3, 16#A9>>", <<"é"/utf8>>}
+        ]
+    ).
+
+%% The client composes the attribute from its affixes as text, so a raw beside a
+%% `?local` that builds bytes that are not UTF-8 (a Latin-1 literal, a byte above 127)
+%% has no text to fold to: refused at the raw, not misread as a computed part.
+local_attr_raw_affix_not_utf8_error(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Raw) ->
+            Result = raw_affix_parse(Raw),
+            ?assertMatch(
+                {error, [{_File, [{6, arizona_parse_transform, {local_attr_raw_not_utf8, _}}]}],
+                    []},
+                Result,
+                Raw
+            ),
+            {error, [{_, [{_, _, Reason}]}], []} = Result,
+            Msg = lists:flatten(arizona_parse_transform:format_error(Reason)),
+            ?assertNotEqual(nomatch, string:find(Msg, "UTF-8"), Msg)
+        end,
+        ["<<255>>", "<<\"é\">>", "<<233>>", "[<<255>>]", "<<255:8>>"]
+    ).
+
+%% The transform builds a raw part's bytes itself, never evaluating the literal, so it
+%% spells only bytes: a segment unsized, `:8` or `/utf8`. Any other layout (a size, a
+%% unit, a type) is refused at the raw without building it -- a huge size included,
+%% which must not reach the allocator.
+local_attr_raw_affix_layout_error(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Raw) ->
+            Self = self(),
+            {Pid, Ref} = spawn_monitor(fun() -> Self ! {self(), raw_affix_parse(Raw)} end),
+            Result =
+                receive
+                    {Pid, R} -> R;
+                    {'DOWN', Ref, process, Pid, Why} -> error({transform_died, Raw, Why})
+                after 5000 ->
+                    exit(Pid, kill),
+                    error({transform_hung, Raw})
+                end,
+            ?assertMatch(
+                {error, [{_File, [{6, arizona_parse_transform, local_attr_raw_layout}]}], []},
+                Result,
+                Raw
+            ),
+            {error, [{_, [{_, _, Reason}]}], []} = Result,
+            Msg = lists:flatten(arizona_parse_transform:format_error(Reason)),
+            ?assertNotEqual(nomatch, string:find(Msg, ":8"), Msg)
+        end,
+        [
+            "<<0:4398046511104>>",
+            "<<\"a\":1000000000/unit:256>>",
+            "<<1:16>>",
+            "<<1/little>>",
+            "<<1:8/unit:8>>",
+            "[<<0:4398046511104>>]",
+            "<<\"a\":8/utf8>>",
+            "<<(1 + 1)>>",
+            "<<1:(4 + 4)>>",
+            "<<(<<1:4>>)/bitstring>>",
+            "<<a>>"
+        ]
+    ),
+    %% `:8` and `/utf8` spell bytes the transform builds as Erlang does.
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_spelled). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{title, [arizona_template:raw(<<16#C3:8, -87, \"é\"/utf8, 16#E9/utf8>>), "
+        "            arizona_template:local(id, <<\"1\">>)]}], [<<\"e\">>]}"
+        "    ). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertEqual(
+        #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => [<<"ééé"/utf8>>, ~""]}},
+        decode_local_descriptor(SSR),
+        SSR
+    ).
+
+%% A `/utf8` segment holding no code point does not build at all (Erlang raises), so it
+%% is refused naming that, not its layout.
+local_attr_raw_affix_not_code_point_error(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Raw, N}) ->
+            Result = raw_affix_parse(Raw),
+            ?assertMatch(
+                {error,
+                    [{_File, [{6, arizona_parse_transform, {local_attr_raw_not_code_point, N}}]}],
+                    []},
+                Result,
+                Raw
+            ),
+            {error, [{_, [{_, _, Reason}]}], []} = Result,
+            Msg = lists:flatten(arizona_parse_transform:format_error(Reason)),
+            ?assertNotEqual(nomatch, string:find(Msg, "not a code point"), Msg)
+        end,
+        [{"<<55296/utf8>>", 55296}, {"<<16#110000/utf8>>", 16#110000}, {"<<-1/utf8>>", -1}]
+    ).
+
+%% The transform's result for a `?raw` of `Raw` beside an attribute `?local`, the raw on
+%% line 6.
+raw_affix_parse(Raw) ->
+    Source =
+        "-module(pt_local_attr_raw_not_utf8).\n"
+        "-export([render/1]).\n"
+        "render(Bindings) ->\n"
+        "    arizona_template:target(arizona_html,\n"
+        "        {'a', [{title, [<<\"x\">>,\n"
+        "            arizona_template:raw(" ++ Raw ++
+            "),\n"
+            "            arizona_template:local(id, <<\"1\">>)]}], [<<\"e\">>]}).\n",
+    {ok, Tokens, _} = erl_scan:string(Source),
+    Forms = [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- split_forms(Tokens)
+    ],
+    arizona_parse_transform:parse_transform(Forms, []).
+
 %% A raw the server computes beside a `?local` has no meaning the client can keep:
 %% the client recomposes the attribute from affixes fixed in the page, so a part that
 %% changes on the server is refused like any other dynamic there.
@@ -1998,6 +2165,17 @@ local_attr_dynamic_raw_error(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:target(arizona_html, "
         "        {'a', [{href, [arizona_template:raw(arizona_template:get(p, Bindings)), "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>)]}], [<<\"e\">>]}"
+        "    ). ",
+        fun(R) -> R =:= local_attr_mixed end
+    ),
+    %% A raw of a bare number is no literal text either.
+    assert_parse_error(
+        "-module(pt_local_attr_num_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{href, [arizona_template:raw(5), "
         "            arizona_template:local(<<\"id\">>, <<\"1\">>)]}], [<<\"e\">>]}"
         "    ). ",
         fun(R) -> R =:= local_attr_mixed end
@@ -3212,6 +3390,45 @@ wrapped_branch_reads_tracked(Config) when is_list(Config) ->
 %% SVG `<title>` is not raw text, so it carries markers and a `?local` there is
 %% legal and resolvable. Pinned because the rule now depends on the content
 %% context, not the tag alone.
+%% The HTML parser leaves foreign content at a breakout start tag (`div`, `p`, `span`,
+%% `ul`, ...): that element and its descendants are HTML, so inside one a `textarea`
+%% is an HTML textarea (raw text, its leading newline guarded, a server-owned control)
+%% and a `select` is a chooser again, while one directly in `<svg>` is neither.
+svg_breakout_tag_is_html_content(Config) when is_list(Config) ->
+    Render = fun(Mod, Body) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "arizona_template:target(arizona_html, ",
+                Body,
+                "). "
+            ])
+        ),
+        B = #{s => ~"x", v => ~"b"},
+        iolist_to_binary(arizona_render:render_to_iolist(M:render(B)))
+    end,
+    Controls =
+        "[{textarea, [], [arizona_template:get(s, Bindings)]}, "
+        "{select, [{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}, {option, [{value, <<\"b\">>}], []}]}]",
+    lists:foreach(
+        fun(Tag) ->
+            HTML = Render(
+                "pt_breakout_" ++ Tag,
+                "{svg, [], [{'" ++ Tag ++ "', [], " ++ Controls ++ "}]}"
+            ),
+            ?assertMatch({match, _}, re:run(HTML, ~"<textarea[^>]* az-ctl=\"content\">\n"), HTML),
+            ?assertMatch({_, _}, binary:match(HTML, ~" selected"), HTML),
+            ?assertEqual(nomatch, re:run(HTML, ~"<select[^>]* value="), HTML)
+        end,
+        ["div", "p", "span", "ul"]
+    ),
+    Foreign = Render("pt_breakout_none", "{svg, [], " ++ Controls ++ "}"),
+    ?assertEqual(nomatch, binary:match(Foreign, ~"az-ctl"), Foreign),
+    ?assertEqual(nomatch, binary:match(Foreign, ~" selected"), Foreign).
+
 raw_text_svg_title_local(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_rt_svg_local). "
@@ -4588,6 +4805,20 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
         binary:match(
             Render("pt_sub_div", "{'div', [{az_submit, " ++ Cmd ++ "}], []}"), <<"method">>
         )
+    ),
+    %% Whatever the content context: a breakout tag (`div`) inside `<svg>` makes the
+    %% form an HTML one, and an SVG `form` ignores the attribute, so the fail-safe is
+    %% to imply it everywhere.
+    lists:foreach(
+        fun({Mod, Form}) ->
+            HTML = Render(Mod, Form),
+            ?assertMatch({_, _}, binary:match(HTML, <<" method=\"post\"">>), HTML)
+        end,
+        [
+            {"pt_sub_svg", "{svg, [], [{form, [{az_submit, " ++ Cmd ++ "}], []}]}"},
+            {"pt_sub_svg_div",
+                "{svg, [], [{'div', [], [{form, [{az_submit, " ++ Cmd ++ "}], []}]}]}"}
+        ]
     ),
     %% Other targets have no native form submission to guard.
     ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>])),
@@ -8662,7 +8893,66 @@ invalid_element_single(Config) when is_list(Config) ->
             (invalid_element) -> true;
             (_) -> false
         end
+    ),
+    %% A tag may be a binary as well as an atom, so the advice names both.
+    Msg = arizona_parse_transform:format_error(invalid_element),
+    ?assertNotEqual(nomatch, string:find(Msg, "an atom or a literal binary"), Msg).
+
+%% A source with no module definition, or a malformed one, gets the compiler's own
+%% error: the transform leaves it as it is rather than crashing on it.
+module_without_module_attr(Config) when is_list(Config) ->
+    Dir = proplists:get_value(priv_dir, Config),
+    Include = filename:join(code:lib_dir(arizona), "include"),
+    lists:foreach(
+        fun({Name, ModLine, Body, Expected}) ->
+            File = filename:join(Dir, Name ++ ".erl"),
+            ok = file:write_file(File, [
+                ModLine,
+                "-include(\"arizona_stateless.hrl\").\n"
+                "-export([render/1]).\n",
+                Body
+            ]),
+            {error, Errors, _Warnings} = compile:file(File, [binary, return, {i, Include}]),
+            Descriptors = [D || {_File, Ds} <- Errors, D <- Ds],
+            ?assertEqual(
+                [],
+                [D || {_, compile, {parse_transform, _, _}} = D <- Descriptors],
+                Descriptors
+            ),
+            ?assertMatch(
+                [_ | _], [D || {_, Mod, _} = D <- Descriptors, Mod =:= Expected], Descriptors
+            )
+        end,
+        [
+            {Name ++ Suffix, ModLine, Body, Expected}
+         || {Name, ModLine, Expected} <- [
+                {"pt_no_module", "", erl_lint},
+                {"pt_bad_module", "-module(bad mod).\n", erl_parse}
+            ],
+            {Suffix, Body} <- [
+                {"",
+                    "render(Bindings) -> ?html({p, [{az_click, arizona_js:push_event(~\"go\")}],"
+                    " [?get(x)]}).\n"},
+                %% A named `?each` callback is inlined, and its definition suppressed.
+                {"_each",
+                    "render(Bindings) -> ?html({ul, [], [?each(fun row/1, ?get(xs))]}).\n"
+                    "row(X) -> {li, [], [X]}.\n"}
+            ]
+        ]
     ).
+
+%% The transform skips only a module it built itself: an attribute a source writes
+%% under the marker's name is the author's, and the templates still compile.
+authored_transformed_attr_still_transforms(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_authored_marker). "
+        "-arizona_transformed(true). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, {p, [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{x => ~"1"}))),
+    ?assertMatch({_, _}, binary:match(HTML, ~"-->1<!--"), HTML).
 
 %% An error inside an included file names that file, not the module's: the
 %% `-file` attribute epp emits at the include boundary is honored.

@@ -12,6 +12,7 @@
 -export([groups/0]).
 -export([warns_latin1_literal_outside_template_statics/1]).
 -export([warns_latin1_literal_in_unfolded_list/1]).
+-export([warns_latin1_literal_once/1]).
 -export([no_warning_for_utf8_ascii_or_byte_literals/1]).
 -export([folded_statics_render_utf8_at_ssr_and_in_diff/1]).
 -export([json_ssr_names_non_utf8_at_its_line/1]).
@@ -41,6 +42,7 @@ groups() ->
         {contract, [parallel], [
             warns_latin1_literal_outside_template_statics,
             warns_latin1_literal_in_unfolded_list,
+            warns_latin1_literal_once,
             no_warning_for_utf8_ascii_or_byte_literals,
             folded_statics_render_utf8_at_ssr_and_in_diff,
             json_ssr_names_non_utf8_at_its_line,
@@ -150,6 +152,28 @@ warns_latin1_literal_in_unfolded_list(Config) when is_list(Config) ->
     ],
     {ok, Warnings} = compile_probe(Config, Lines),
     ?assertEqual(marked_lines(Lines, ~"%% warn"), warned_lines(Warnings)).
+
+%% A module may name the transform beside the header that already does, so the
+%% compiler runs it twice: the second run leaves the module as the first built it,
+%% so each literal warns once and the compile-time attributes are written once.
+warns_latin1_literal_once(Config) when is_list(Config) ->
+    Lines = [
+        ~"-module(arizona_utf8_twice_probe).",
+        ~"-compile({parse_transform, arizona_parse_transform}).",
+        ~"-include(\"arizona_stateless.hrl\").",
+        ~"-export([render/1]).",
+        ~"render(Bindings) ->",
+        ~"    ?html({p, [{id, ?get(id)}, {az_click, arizona_js:push_event(~\"go\")}],",
+        ~"        [?raw(<<\"é\">>)]}). %% warn"
+    ],
+    {ok, Warnings} = compile_probe(Config, Lines),
+    ?assertEqual(
+        marked_lines(Lines, ~"%% warn"),
+        [L || {_File, Ws} <- Warnings, {{L, _Col}, _Mod, latin1_binary_literal} <- Ws]
+    ),
+    {ok, Mod, Bin} = compile_probe_binary(Config, "arizona_utf8_twice_probe"),
+    {ok, {Mod, [{attributes, Attrs}]}} = beam_lib:chunks(Bin, [attributes]),
+    ?assertEqual([[~"az-click"]], proplists:get_all_values(arizona_az_attrs, Attrs)).
 
 no_warning_for_utf8_ascii_or_byte_literals(Config) when is_list(Config) ->
     Lines = [
@@ -644,6 +668,13 @@ compile_probe(Config, Lines) ->
         {ok, _Mod, _Bin, Warnings} -> {ok, Warnings};
         Error -> Error
     end.
+
+%% The beam of a probe compile_probe/2 wrote.
+compile_probe_binary(Config, Name) ->
+    File = filename:join(proplists:get_value(priv_dir, Config), Name ++ ".erl"),
+    Include = filename:join(code:lib_dir(arizona), "include"),
+    {ok, Mod, Bin, _Warnings} = compile:file(File, [binary, return, {i, Include}]),
+    {ok, Mod, Bin}.
 
 drain_mounts() ->
     receive

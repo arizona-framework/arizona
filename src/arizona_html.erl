@@ -38,7 +38,7 @@ identical to the previous inlined emission.
 -export([supports_nodiff_keep/0]).
 -export([supports_keyed_item_ops/0]).
 -export([implied_attrs/2]).
--export([selection_role/1]).
+-export([selection_role/2]).
 -export([controlled/3]).
 -export([mark_choices/2]).
 -export([markup_text/2]).
@@ -51,6 +51,54 @@ identical to the previous inlined emission.
 -export([wire_attr/2]).
 -export([embed_attrs/2]).
 -export([format_error/1]).
+
+%% A start tag that makes the parser leave foreign content (content_context_name/2).
+-define(IS_BREAKOUT(Tag),
+    (Tag =:= ~"b" orelse
+        Tag =:= ~"big" orelse
+        Tag =:= ~"blockquote" orelse
+        Tag =:= ~"body" orelse
+        Tag =:= ~"br" orelse
+        Tag =:= ~"center" orelse
+        Tag =:= ~"code" orelse
+        Tag =:= ~"dd" orelse
+        Tag =:= ~"div" orelse
+        Tag =:= ~"dl" orelse
+        Tag =:= ~"dt" orelse
+        Tag =:= ~"em" orelse
+        Tag =:= ~"embed" orelse
+        Tag =:= ~"h1" orelse
+        Tag =:= ~"h2" orelse
+        Tag =:= ~"h3" orelse
+        Tag =:= ~"h4" orelse
+        Tag =:= ~"h5" orelse
+        Tag =:= ~"h6" orelse
+        Tag =:= ~"head" orelse
+        Tag =:= ~"hr" orelse
+        Tag =:= ~"i" orelse
+        Tag =:= ~"img" orelse
+        Tag =:= ~"li" orelse
+        Tag =:= ~"listing" orelse
+        Tag =:= ~"menu" orelse
+        Tag =:= ~"meta" orelse
+        Tag =:= ~"nobr" orelse
+        Tag =:= ~"ol" orelse
+        Tag =:= ~"p" orelse
+        Tag =:= ~"pre" orelse
+        Tag =:= ~"ruby" orelse
+        Tag =:= ~"s" orelse
+        Tag =:= ~"small" orelse
+        Tag =:= ~"span" orelse
+        Tag =:= ~"strong" orelse
+        Tag =:= ~"strike" orelse
+        Tag =:= ~"sub" orelse
+        Tag =:= ~"sup" orelse
+        Tag =:= ~"table" orelse
+        Tag =:= ~"tt" orelse
+        Tag =:= ~"u" orelse
+        Tag =:= ~"ul" orelse
+        Tag =:= ~"var")
+).
 
 %% This module implements the whole renderer contract, one export per callback, so it
 %% legitimately exceeds the god-module function count.
@@ -334,14 +382,30 @@ rawtext_names() ->
 content_context(Tag, Parent) ->
     content_context_name(tag_name(Tag), Parent).
 
+%% Whether an element is itself foreign: `<svg>` anywhere, or any tag but a breakout one
+%% inside foreign content.
+is_foreign_element(~"svg", _Content) -> true;
+is_foreign_element(_Name, undefined) -> false;
+is_foreign_element(Name, _Foreign) when ?IS_BREAKOUT(Name) -> false;
+is_foreign_element(_Name, _Foreign) -> true.
+
 %% `<svg>` switches the parser into foreign content; `<foreignObject>`, `<desc>` and
 %% `<title>` (its HTML integration points) switch back for their children. MathML is
 %% deliberately not tracked: it would need its own integration points (`mtext` and
 %% friends) to be correct, and leaving it in HTML content keeps today's behaviour
 %% rather than half-handling it. HTML content is the root context, `undefined`, so an
 %% integration point returns to it.
+%%
+%% A breakout start tag in foreign content (`div`, `p`, `span`, `ul`, ...) makes the
+%% parser leave it: that element is HTML, and so are its descendants. Two limits a
+%% template tree cannot model: the parser also takes everything after the breakout up to
+%% the `</svg>` out of it (what follows the breakout and what follows its ancestors
+%% inside the `<svg>`), and `font` breaks out only with a `color`, `face` or `size`
+%% attribute, which this callback cannot see, so it stays foreign here.
 content_context_name(~"svg", _Parent) ->
     foreign;
+content_context_name(Tag, foreign) when ?IS_BREAKOUT(Tag) ->
+    undefined;
 content_context_name(~"foreignobject", foreign) ->
     undefined;
 content_context_name(~"desc", foreign) ->
@@ -654,14 +718,21 @@ implied_attrs(Tag, Names) ->
             []
     end.
 
--spec selection_role(arizona_renderer:tag()) ->
+-spec selection_role(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     none
     | {chooser, #{value := binary(), multiple := binary(), choice := binary()}}
     | {choice, #{value := binary(), selected := binary()}}.
 %% `<select>` has no `value` attribute: the parser ignores it and selects the first
 %% option, so the page would load on one option and an update select another. The
-%% option's own `selected` is what the parser reads.
-selection_role(Tag) ->
+%% option's own `selected` is what the parser reads. Only in HTML content: in foreign
+%% content (an SVG `select`) neither is an HTML element, and `value` is an attribute
+%% like any other.
+selection_role(Tag, undefined) ->
+    html_selection_role(Tag);
+selection_role(_Tag, _Foreign) ->
+    none.
+
+html_selection_role(Tag) ->
     case tag_name(Tag) of
         ~"select" ->
             {chooser, #{value => ~"value", multiple => ~"multiple", choice => ~"option"}};
@@ -755,38 +826,41 @@ choices_at(Bin, At, {Content, _Stack} = Ctx, Picked, Marks) ->
     case markup_at(Bin, At, Content) of
         {Skip, Next} when Skip =:= skip; Skip =:= skip_text ->
             choices(Bin, Next, Ctx, Picked, Marks);
-        {start, Name, Attrs, Close} ->
-            choices_start(Bin, Name, Attrs, Close, Ctx, Picked, Marks);
+        {start, Name, Attrs, Close, Self} ->
+            choices_start(Bin, {Name, Self}, Attrs, Close, Ctx, Picked, Marks);
         {'end', Name, Close} ->
             choices_end(Bin, Name, Close, Ctx, Picked, Marks)
     end.
 
 choices_start(_Bin, _Name, _Attrs, eof, _Ctx, _Picked, Marks) ->
     Marks;
-choices_start(Bin, Name, Attrs, Close, {undefined, _} = Ctx, Picked, Marks) ->
+choices_start(Bin, {Name, _Self} = Tag, Attrs, Close, {undefined, _} = Ctx, Picked, Marks) ->
     case Name of
         ~"option" ->
             choices_after(
-                Bin, Name, Close, Ctx, Picked, mark_option(Bin, Attrs, Close, Picked, Marks)
+                Bin, Tag, Close, Ctx, Picked, mark_option(Bin, Attrs, Close, Picked, Marks)
             );
         _Other ->
             case closes_select(Name) of
                 true -> Marks;
-                false -> choices_after(Bin, Name, Close, Ctx, Picked, Marks)
+                false -> choices_after(Bin, Tag, Close, Ctx, Picked, Marks)
             end
     end;
-choices_start(Bin, Name, _Attrs, Close, Ctx, Picked, Marks) ->
-    choices_after(Bin, Name, Close, Ctx, Picked, Marks).
+choices_start(Bin, Tag, _Attrs, Close, Ctx, Picked, Marks) ->
+    choices_after(Bin, Tag, Close, Ctx, Picked, Marks).
 
 %% Past a start tag: over the content of an element that is not parsed as markup, and
-%% into the content context of one that changes it.
-choices_after(Bin, Name, Close, {Content, Stack} = Ctx, Picked, Marks) ->
+%% into the content context of one that changes it. `Slash` is whether the start tag
+%% carries the self-closing flag (tag_attrs/3).
+choices_after(Bin, {Name, Slash}, Close, {Content, Stack} = Ctx, Picked, Marks) ->
     case skip_content(Bin, Name, Close + 1, Content) of
         {skipped, Next} ->
             choices(Bin, Next, Ctx, Picked, Marks);
         parsed ->
             Inner = content_context_name(Name, Content),
-            Self = binary:at(Bin, Close - 1) =:= $/ andalso Content =/= undefined,
+            %% A `/` closes only a foreign element (`<svg/>`, `<foreignObject/>`): the
+            %% parser ignores it on an HTML one, a breakout inside `<svg>` included.
+            Self = Slash andalso is_foreign_element(Name, Content),
             case Inner of
                 Content ->
                     choices(Bin, Close + 1, Ctx, Picked, Marks);
@@ -828,7 +902,7 @@ past_template(Bin, Pos, Depth) ->
             byte_size(Bin);
         At ->
             case markup_at(Bin, At, undefined) of
-                {start, ~"template", _Attrs, Close} when is_integer(Close) ->
+                {start, ~"template", _Attrs, Close, _Self} when is_integer(Close) ->
                     past_template(Bin, Close + 1, Depth + 1);
                 {'end', ~"template", Close} when is_integer(Close), Depth =:= 1 ->
                     Close + 1;
@@ -836,7 +910,7 @@ past_template(Bin, Pos, Depth) ->
                     past_template(Bin, Close + 1, Depth - 1);
                 {Skip, Next} when Skip =:= skip; Skip =:= skip_text ->
                     past_template(Bin, Next, Depth);
-                {_Tag, _Name, _Attrs, Close} when is_integer(Close) ->
+                {start, _Name, _Attrs, Close, _Self} when is_integer(Close) ->
                     past_template(Bin, Close + 1, Depth);
                 {_Tag, _Name, Close} when is_integer(Close) ->
                     past_template(Bin, Close + 1, Depth);
@@ -921,7 +995,7 @@ option_markup(Bin, At, Acc) ->
             option_text(Bin, Next, Acc);
         {skip_text, Next} ->
             option_text(Bin, Next, [~"<" | Acc]);
-        {start, Name, _Attrs, Close} when is_integer(Close) ->
+        {start, Name, _Attrs, Close, _Self} when is_integer(Close) ->
             case ends_option(start, Name) of
                 true -> iolist_to_binary(lists:reverse(Acc));
                 false -> option_child(Bin, Name, Close + 1, Acc)
@@ -984,7 +1058,7 @@ markup_at(Bin, At, Content) ->
             {skip, past(Bin, At + 2, ~">")};
         <<_:At/binary, "</", C, _/binary>> when ?IS_ALPHA(C) ->
             {Name, NameEnd} = tag_name_at(Bin, At + 2),
-            {_Attrs, Close} = tag_attrs(Bin, NameEnd, []),
+            {_Attrs, Close, _Self} = tag_attrs(Bin, NameEnd, []),
             {'end', Name, Close};
         <<_:At/binary, "</>", _/binary>> ->
             {skip, At + 3};
@@ -992,8 +1066,8 @@ markup_at(Bin, At, Content) ->
             {skip, past(Bin, At + 2, ~">")};
         <<_:At/binary, "<", C, _/binary>> when ?IS_ALPHA(C) ->
             {Name, NameEnd} = tag_name_at(Bin, At + 1),
-            {Attrs, Close} = tag_attrs(Bin, NameEnd, []),
-            {start, Name, Attrs, Close};
+            {Attrs, Close, Self} = tag_attrs(Bin, NameEnd, []),
+            {start, Name, Attrs, Close, Self};
         <<_:At/binary, "<", _/binary>> ->
             {skip_text, At + 1}
     end.
@@ -1044,13 +1118,16 @@ has_upper(<<>>) -> false.
 %% A tag's attributes, as the tokenizer reads them, and the position of the `>` that
 %% closes the tag, or `eof`. Only `value` and `selected` matter here: those are kept,
 %% the value decoded, the first of a repeated name winning as in the parser.
+%% `{Attrs, Close, SelfClosing}`: the tag is self-closing when its `>` follows a `/` read
+%% as the solidus (after the name, a quoted value or a valueless attribute, skipped
+%% here), never the last byte of an unquoted value (`width=1/`), which is the value's.
 tag_attrs(Bin, Pos0, Acc) ->
     Pos = skip_attr_space(Bin, Pos0),
     case Bin of
         <<_:Pos/binary>> ->
-            {Acc, eof};
+            {Acc, eof, false};
         <<_:Pos/binary, ">", _/binary>> ->
-            {Acc, Pos};
+            {Acc, Pos, Pos > Pos0 andalso binary:at(Bin, Pos - 1) =:= $/};
         _Attr ->
             %% A `=` may start a name (a parse error the parser recovers from).
             NameEnd = attr_name_end(Bin, Pos + 1),

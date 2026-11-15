@@ -54,6 +54,8 @@ and the select keeps its value for the client to apply after.
     markup_text_tracks_what_its_slot_tracks/1,
     authored_selected_is_refused/1,
     choice_text_needs_markup_text/1,
+    foreign_select_is_no_chooser/1,
+    fragment_follows_svg_breakout/1,
     shadowing_parameter_is_renamed/1,
     user_map_keyed_s_is_not_a_template/1,
     shadowing_hoisted_read_is_refused/1,
@@ -127,6 +129,8 @@ groups() ->
             option_with_runtime_text_compiles,
             authored_selected_is_refused,
             choice_text_needs_markup_text,
+            foreign_select_is_no_chooser,
+            fragment_follows_svg_breakout,
             shadowing_parameter_is_renamed,
             shadowing_hoisted_read_is_refused,
             static_value_selects_at_compile_time,
@@ -491,6 +495,11 @@ mark_choices_reads_the_fragment(Config) when is_list(Config) ->
             ~"<template><template></template><option value=a></template>"
         ]
     ),
+    %% A `<template>` holding other elements ends at its own end tag.
+    ?assertEqual(
+        ~"<template><b>t</b></template><option value=a selected>",
+        Mark(~"<template><b>t</b></template><option value=a>", [~"a"])
+    ),
     ?assertEqual(
         ~"<svg><title>t</title></svg><option value=a selected>",
         Mark(~"<svg><title>t</title></svg><option value=a>", [~"a"])
@@ -609,7 +618,9 @@ fragment_reads_as_the_parser_preprocesses(Config) when is_list(Config) ->
     ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 0>>])),
     ?assertEqual(1, One(<<"<option value=\"a", 0, "\">x">>, [<<"a", 16#FFFD/utf8>>])),
     ?assertEqual(1, One(~"<option>a<template>b</template></option>", [~"a"])),
-    ?assertEqual(0, One(~"<option>a<template>b</template></option>", [~"ab"])).
+    ?assertEqual(0, One(~"<option>a<template>b</template></option>", [~"ab"])),
+    %% An element inside the template is skipped with it, so the text after it counts.
+    ?assertEqual(1, One(~"<option>a<template><b>x</b></template>c</option>", [~"ac"])).
 
 %% --------------------------------------------------------------------
 %% Diff
@@ -1038,7 +1049,7 @@ choice_text_needs_markup_text(Config) when is_list(Config) ->
         "[{option, [], [arizona_template:get(label, Bindings)]}]}). "
     ]),
     assert_parse_error(Source, fun
-        ({select_value, {no_markup_text, sel_no_markup_text, _Tag}}) -> true;
+        ({missing_callback, sel_no_markup_text, {markup_text, 2}, {choice_text, _Tag}}) -> true;
         (_) -> false
     end),
     %% Static text needs no reading at render, so the same backend compiles it.
@@ -1046,6 +1057,83 @@ choice_text_needs_markup_text(Config) when is_list(Config) ->
         "-module(sel_no_mt_static). -export([render/1]). render(Bindings) -> "
         "arizona_template:target(sel_no_markup_text, {select, "
         "[{value, arizona_template:get(v, Bindings)}], [{option, [], [~\"a\"]}]}). "
+    ).
+
+%% A `select` in foreign content (inside `<svg>`) is no HTML select, so its `value` is an
+%% ordinary attribute and its options get no `selected`, whether written literally, in
+%% an `?each` or in a child the transform cannot see into; an integration point
+%% (`foreignObject`) returns to HTML content, where it is a chooser again.
+foreign_select_is_no_chooser(Config) when is_list(Config) ->
+    {module, Mod} = load_source(
+        "-module(sel_foreign). -export([lit/1, each/1, opaque/1, back/1]). "
+        "lit(Bindings) -> arizona_template:target(arizona_html, {svg, [], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}, {option, [{value, <<\"b\">>}], []}]}]}). "
+        "each(Bindings) -> arizona_template:target(arizona_html, {svg, [], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[arizona_template:each(fun(O) -> {option, [{value, O}], []} end, "
+        "arizona_template:get(opts, Bindings))]}]}). "
+        "opaque(Bindings) -> arizona_template:target(arizona_html, {svg, [], [{select, "
+        "[{value, arizona_template:get(v, Bindings)}], "
+        "[arizona_template:get(raw, Bindings)]}]}). "
+        "back(Bindings) -> arizona_template:target(arizona_html, {svg, [], "
+        "[{foreignObject, [], [{select, [{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}, {option, [{value, <<\"b\">>}], []}]}]}]}). "
+    ),
+    B = #{
+        v => ~"b",
+        opts => [~"a", ~"b"],
+        raw => arizona_template:raw(~"<option value=\"b\"></option>")
+    },
+    lists:foreach(
+        fun(F) ->
+            HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:F(B))),
+            ?assertEqual(0, count_selected(HTML), {F, HTML}),
+            ?assertMatch({match, _}, re:run(HTML, ~"<select[^>]* value=\"b\""), {F, HTML})
+        end,
+        [lit, each, opaque]
+    ),
+    Back = iolist_to_binary(arizona_render:render_to_iolist(Mod:back(B))),
+    ?assertEqual(1, count_selected(Back), Back),
+    ?assertEqual(1, length(binary:matches(Back, ~"value=\"b\"")), Back).
+
+%% The fragment is read in the content context the parser reads it in: a breakout tag
+%% (`div`) inside `<svg>` holds HTML, so an option there is a real one; a `/` closes an
+%% element only when that element is foreign (`<svg/>`, `<foreignObject/>`), never an
+%% HTML one, where the parser ignores it (`<div/>` inside `<svg>` stays open).
+fragment_follows_svg_breakout(Config) when is_list(Config) ->
+    Count = fun(Fragment) ->
+        count_selected(iolist_to_binary(arizona_html:mark_choices(Fragment, [~"a"])))
+    end,
+    ?assertEqual(1, Count(~"<svg><div><option value=a>A</option></div></svg>")),
+    ?assertEqual(1, Count(~"<svg/><option value=a>A</option>")),
+    ?assertEqual(1, Count(~"<svg><div/><option value=a>A</option></svg>")),
+    ?assertEqual(0, Count(~"<svg><option value=a>A</option></svg>")),
+    ?assertEqual(0, Count(~"<svg><foreignObject/><option value=a>A</option></svg>")),
+    %% The slash closes the tag only read as the solidus, not as the end of an unquoted
+    %% value: `<svg width=1/>` stays open, `<svg width="1"/>` closes.
+    ?assertEqual(0, Count(~"<svg width=1/><option value=a>A</option>")),
+    ?assertEqual(1, Count(~"<svg width=\"1\"/><option value=a>A</option>")),
+    ?assertEqual(1, Count(~"<svg disabled/><option value=a>A</option>")),
+    ?assertEqual(0, Count(~"<svg / ><option value=a>A</option>")),
+    ?assertEqual(
+        1, Count(~"<svg><foreignObject x=a/><option value=a>A</option></foreignObject></svg>")
+    ),
+    %% End to end: a raw child of a select carrying a value.
+    lists:foreach(
+        fun({N, Raw}) ->
+            Mod = compile_module(
+                select_src_mod(
+                    "sel_breakout_" ++ integer_to_list(N), "arizona_template:raw(" ++ Raw ++ ")"
+                )
+            ),
+            HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{v => ~"b"}))),
+            ?assertEqual([~"b"], selected_values(HTML), HTML)
+        end,
+        [
+            {1, "<<\"<svg/><option value=\\\"b\\\">B</option>\">>"},
+            {2, "<<\"<svg><div/><option value=\\\"b\\\">B</option></svg>\">>"}
+        ]
     ).
 
 args(0) -> "";
