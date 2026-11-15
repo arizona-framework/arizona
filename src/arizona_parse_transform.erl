@@ -190,6 +190,9 @@ render(Bindings) ->
 %% `undef` at render.
 -define(CHOICES_MARK, '$arizona_choices').
 
+%% The attribute a module this transform has built carries (mark_transformed/1).
+-define(TRANSFORMED_ATTR, arizona_transformed).
+
 %% Wraps the `selected` test a choice under a chooser whose value is a `?local` gets
 %% (rewrite_choice/4): the selection is the client's, so the attribute compiles as a
 %% browser-owned slot the page alone renders (compile_dynamic_attr/5) -- never diffed,
@@ -264,6 +267,19 @@ receives additional validation and `az-view` injection.
     Options :: [compile:option()],
     Errors :: [{file:filename(), [{erl_anno:location(), module(), term()}]}].
 parse_transform(Forms, Options) ->
+    %% A module may name the transform beside a header that already does, and the
+    %% compiler then runs it twice. The second run sees the first one's output, whose
+    %% leftover source literals it would warn about again and whose attributes it
+    %% would write again, so it leaves the module as the first run built it.
+    case lists:any(fun is_transformed_attr/1, Forms) of
+        true -> Forms;
+        false -> transform_module(Forms, Options)
+    end.
+
+is_transformed_attr({attribute, _, ?TRANSFORMED_ATTR, _}) -> true;
+is_transformed_attr(_Form) -> false.
+
+transform_module(Forms, Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
@@ -738,19 +754,16 @@ inject_az_attrs(Forms, Deps) ->
             L -> L
         end
     ),
-    case {Names, Deps} of
-        {[], []} ->
-            Forms;
-        _ ->
-            {Before, [ModAttr | After]} = lists:splitwith(
-                fun(Form) -> not is_module_attr(Form) end, Forms
-            ),
-            Anno = element(2, ModAttr),
-            Attrs =
-                [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
-                    [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
-            Before ++ [ModAttr | Attrs] ++ After
-    end.
+    {Before, [ModAttr | After]} = lists:splitwith(
+        fun(Form) -> not is_module_attr(Form) end, Forms
+    ),
+    Anno = element(2, ModAttr),
+    %% Also records that this transform built the module (parse_transform/2).
+    Attrs =
+        [{attribute, Anno, ?TRANSFORMED_ATTR, true}] ++
+            [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
+            [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
+    Before ++ [ModAttr | Attrs] ++ After.
 
 %% The modules this module can take markup from, as literal atoms: the component
 %% modules its templates name, and every module it calls, imports, or takes a
