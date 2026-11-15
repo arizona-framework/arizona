@@ -7892,9 +7892,9 @@ describe('form submit', () => {
         }
     });
 
-    // az-submit belongs on the form: a submit a wrapper carrying it would catch is
-    // still never let through natively, and is dropped saying why.
-    it('drops a submit an az-submit on an element that is not a form catches', async () => {
+    // az-submit belongs on the form: one on an element around a plain form is not
+    // that form's, so the form submits as the page wrote it, natively.
+    it('leaves a form alone that only an element around it carries az-submit for', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView(
@@ -7904,22 +7904,21 @@ describe('form submit', () => {
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        const seen = [];
-        const onDrop = (e) => seen.push(e);
-        document.addEventListener('arizona:submit-dropped', onDrop);
+        const dropped = vi.fn();
+        document.addEventListener('arizona:submit-dropped', dropped);
         try {
-            const ev = new Event('submit', { bubbles: true, cancelable: true });
-            document.getElementById('f').dispatchEvent(ev);
-            expect(ev.defaultPrevented).toBe(true);
+            for (let n = 0; n < 2; n++) {
+                const ev = new Event('submit', { bubbles: true, cancelable: true });
+                document.getElementById('f').dispatchEvent(ev);
+                expect(ev.defaultPrevented).toBe(false);
+            }
             expect(mock.getSentMessages()).toHaveLength(0);
-            expect(warn).toHaveBeenCalledWith(
-                '[arizona] az-submit dropped: not_a_form (az-submit belongs on the <form> itself, not a <div>)',
-            );
-            expect(seen.map((e) => [e.target.id, e.detail])).toEqual([
-                ['w', { reason: 'not_a_form' }],
+            expect(dropped).not.toHaveBeenCalled();
+            expect(warn.mock.calls).toEqual([
+                ['[arizona] az-submit on a <div> is ignored: it belongs on the <form> itself'],
             ]);
         } finally {
-            document.removeEventListener('arizona:submit-dropped', onDrop);
+            document.removeEventListener('arizona:submit-dropped', dropped);
             warn.mockRestore();
         }
     });
