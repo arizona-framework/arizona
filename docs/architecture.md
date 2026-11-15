@@ -2904,19 +2904,18 @@ advanced to the new values when the re-render is suppressed, so nothing drifts.
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
 context (`raw_text_kind/2`, second argument `undefined | foreign`: HTML content or foreign),
 threaded through the transform by `content_context/2`: `<svg>` opens foreign content and its HTML
-integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their
-children. A breakout start tag (`div`, `p`, `span`, `ul`, `table`, `b`, `h1`, ... -- the
-parser's list) leaves foreign content too: that element's descendants are HTML content. The
-parser also moves the breakout's following siblings out of the `<svg>`, which a template tree
-cannot model, and `font` breaks out only with a `color`, `face` or `size` attribute, which the
-callback cannot see, so it stays foreign. In foreign content an element is ordinary parsed
-markup -- comments really are comments -- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`, `script` or
-`style` keeps its slot markers and stays diffable, and an SVG `textArea` is no RCDATA element (no
-newline after its start tag, no `az-ctl`).
-This matters because an SVG `<title>` is a graphic's accessible name, so a bound one would
-otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -- it would need
-its own integration points to be correct, and leaving it in HTML content (`undefined`) keeps
-existing behaviour rather than half-handling it.
+integration points -- `<foreignObject>`, `<desc>` and `<title>` -- switch back for their children. A
+breakout start tag (`div`, `p`, `span`, `ul`, `table`, `b`, `h1`, ... -- the parser's list) leaves
+foreign content too: that element's descendants are HTML content. The parser also moves the
+breakout's following siblings out of the `<svg>`, which a template tree cannot model, and `font`
+breaks out only with a `color`, `face` or `size` attribute, which the callback cannot see, so it
+stays foreign. In foreign content an element is ordinary parsed markup -- comments really are
+comments -- so every tag is classified `none` there (`raw_text_kind_name/2`): an SVG `title`,
+`script` or `style` keeps its slot markers and stays diffable, and an SVG `textArea` is no RCDATA
+element (no newline after its start tag, no `az-ctl`). This matters because an SVG `<title>` is a
+graphic's accessible name, so a bound one would otherwise freeze after SSR with no symptom. MathML
+is deliberately not tracked -- it would need its own integration points to be correct, and leaving
+it in HTML content (`undefined`) keeps existing behaviour rather than half-handling it.
 
 The context reaches a construct compiled elsewhere through the top-down marking pass. A **local
 element helper** is spliced into the caller's element AST before that element compiles, so it
