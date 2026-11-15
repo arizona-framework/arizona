@@ -340,8 +340,61 @@ content_context(Tag, Parent) ->
 %% friends) to be correct, and leaving it in HTML content keeps today's behaviour
 %% rather than half-handling it. HTML content is the root context, `undefined`, so an
 %% integration point returns to it.
+%%
+%% A breakout start tag in foreign content (`div`, `p`, `span`, `ul`, ...) makes the
+%% parser leave it: that element is HTML, and so are its descendants. Two limits a
+%% template tree cannot model: the parser also moves the breakout's following siblings
+%% out of the `<svg>`, and `font` breaks out only with a `color`, `face` or `size`
+%% attribute, which this callback cannot see, so it stays foreign here.
 content_context_name(~"svg", _Parent) ->
     foreign;
+content_context_name(Tag, foreign) when
+    Tag =:= ~"b";
+    Tag =:= ~"big";
+    Tag =:= ~"blockquote";
+    Tag =:= ~"body";
+    Tag =:= ~"br";
+    Tag =:= ~"center";
+    Tag =:= ~"code";
+    Tag =:= ~"dd";
+    Tag =:= ~"div";
+    Tag =:= ~"dl";
+    Tag =:= ~"dt";
+    Tag =:= ~"em";
+    Tag =:= ~"embed";
+    Tag =:= ~"h1";
+    Tag =:= ~"h2";
+    Tag =:= ~"h3";
+    Tag =:= ~"h4";
+    Tag =:= ~"h5";
+    Tag =:= ~"h6";
+    Tag =:= ~"head";
+    Tag =:= ~"hr";
+    Tag =:= ~"i";
+    Tag =:= ~"img";
+    Tag =:= ~"li";
+    Tag =:= ~"listing";
+    Tag =:= ~"menu";
+    Tag =:= ~"meta";
+    Tag =:= ~"nobr";
+    Tag =:= ~"ol";
+    Tag =:= ~"p";
+    Tag =:= ~"pre";
+    Tag =:= ~"ruby";
+    Tag =:= ~"s";
+    Tag =:= ~"small";
+    Tag =:= ~"span";
+    Tag =:= ~"strong";
+    Tag =:= ~"strike";
+    Tag =:= ~"sub";
+    Tag =:= ~"sup";
+    Tag =:= ~"table";
+    Tag =:= ~"tt";
+    Tag =:= ~"u";
+    Tag =:= ~"ul";
+    Tag =:= ~"var"
+->
+    undefined;
 content_context_name(~"foreignobject", foreign) ->
     undefined;
 content_context_name(~"desc", foreign) ->

@@ -532,6 +532,7 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    svg_breakout_tag_is_html_content/1,
     raw_text_svg_branch_context/1,
     raw_text_svg_wrapped_branch_context/1,
     wrapped_branch_reads_tracked/1,
@@ -968,6 +969,7 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            svg_breakout_tag_is_html_content,
             raw_text_svg_branch_context,
             raw_text_svg_wrapped_branch_context,
             wrapped_branch_reads_tracked,
@@ -3359,6 +3361,45 @@ wrapped_branch_reads_tracked(Config) when is_list(Config) ->
 %% SVG `<title>` is not raw text, so it carries markers and a `?local` there is
 %% legal and resolvable. Pinned because the rule now depends on the content
 %% context, not the tag alone.
+%% The HTML parser leaves foreign content at a breakout start tag (`div`, `p`, `span`,
+%% `ul`, ...): that element and its descendants are HTML, so inside one a `textarea`
+%% is an HTML textarea (raw text, its leading newline guarded, a server-owned control)
+%% and a `select` is a chooser again, while one directly in `<svg>` is neither.
+svg_breakout_tag_is_html_content(Config) when is_list(Config) ->
+    Render = fun(Mod, Body) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "arizona_template:target(arizona_html, ",
+                Body,
+                "). "
+            ])
+        ),
+        B = #{s => ~"x", v => ~"b"},
+        iolist_to_binary(arizona_render:render_to_iolist(M:render(B)))
+    end,
+    Controls =
+        "[{textarea, [], [arizona_template:get(s, Bindings)]}, "
+        "{select, [{value, arizona_template:get(v, Bindings)}], "
+        "[{option, [{value, <<\"a\">>}], []}, {option, [{value, <<\"b\">>}], []}]}]",
+    lists:foreach(
+        fun(Tag) ->
+            HTML = Render(
+                "pt_breakout_" ++ Tag,
+                "{svg, [], [{'" ++ Tag ++ "', [], " ++ Controls ++ "}]}"
+            ),
+            ?assertMatch({match, _}, re:run(HTML, ~"<textarea[^>]* az-ctl=\"content\">\n"), HTML),
+            ?assertMatch({_, _}, binary:match(HTML, ~" selected"), HTML),
+            ?assertEqual(nomatch, re:run(HTML, ~"<select[^>]* value="), HTML)
+        end,
+        ["div", "p", "span", "ul"]
+    ),
+    Foreign = Render("pt_breakout_none", "{svg, [], " ++ Controls ++ "}"),
+    ?assertEqual(nomatch, binary:match(Foreign, ~"az-ctl"), Foreign),
+    ?assertEqual(nomatch, binary:match(Foreign, ~" selected"), Foreign).
+
 raw_text_svg_title_local(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_rt_svg_local). "
