@@ -453,12 +453,16 @@ export function maybeResetForm(form, sent) {
             temp: group ? /** @type {string} */ (temp.get(group)) : null,
         };
     });
-    // A reset started from the `reset` listener (which browsers lock to a no-op)
-    // hands `_resetting` back when it ends.
+    // A reset started straight from the `reset` listener is locked to a no-op, but
+    // reset() runs custom element reactions once the lock is released: a reset a
+    // form-associated element's formResetCallback starts fires a real `reset`,
+    // whose listener still reads the outer reset's set-aside controls. Each hands
+    // `_resetting` back when it ends.
     const prev = _resetting;
+    const outer = prev?.form === form ? prev.detached : [];
     try {
         detach(detached);
-        _resetting = { form, detached };
+        _resetting = { form, detached: [...outer, ...detached] };
         f.reset();
     } finally {
         _resetting = prev;
