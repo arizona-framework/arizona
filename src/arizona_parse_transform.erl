@@ -1365,6 +1365,7 @@ format_error({HelperReason, Name, Arity}) ->
 format_error(Reason) when
     Reason =:= local_attr_multiple;
     Reason =:= local_attr_mixed;
+    Reason =:= local_attr_raw_layout;
     element(1, Reason) =:= local_attr_raw_not_utf8
 ->
     format_local_error(Reason);
@@ -1469,6 +1470,13 @@ missing_callback_need(choices, Backend, Fun, Arity) ->
 format_local_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
+format_local_error(local_attr_raw_layout) ->
+    "this ?raw beside an attribute ?local lays its bytes out with a size, a unit or a "
+    "type the transform does not build. Beside a ?local the raw's bytes are folded at "
+    "compile time into the text the client composes the attribute with, and the "
+    "transform builds them itself, never evaluating the literal: spell each segment "
+    "unsized, as :8 or as /utf8 (<<16#C3, 16#A9>>, <<233:8>>, <<\"é\"/utf8>>), or write "
+    "the text as ~\"...\"";
 format_local_error({local_attr_raw_not_utf8, Bytes}) ->
     lists:flatten(
         io_lib:format(
@@ -5427,32 +5435,28 @@ assert_fixed(Part, Line) ->
         true -> ok;
         {ok, _Markup} -> ok;
         {not_utf8, Bytes} -> parse_error({local_attr_raw_not_utf8, Bytes}, anno(Part));
+        layout -> parse_error(local_attr_raw_layout, anno(Part));
         error -> parse_error(local_attr_mixed, Line)
     end.
 
 %% The markup a literal `?raw` splices: `{ok, Bin}`, `{not_utf8, Bytes}` when it is not
-%% text, else `error`. A raw's argument is a runtime value whose bytes Erlang builds
-%% (an integer segment a byte, a bare `<<"...">>` Latin-1) wherever the raw sits, so
-%% the bytes folded here are the ones it builds -- what the same raw renders beside a
-%% dynamic, converted as the render converts it (arizona_template:to_bin/1). The affix
-%% is text the client composes with, so bytes that are not UTF-8 have none to fold to.
+%% text, `layout` when it lays bytes out in a way the transform does not build, else
+%% `error`. A raw's argument is a runtime value whose bytes Erlang builds (an integer
+%% segment a byte, a bare `<<"...">>` Latin-1) wherever the raw sits, so the bytes
+%% folded here are the ones it builds -- what the same raw renders beside a dynamic,
+%% converted as the render converts it (arizona_template:to_bin/1). The affix is text
+%% the client composes with, so bytes that are not UTF-8 have none to fold to.
 raw_affix_markup({call, _, _, [Arg]} = Part) ->
-    case is_raw_call(Part) andalso is_literal_value(Arg) of
-        true -> raw_literal_bytes(Arg);
+    case is_raw_call(Part) of
+        true -> raw_value_bytes(raw_value(Arg));
         false -> error
     end;
 raw_affix_markup(_Part) ->
     error.
 
-raw_literal_bytes(Arg) ->
-    try erl_eval:expr(Arg, erl_eval:new_bindings()) of
-        {value, Value, _Bindings} when is_binary(Value); is_list(Value) ->
-            utf8_bytes(Value);
-        {value, Value, _Bindings} ->
-            {not_utf8, Value}
-    catch
-        error:_NotBuilt -> error
-    end.
+raw_value_bytes({ok, Value}) -> utf8_bytes(Value);
+raw_value_bytes(layout) -> layout;
+raw_value_bytes(computed) -> error.
 
 utf8_bytes(Value) ->
     try arizona_template:to_bin(Value) of
@@ -5465,27 +5469,70 @@ utf8_bytes(Value) ->
         error:_NotText -> {not_utf8, Value}
     end.
 
-%% A binary or a list built from literals alone: nothing in it is read at runtime.
-is_literal_value({bin, _, Elements}) ->
-    lists:all(fun is_literal_bin_element/1, Elements);
-is_literal_value({cons, _, Head, Tail}) ->
-    is_literal_item(Head) andalso is_literal_item(Tail);
-is_literal_value({string, _, _}) ->
-    true;
-is_literal_value({nil, _}) ->
-    true;
-is_literal_value(_Computed) ->
-    false.
+%% The value a raw's literal argument builds, built here rather than evaluated: only the
+%% layouts that spell bytes one by one are taken (a segment unsized, `:8` or `/utf8`),
+%% so a literal's size never reaches the allocator. `{ok, Value}`, `layout` for any other
+%% layout of literals, `computed` for a value read at runtime.
+raw_value({bin, _, Elements}) ->
+    fold_raw_parts([raw_segment(E) || E <- Elements], fun erlang:list_to_binary/1);
+raw_value({cons, _, Head, Tail}) ->
+    fold_raw_parts([raw_item(Head), raw_value(Tail)], fun([H, T]) -> [H | T] end);
+raw_value({string, _, Chars}) ->
+    {ok, Chars};
+raw_value({nil, _}) ->
+    {ok, []};
+raw_value(_Computed) ->
+    computed.
 
 %% A list's item may also be a character code.
-is_literal_item({Kind, _, _}) when Kind =:= integer; Kind =:= char ->
-    true;
-is_literal_item(Item) ->
-    is_literal_value(Item).
+raw_item({Kind, _, N}) when Kind =:= integer; Kind =:= char ->
+    {ok, N};
+raw_item(Item) ->
+    raw_value(Item).
 
-is_literal_bin_element({bin_element, _, Value, Size, _Type}) ->
-    (element(1, Value) =:= string orelse code_point_literal(Value) =/= error) andalso
-        (Size =:= default orelse element(1, Size) =:= integer).
+fold_raw_parts(Parts, Build) ->
+    case lists:member(computed, Parts) of
+        true ->
+            computed;
+        false ->
+            case lists:member(layout, Parts) of
+                true -> layout;
+                false -> {ok, Build([V || {ok, V} <:- Parts])}
+            end
+    end.
+
+%% One segment, as Erlang builds it: an integer is its low byte, unsized or `:8`, and
+%% its UTF-8 under `/utf8`; a string the same, character by character.
+raw_segment({bin_element, _, Value, Size, Type}) ->
+    case {segment_codes(Value), segment_layout(Size, Type)} of
+        {computed, _Layout} -> computed;
+        {_Codes, computed} -> computed;
+        {_Codes, layout} -> layout;
+        {Codes, byte} -> {ok, <<<<(C band 255)>> || C <- Codes>>};
+        {Codes, utf8} -> utf8_segment(Codes)
+    end.
+
+segment_codes({string, _, Chars}) ->
+    Chars;
+segment_codes(Value) ->
+    case code_point_literal(Value) of
+        {ok, N} -> [N];
+        error -> computed
+    end.
+
+segment_layout(default, default) -> byte;
+segment_layout({integer, _, 8}, default) -> byte;
+segment_layout(default, [utf8]) -> utf8;
+segment_layout({integer, _, _}, _Type) -> layout;
+segment_layout(default, _Type) -> layout;
+segment_layout(_SizeExpr, _Type) -> computed.
+
+%% Erlang raises building a `/utf8` segment that is no code point; so is it refused.
+utf8_segment(Codes) ->
+    case lists:all(fun is_code_point/1, Codes) of
+        true -> {ok, <<<<C/utf8>> || C <- Codes>>};
+        false -> layout
+    end.
 
 %% The text one fixed part means: static text as written, a literal raw as the text
 %% its markup reads as on its own (the backend's `markup_text/2`, in `attribute`). A

@@ -1208,7 +1208,9 @@ dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). 
 anywhere else, a runtime value whose bytes Erlang builds (an integer segment a byte, a bare
 `<<"...">>` Latin-1), so the transform builds those bytes, as the render would, and refuses
 bytes that are not UTF-8 with `local_attr_raw_not_utf8` at the raw (the affix is text the
-client composes with); it folds valid ones to the
+client composes with). It builds them itself and never evaluates the literal, so a size never
+reaches the allocator: each segment is unsized, `:8` or `/utf8`, and any other size, unit or
+type is `local_attr_raw_layout`. It folds valid bytes to the
 text their markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
 treats that as static text, which the page holds exactly once escaped (HTML writes a CR
 as `&#13;`, see "Output is UTF-8"). Every affix is the text the page reads back

@@ -488,6 +488,7 @@
     local_attr_static_affix_reads_as_page/1,
     local_attr_raw_affix_builds_bytes/1,
     local_attr_raw_affix_not_utf8_error/1,
+    local_attr_raw_affix_layout_error/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -771,6 +772,7 @@ groups() ->
             local_attr_static_affix_reads_as_page,
             local_attr_raw_affix_builds_bytes,
             local_attr_raw_affix_not_utf8_error,
+            local_attr_raw_affix_layout_error,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -2042,6 +2044,58 @@ local_attr_raw_affix_not_utf8_error(Config) when is_list(Config) ->
             ?assertNotEqual(nomatch, string:find(Msg, "UTF-8"), Msg)
         end,
         ["<<255>>", "<<\"é\">>", "<<233>>", "[<<255>>]", "<<255:8>>"]
+    ).
+
+%% The transform builds a raw part's bytes itself, never evaluating the literal, so it
+%% spells only bytes: a segment unsized, `:8` or `/utf8`. Any other layout (a size, a
+%% unit, a type) is refused at the raw without building it -- a huge size included,
+%% which must not reach the allocator.
+local_attr_raw_affix_layout_error(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Raw) ->
+            Self = self(),
+            {Pid, Ref} = spawn_monitor(fun() -> Self ! {self(), raw_affix_parse(Raw)} end),
+            Result =
+                receive
+                    {Pid, R} -> R;
+                    {'DOWN', Ref, process, Pid, Why} -> error({transform_died, Raw, Why})
+                after 5000 ->
+                    exit(Pid, kill),
+                    error({transform_hung, Raw})
+                end,
+            ?assertMatch(
+                {error, [{_File, [{6, arizona_parse_transform, local_attr_raw_layout}]}], []},
+                Result,
+                Raw
+            ),
+            {error, [{_, [{_, _, Reason}]}], []} = Result,
+            Msg = lists:flatten(arizona_parse_transform:format_error(Reason)),
+            ?assertNotEqual(nomatch, string:find(Msg, ":8"), Msg)
+        end,
+        [
+            "<<0:4398046511104>>",
+            "<<\"a\":1000000000/unit:256>>",
+            "<<1:16>>",
+            "<<1/little>>",
+            "<<1:8/unit:8>>",
+            "[<<0:4398046511104>>]"
+        ]
+    ),
+    %% `:8` and `/utf8` spell bytes the transform builds as Erlang does.
+    Mod = compile_module(
+        "-module(pt_local_attr_raw_spelled). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, "
+        "        {'a', [{title, [arizona_template:raw(<<16#C3:8, -87, \"é\"/utf8, 16#E9/utf8>>), "
+        "            arizona_template:local(id, <<\"1\">>)]}], [<<\"e\">>]}"
+        "    ). "
+    ),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertEqual(
+        #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => [<<"ééé"/utf8>>, ~""]}},
+        decode_local_descriptor(SSR),
+        SSR
     ).
 
 %% The transform's result for a `?raw` of `Raw` beside an attribute `?local`, the raw on
