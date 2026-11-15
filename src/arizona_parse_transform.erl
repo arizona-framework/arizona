@@ -1395,11 +1395,12 @@ format_source_error(tracked_get_on_non_bindings_map) ->
 format_attr_error(reserved_attr, Name) ->
     lists:flatten(
         io_lib:format(
-            "the ~ts attribute is reserved -- the parse transform emits it itself "
+            "the ~ts attribute is reserved -- the framework writes it itself "
             "(az addresses an element for the diff, az-local describes its ?local "
-            "slots, az-ctl marks a control the server renders), so a template-authored "
-            "one renders as a duplicate whose value "
-            "can collide with a real slot address and misroute a patch. Remove it: "
+            "slots, az-ctl marks a control the server renders, the client sets "
+            "az-busy while a fetch it holds is in flight), so a template-authored "
+            "one is a duplicate that misroutes a patch or misreports the element's "
+            "state. Remove it: "
             "az-key, the az-* event attributes and any az-* name of your own are "
             "unaffected",
             [Name]
@@ -7268,6 +7269,7 @@ reserved_attr_name(Name) ->
 is_reserved_attr_name(~"az") -> true;
 is_reserved_attr_name(~"az-local") -> true;
 is_reserved_attr_name(~"az-ctl") -> true;
+is_reserved_attr_name(~"az-busy") -> true;
 is_reserved_attr_name(_Other) -> false.
 
 reject_reserved_attrs(Attrs, Line) ->
