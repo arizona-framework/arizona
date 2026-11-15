@@ -537,8 +537,9 @@ select(Sel) -> {arizona_effect, [?EFFECT_SELECT, Sel]}.
 
 -doc """
 Copies to the clipboard the text of the first element matching the selector: the
-matched element's `value` (a form control) or, failing that, its `textContent`,
-written via `navigator.clipboard.writeText`.
+matched element's `value` when it is a field (an `<input>`, `<textarea>`,
+`<select>` or `<output>`, or a custom element whose `value` is a string) or else
+its `textContent`, written via `navigator.clipboard.writeText`.
 
 Like `focus/1`/`blur/1`/`scroll_to/1` (first match only). The Clipboard API
 requires a **secure context** and a **user gesture**, so this is meaningful as an
