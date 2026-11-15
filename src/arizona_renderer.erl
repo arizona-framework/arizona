@@ -8,6 +8,20 @@ target-specific *byte emission* (how an element, attribute, or dynamic text
 slot is serialized into the `s` statics) is delegated to a backend module
 implementing this behaviour. `arizona_html` emits HTML; other backends emit
 other formats while reusing the same walker, diff engine, and transport.
+
+A backend refuses what its output cannot express by raising
+`erlang:error({arizona_render_reject, Message})` (`Message` a binary) from a callback
+the parse transform calls while it compiles a template: `name/1`, `element_open/1`,
+`attr/2`, `attr_bool/2`, `attr_command/2` or `attr_dynamic_prefix/1`. The transform
+reports it as the compile error `{render_reject, Message}` at the element's or
+attribute's line, the message as written. `arizona_html` refuses `<plaintext>` and a
+name holding `/ > = " ' <` this way; a terminal target, a tag or style outside its
+vocabulary.
+
+A callback a template needs but the backend lacks -- `markup_text/2` when
+`supports_local/0` is `true`, `mark_choices/2` when `selection_role/2` is
+implemented -- is the compile error `{missing_callback, Backend, {Function, Arity},
+Need}`, located where the template needs it.
 """.
 
 -doc "Tag or attribute name (an atom or a binary) -> wire name.".

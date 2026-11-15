@@ -8740,7 +8740,10 @@ invalid_element_single(Config) when is_list(Config) ->
             (invalid_element) -> true;
             (_) -> false
         end
-    ).
+    ),
+    %% A tag may be a binary as well as an atom, so the advice names both.
+    Msg = arizona_parse_transform:format_error(invalid_element),
+    ?assertNotEqual(nomatch, string:find(Msg, "an atom or a literal binary"), Msg).
 
 %% An error inside an included file names that file, not the module's: the
 %% `-file` attribute epp emits at the include boundary is honored.

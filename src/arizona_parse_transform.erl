@@ -1250,7 +1250,7 @@ format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
-    "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
+    "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom or a literal binary";
 format_error({void_with_children, Tag}) ->
     lists:flatten(
         io_lib:format(

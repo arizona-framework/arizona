@@ -267,6 +267,42 @@ view marker. `supports_keyed_item_ops/0` false lets a stream `?each` body skip `
 nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
 error. Mentions of `?terminal` elsewhere in this document describe that package's target.
 
+The callbacks, by whether a backend must implement them (every one is documented in
+`arizona_renderer`):
+
+| Kind | Callbacks |
+| --- | --- |
+| Required | `name/1`, `element_open/1`, `az_attr/1`, `element_open_end/2`, `element_void_close/0`, `element_close/1`, `attr/2`, `attr_bool/2`, `attr_command/2`, `attr_dynamic_prefix/1`, `children_sep/0`, `each_items/1`, `text_child/1`, `content_slot_az/2`, `content_slot_open/1`, `content_slot_close/0`, `is_void/1`, `raw_text_kind/2`, `content_context/2`, `scope_static/3`, `supports_list_patch/0`, `target/0`, `supports_live_root/0`, `content_type/0`, `supports_local/0`, `supports_nodiff_keep/0`, `implied_attrs/2`, `single_root_document/0`, `supports_keyed_item_ops/0`, `boolean_attrs/0`, `attr_names/0`, `escape/1`, `wire_escape/1`, `neutralize_raw_text/4`, `render_attr/2`, `wire_attr/2`, `format_error/1` |
+| Optional | `selection_role/2`, `controlled/3`, `embed_attrs/2` |
+| Required if | `markup_text/2` when `supports_local/0` is `true`; `mark_choices/2` when `selection_role/2` is implemented |
+
+A required-if callback a template needs but the backend lacks is the compile error
+`{missing_callback, Backend, {Function, Arity}, Need}`, located where the template uses it (an
+attribute `?local` beside fixed text, a choice valued by text that holds a value, a chooser's child
+the transform cannot see into), never an `undef` at render.
+
+A backend refuses what its markup cannot express by raising
+`erlang:error({arizona_render_reject, Message})` from a callback the transform calls while it
+compiles: `name/1`, `element_open/1`, `attr/2`, `attr_bool/2`, `attr_command/2` and
+`attr_dynamic_prefix/1`. The transform reports it as the compile error `{render_reject, Message}`
+at the element's or attribute's line, with the backend's message as written. `arizona_html`
+refuses `<plaintext>` this way, and a tag or attribute name holding `/`, `>`, `=`, `"`, `'` or `<`
+(whitespace and other controls are the core's `tag_not_text` / `attr_name_not_text`);
+`arizona_terminal` refuses a tag or style outside its vocabulary.
+
+**What an external backend must change** since the terminal package's pinned commit (`15bc87f6`):
+rename `attr_dyn_name/1` to `attr_dynamic_prefix/1`, `text_az/2` to `content_slot_az/2`,
+`text_slot_open/1` to `content_slot_open/1`, `text_slot_close/0` to `content_slot_close/0`,
+`raw_text/4` to `neutralize_raw_text/4`, `live_root/0` to `supports_live_root/0` and
+`keyed_item_ops/0` to `supports_keyed_item_ops/0`; take `element_open_end/2` (the tag and its
+content context) instead of `element_open_end/0`; implement the new required `format_error/1`;
+and read the root content context as `undefined` (`content_context()` is any atom, no longer
+`html | foreign`). A backend written against a later commit may also carry names that were
+added and changed since: `static_document/2` is now `embed_attrs/2`, `markup_text/1` is
+`markup_text/2` (it adds the `text | attribute` reading), `controlled/2` is `controlled/3` and
+`selection_role/1` is `selection_role/2` (each adds the content context), and `attr_markup/1` is
+gone (`markup_text/2` in `attribute` reads a fixed part as the page holds it).
+
 The backend also words the errors whose explanation lives in its vocabulary,
 `c:arizona_renderer:format_error/1`. The core raises them with neutral reasons and never
 words them itself: HTML's message for `dynamic_in_raw_text` names `<script>` and the XSS it
@@ -292,7 +328,9 @@ Chooser}}` with `selection_role/2`. Errors whose advice needs no element of the 
 `effect_in_content` a value raises where no backend is known.
 
 A few callbacks are optional, each a capability some targets lack by nature (`selection_role/2`,
-`mark_choices/2`, `markup_text/2`, `controlled/3`, `embed_attrs/2`).
+`mark_choices/2`, `markup_text/2`, `controlled/3`, `embed_attrs/2`), though `markup_text/2` is
+required of a backend whose `supports_local/0` is `true` and `mark_choices/2` of one implementing
+`selection_role/2`.
 `c:arizona_renderer:selection_role/2` is for a target whose output has no attribute for an element's
 chosen value. HTML is that target: `value` on a `<select>` is ignored by the parser, which loads on
 the first option (or the one marked `selected`), while a diff writes the `.value` property, so the
@@ -1110,7 +1148,9 @@ of them gets the static attribute `az-ctl` (via `attr/2`), after the author's at
 the implied ones, naming the parts it renders (`az-ctl="value checked"`): the client syncs
 only those, so a checkbox whose rendered part is only its `value` keeps its checkedness. A
 `?local` (the client's own), an az-nodiff subtree (never updated) and a backend without the
-callback (`?json`, `?terminal`) emit nothing. `az-ctl` is
+callback (`?json`, `?terminal`) emit nothing. The callback takes the content context the element
+sits in, and `arizona_html` marks only an element in HTML content: an SVG `textArea` (foreign
+content) is no form control. `az-ctl` is
 reserved (`reserved_attr`), like `az`, `az-local` and `az-busy`.
 
 **Client.** The guarantee: *once the server has answered an event that carried a control's
