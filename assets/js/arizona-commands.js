@@ -453,14 +453,12 @@ export function maybeResetForm(form, sent) {
             temp: group ? /** @type {string} */ (temp.get(group)) : null,
         };
     });
-    // A reset its own `reset` listener starts on the same form (a requestSubmit whose
-    // push_event resets it) reads the outer one's controls too, and hands it back
-    // when it ends.
+    // A reset started from the `reset` listener (which browsers lock to a no-op)
+    // hands `_resetting` back when it ends.
     const prev = _resetting;
-    const outer = prev?.form === form ? prev.detached : [];
     try {
         detach(detached);
-        _resetting = { form, detached: [...outer, ...detached] };
+        _resetting = { form, detached };
         f.reset();
     } finally {
         _resetting = prev;

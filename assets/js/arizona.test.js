@@ -9605,7 +9605,6 @@ describe('executeJS -- fetch', () => {
         it('a reset nested in its reset listener hands the outer one back', async () => {
             document.body.innerHTML =
                 '<form az-form-reset><input id="a" name="a" /><input id="b" name="b" /></form>';
-            $('#a').value = 'sent';
             const form = $('form');
             form.addEventListener('reset', () => maybeResetForm(form), { once: true });
             /** @type {string[]} */
@@ -9617,9 +9616,10 @@ describe('executeJS -- fetch', () => {
             const answer = sendHeld(form);
             $('#b').value = 'typed';
             await answer();
-            // The inner reset's event (before it resets a), then the outer one's:
-            // both read b, which the outer reset set aside.
-            expect(read).toEqual(['a=sent&b=typed', 'a=&b=typed']);
+            // Browsers lock a reset started from the form's own reset listener to a
+            // no-op; jsdom runs it. Either way the outer listener, which runs last,
+            // still reads b, the control the outer reset set aside.
+            expect(read.at(-1)).toBe('a=&b=typed');
             expect($('#b').value).toBe('typed');
             expect($('#b').form).toBe(form);
         });
