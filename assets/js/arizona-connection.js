@@ -1,5 +1,12 @@
 import { applyChooser, applyChoosers, shownDefault, syncsProp } from './arizona-attrs.js';
-import { applyEffects, executeJS, formFields, osHost, replayEvents } from './arizona-commands.js';
+import {
+    applyEffects,
+    executeJS,
+    formFields,
+    osHost,
+    replayEvents,
+    withAllControls,
+} from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import {
     bindDocumentEvents,
@@ -655,11 +662,13 @@ function carry(el, event) {
     if (prevented || /** @type {any} */ (event)?.dataTransfer) return null;
     const ctls =
         el.localName === 'form'
-            ? Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(
-                  (c) =>
-                      isCtl(c) &&
-                      /** @type {HTMLInputElement} */ (c).name &&
-                      !c.matches(':disabled'),
+            ? withAllControls(el, () =>
+                  Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(
+                      (c) =>
+                          isCtl(c) &&
+                          /** @type {HTMLInputElement} */ (c).name &&
+                          !c.matches(':disabled'),
+                  ),
               )
             : isCtl(el)
               ? ctlGroup(el)

@@ -1,4 +1,4 @@
-import { applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
+import { applyRemAttrOp, applySetAttrOp, shownDefault } from './arizona-attrs.js';
 import { allDocs, exitPip, requestPip } from './arizona-docs.js';
 import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
@@ -200,9 +200,11 @@ function autoPayload(el, event) {
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return formFields(
-            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
-            /** @type {HTMLFormElement} */ (el),
+        return withAllControls(el, () =>
+            formFields(
+                new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
+                /** @type {HTMLFormElement} */ (el),
+            ),
         );
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
         const field = /** @type {any} */ (el);
@@ -270,13 +272,202 @@ export function osHost() {
 }
 
 /**
+ * What a form control shows that the user can change: a checkbox or radio's
+ * checkedness, a select's selected options, a file input's files, else its value.
+ * `undefined` for a listed element with nothing to edit (a button, a fieldset).
+ * @param {Element} el
+ * @returns {unknown}
+ */
+function shownState(el) {
+    const c = /** @type {any} */ (el);
+    switch (el.localName) {
+        case 'select':
+            return Array.from(c.selectedOptions);
+        case 'textarea':
+        case 'output':
+            return c.value;
+        case 'input':
+            if (c.type === 'checkbox' || c.type === 'radio') return c.checked;
+            return c.type === 'file' ? Array.from(c.files ?? []) : c.value;
+        default:
+            return undefined;
+    }
+}
+
+/**
+ * @param {unknown} a
+ * @param {unknown} b
+ */
+const sameState = (a, b) =>
+    Array.isArray(a) && Array.isArray(b)
+        ? a.length === b.length && a.every((x, i) => x === b[i])
+        : a === b;
+
+/**
+ * What each of a form's controls shows as a `fetch` sends it, so its `az-form-reset`
+ * can tell the controls the user changed while the request was in flight.
+ * @param {HTMLFormElement} form
+ * @returns {Map<Element, unknown>}
+ */
+function formSnapshot(form) {
+    return new Map(Array.from(form.elements, (c) => [c, shownState(c)]));
+}
+
+/**
+ * Does a control added after the request went out show what a reset would give it?
+ * Anything else the user put there. A listed element with nothing to edit (a button,
+ * a custom element) is at its default.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function atDefault(el) {
+    const c = /** @type {any} */ (el);
+    switch (el.localName) {
+        case 'select': {
+            /** @type {any[]} */
+            const opts = Array.from(c.options);
+            if (c.multiple || c.size > 1)
+                return opts.every((o) => o.selected === o.defaultSelected);
+            // One shown option: the last default-selected one, else the first enabled
+            // (one in a disabled optgroup is disabled too).
+            const dflt = opts.filter((o) => o.defaultSelected);
+            const want = dflt.length
+                ? dflt[dflt.length - 1]
+                : opts.find((o) => !o.matches(':disabled'));
+            return c.selectedOptions[0] === want;
+        }
+        case 'output':
+            return c.value === c.defaultValue;
+        case 'textarea':
+            return c.value === shownDefault(el, c.defaultValue);
+        case 'input':
+            if (c.type === 'checkbox' || c.type === 'radio') return c.checked === c.defaultChecked;
+            // The default as the input's type sanitizes it (a range with none shows its
+            // midpoint, a color black).
+            return c.type === 'file'
+                ? !c.files?.length
+                : c.value === shownDefault(el, c.defaultValue);
+        default:
+            return true;
+    }
+}
+
+/** @param {Element} c a named radio's name, else `''` */
+const radioName = (c) =>
+    c.localName === 'input' && /** @type {any} */ (c).type === 'radio'
+        ? /** @type {any} */ (c).name
+        : '';
+
+/** A kept control, as `maybeResetForm` took it out of its form. */
+/** @typedef {{ctl: Element, owner: string|null, name: string|null, token: string, temp: string|null}} Detached */
+
+/**
+ * The form `maybeResetForm` is resetting, and the controls it set aside, while its
+ * native `reset()` runs: a `reset` listener (an `az-reset` push_event) still reads
+ * them as the form's.
+ * @type {{form: Element, detached: Detached[]}|null}
+ */
+let _resetting = null;
+
+/** @param {Detached[]} detached */
+function detach(detached) {
+    // Renamed before it leaves the form, so it never joins a formless group.
+    for (const d of detached) {
+        if (d.temp !== null) d.ctl.setAttribute('name', d.temp);
+        d.ctl.setAttribute('form', d.token);
+    }
+}
+
+/** @param {Detached[]} detached */
+function attach(detached) {
+    for (const d of [...detached].reverse()) {
+        if (d.owner === null) d.ctl.removeAttribute('form');
+        else d.ctl.setAttribute('form', d.owner);
+        if (d.name !== null) d.ctl.setAttribute('name', d.name);
+    }
+}
+
+/**
+ * Run `fn` with every control of `form` in it: a form `maybeResetForm` is resetting
+ * gets the controls it set aside back for the call (an `az-reset` push_event's
+ * payload, the server-owned controls it carries).
+ * @template T
+ * @param {Element} form
+ * @param {() => T} fn
+ * @returns {T}
+ */
+export function withAllControls(form, fn) {
+    const r = _resetting;
+    if (r?.form !== form) return fn();
+    attach(r.detached);
+    try {
+        return fn();
+    } finally {
+        detach(r.detached);
+    }
+}
+
+/**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
  * Shared by the submit listener (synchronous, for push_event-style commands) and the
  * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
+ * A deferred reset passes `sent`, what the controls showed when the request went out:
+ * one the user changed since, or added since and filled, keeps what it shows -- the
+ * next chat message typed while the last one was in flight -- with its whole radio
+ * group. The rest get the browser's own `form.reset()` (its trusted `reset` event,
+ * defaults, dirty and user-validity flags): the kept controls sit outside the form
+ * for that call, a `form` attribute naming no element taking them out with their
+ * value, focus and caret untouched. A kept radio group also takes a name no other
+ * radio has, so it never joins a formless group of its own name meanwhile, where
+ * a checked one would uncheck the radios there.
  * @param {Element} form
+ * @param {Map<Element, unknown>} [sent]
  */
-export function maybeResetForm(form) {
-    if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+export function maybeResetForm(form, sent) {
+    if (!form.hasAttribute('az-form-reset')) return;
+    const f = /** @type {HTMLFormElement} */ (form);
+    const ctls = Array.from(f.elements);
+    const kept = sent
+        ? ctls.filter((c) => (sent.has(c) ? !sameState(shownState(c), sent.get(c)) : !atDefault(c)))
+        : [];
+    // A radio group is kept whole: resetting a member the user left would check its
+    // default and uncheck the one they picked.
+    const groups = new Set(kept.map(radioName).filter(Boolean));
+    for (const c of ctls) if (!kept.includes(c) && groups.has(radioName(c))) kept.push(c);
+    // An id no element has, and a name prefix no element carries, in each root.
+    const roots = new Set(kept.map((c) => /** @type {any} */ (c.getRootNode())));
+    let token = 'az-form-reset-detached';
+    while (
+        [...roots].some((r) => r.getElementById?.(token) || r.querySelector?.(`[name^="${token}"]`))
+    )
+        token += '-';
+    const temp = new Map(Array.from(groups, (g, i) => [g, `${token}-${i}`]));
+    /** @type {Detached[]} */
+    const detached = kept.map((c) => {
+        const group = radioName(c);
+        return {
+            ctl: c,
+            owner: c.getAttribute('form'),
+            name: group ? c.getAttribute('name') : null,
+            token,
+            temp: group ? /** @type {string} */ (temp.get(group)) : null,
+        };
+    });
+    // A reset started straight from the `reset` listener is locked to a no-op, but
+    // reset() runs custom element reactions once the lock is released: a reset a
+    // form-associated element's formResetCallback starts fires a real `reset`,
+    // whose listener still reads the outer reset's set-aside controls. Each hands
+    // `_resetting` back when it ends.
+    const prev = _resetting;
+    const outer = prev?.form === form ? prev.detached : [];
+    try {
+        detach(detached);
+        _resetting = { form, detached: [...outer, ...detached] };
+        f.reset();
+    } finally {
+        _resetting = prev;
+        attach(detached);
+    }
 }
 
 /**
@@ -705,6 +896,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const url = cmd[1];
             const opts = cmd[2] || {};
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
+            // Every field, those a reset in progress set aside included (a fetch its
+            // `reset` listener runs).
+            const formData = (/** @type {HTMLFormElement} */ f) =>
+                withAllControls(f, () => new FormData(f, submitter(event)));
             const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
             // What a repeat is: the same method and URL from the same holder -- the
             // form the request posts, else the trigger (the page root for a server
@@ -732,9 +927,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 let params = null;
                 if (opts.body !== undefined) params = bodyQuery(opts.body);
                 else if (form) {
-                    params = new URLSearchParams(
-                        /** @type {any} */ (new FormData(form, submitter(event))),
-                    );
+                    params = new URLSearchParams(/** @type {any} */ (formData(form)));
                 }
                 const qs = params ? params.toString() : '';
                 if (qs) target = appendQuery(url, qs);
@@ -744,9 +937,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             } else if (form) {
                 // Mirror a normal form POST: application/x-www-form-urlencoded.
                 // (multipart / file uploads are a documented non-goal.)
-                body = new URLSearchParams(
-                    /** @type {any} */ (new FormData(form, submitter(event))),
-                );
+                body = new URLSearchParams(/** @type {any} */ (formData(form)));
             }
             const onError = (/** @type {object} */ detail) => {
                 // Contained: a throw from the response leg would fall into the
@@ -759,6 +950,11 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 }
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
+            // What the form showed as it was sent, for a reset on the 2xx to keep what
+            // the user changed while the request was in flight.
+            const sent = form?.hasAttribute('az-form-reset')
+                ? withAllControls(form, () => formSnapshot(form))
+                : undefined;
             // A synchronous throw here leaves nothing in flight: the slot and the
             // frame origin are taken once the request is out.
             const req = fetch(target, {
@@ -821,11 +1017,12 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             }
                         } else onError({ url, status: resp.status });
                         // Honor az-form-reset only on a 2xx success, so a validation
-                        // error (a non-2xx) keeps the typed fields. Same isolation as
-                        // the effects above.
+                        // error (a non-2xx) keeps the typed fields, and only the
+                        // fields still showing what was sent. Same isolation as the
+                        // effects above.
                         if (resp.ok && form) {
                             try {
-                                maybeResetForm(form);
+                                maybeResetForm(form, sent);
                             } catch (err) {
                                 console.error('[arizona] az-form-reset failed', err);
                             }
