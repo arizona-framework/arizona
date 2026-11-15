@@ -15,7 +15,7 @@ import {
     setAll,
 } from './arizona.js';
 import { applyChoosers } from './arizona-attrs.js';
-import { embedAttrs } from './test-proofs.js';
+import { embedAttrs, TEST_ATTRS } from './test-proofs.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,7 +75,7 @@ function setupView(viewId, innerHTML) {
  * @param {object} mod -- freshly imported arizona module (via vi.resetModules + import)
  * @returns mock object with posted messages, simulate helpers, and restore()
  */
-function setupMockWorker(mod) {
+function setupMockWorker(mod, names = TEST_ATTRS) {
     const posted = [];
     let workerOnmessage = null;
     const mockWorkerInstance = {
@@ -93,7 +93,7 @@ function setupMockWorker(mod) {
         return mockWorkerInstance;
     };
 
-    const unembed = embedAttrs();
+    const unembed = embedAttrs(names);
     const disconnect = mod.connect('/ws');
     unembed();
 
@@ -9399,10 +9399,14 @@ describe('executeJS -- fetch', () => {
                 '<input type="radio" id="sb" name="s" value="b" /></form>';
             $('#rb').checked = true;
             $('#sb').checked = true;
-            const answer = sendHeld($('form'));
+            const form = $('form');
+            const out = outsideAtReset(form, ['ra', 'rb', 'rc', 'sa', 'sb']);
+            const answer = sendHeld(form);
             // Moved from b to c: only b and c changed, but resetting a would check it.
             $('#rc').checked = true;
             await answer();
+            // a never changed, yet sits out with its group.
+            expect(out).toEqual(['ra', 'rb', 'rc']);
             expect([$('#ra').checked, $('#rb').checked, $('#rc').checked]).toEqual([
                 false,
                 false,
@@ -9533,6 +9537,43 @@ describe('executeJS -- fetch', () => {
                 'a',
                 'typed',
             ]);
+        });
+
+        it('resets added controls whose default the browser sanitizes', async () => {
+            document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
+            $('#a').value = 'sent';
+            const form = $('form');
+            const answer = sendHeld(form);
+            form.insertAdjacentHTML(
+                'beforeend',
+                '<input type="range" id="r" name="r" />' +
+                    '<input type="color" id="c" name="c" />' +
+                    '<input type="number" id="n" name="n" value="abc" />' +
+                    '<input type="email" id="e" name="e" value=" a@b.c " />' +
+                    '<input id="t" name="t" value="a&#10;b" />' +
+                    '<input type="date" id="d" name="d" value="bad" />' +
+                    '<select id="s" name="s"><optgroup disabled><option>pick</option>' +
+                    '</optgroup><option>a</option></select>',
+            );
+            const out = outsideAtReset(form, ['r', 'c', 'n', 'e', 't', 'd', 's']);
+            await answer();
+            expect(out).toEqual([]);
+            expect($('#a').value).toBe('');
+        });
+
+        it('takes kept radios out under a name no radio has', async () => {
+            document.body.innerHTML =
+                '<form az-form-reset><input id="a" name="a" />' +
+                '<input type="radio" id="ra" name="r" value="a" checked />' +
+                '<input type="radio" id="rb" name="r" value="b" /></form>' +
+                '<input type="radio" id="x" name="az-form-reset-detached-0" checked />';
+            $('#a').value = 'sent';
+            const answer = sendHeld($('form'));
+            $('#rb').checked = true;
+            await answer();
+            expect($('#x').checked).toBe(true);
+            expect($('#rb').checked).toBe(true);
+            expect($('#a').value).toBe('');
         });
 
         it('a button added in flight does not keep anything from form.reset()', async () => {
@@ -9758,6 +9799,54 @@ describe('fetch + az-form-reset via the submit listener', () => {
         // Resolve the 2xx -> now az-form-reset applies.
         resolveFetch();
         await vi.waitFor(() => expect(input.value).toBe(''));
+
+        mock.restore();
+    });
+
+    it('an az-reset push_event the reset raises carries every field, kept ones too', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const { host } = await import('./arizona-host.js');
+        const mock = setupMockWorker(mod, [...TEST_ATTRS, 'az-reset']);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f" az-submit=\'[22,"/x",{}]\' az-form-reset' +
+            ' az-reset=\'[0,"was_reset"]\'>' +
+            '<input id="to" name="to" az="0" az-ctl="value" />' +
+            '<textarea id="msg" name="msg" az="1" az-ctl="content"></textarea>' +
+            '<button type="submit">Go</button></form></div>';
+        const form = /** @type {HTMLFormElement} */ (document.querySelector('#f'));
+        const to = /** @type {HTMLInputElement} */ (document.querySelector('#to'));
+        const msg = /** @type {HTMLTextAreaElement} */ (document.querySelector('#msg'));
+        to.value = 'ada';
+        msg.value = 'message 1';
+        /** @type {Element[]} */
+        let carried = [];
+        form.addEventListener('reset', (e) => {
+            carried = (host.carry(form, e) ?? []).map(([c]) => c);
+        });
+
+        let resolveFetch = () => {};
+        globalThis.fetch = vi.fn(
+            () =>
+                new Promise((res) => {
+                    resolveFetch = () =>
+                        res({ ok: true, status: 200, text: () => Promise.resolve('') });
+                }),
+        );
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        msg.value = 'message 2';
+        resolveFetch();
+
+        await vi.waitFor(() => expect(to.value).toBe(''));
+        const ev = mock.getSentMessages().find((m) => m[1] === 'was_reset');
+        // Raised before the reset, with the fields as they stood: the kept one included.
+        expect(ev?.[2]).toMatchObject({ to: 'ada', msg: 'message 2' });
+        expect(carried).toEqual([to, msg]);
+        expect(msg.value).toBe('message 2');
+        expect(msg.form).toBe(form);
 
         mock.restore();
     });

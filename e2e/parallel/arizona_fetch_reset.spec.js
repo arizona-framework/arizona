@@ -33,6 +33,8 @@ test('az-form-reset on a fetch 2xx keeps what was typed while the request was in
     await expect(page.locator('#to')).toHaveValue('');
     await expect(page.locator('#urgent')).not.toBeChecked();
     await expect(page.locator('#msg')).toHaveValue('message 2');
+    // The reset's own event reads every field, the one left included.
+    await expect(page.locator('#reset-msg')).toHaveText('message 2');
     // The browser's own reset: the emptied required field is not flagged invalid.
     expect(await page.locator('#to').evaluate((e) => e.matches(':user-invalid'))).toBe(false);
 

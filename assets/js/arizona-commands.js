@@ -1,4 +1,4 @@
-import { applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
+import { applyRemAttrOp, applySetAttrOp, shownDefault } from './arizona-attrs.js';
 import { allDocs, exitPip, requestPip } from './arizona-docs.js';
 import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
@@ -200,9 +200,11 @@ function autoPayload(el, event) {
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return formFields(
-            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
-            /** @type {HTMLFormElement} */ (el),
+        return withAllControls(el, () =>
+            formFields(
+                new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
+                /** @type {HTMLFormElement} */ (el),
+            ),
         );
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
         const field = /** @type {any} */ (el);
@@ -326,17 +328,25 @@ function atDefault(el) {
             const opts = Array.from(c.options);
             if (c.multiple || c.size > 1)
                 return opts.every((o) => o.selected === o.defaultSelected);
-            // One shown option: the last default-selected one, else the first enabled.
+            // One shown option: the last default-selected one, else the first enabled
+            // (one in a disabled optgroup is disabled too).
             const dflt = opts.filter((o) => o.defaultSelected);
-            const want = dflt.length ? dflt[dflt.length - 1] : opts.find((o) => !o.disabled);
+            const want = dflt.length
+                ? dflt[dflt.length - 1]
+                : opts.find((o) => !o.matches(':disabled'));
             return c.selectedOptions[0] === want;
         }
-        case 'textarea':
         case 'output':
             return c.value === c.defaultValue;
+        case 'textarea':
+            return c.value === shownDefault(el, c.defaultValue);
         case 'input':
             if (c.type === 'checkbox' || c.type === 'radio') return c.checked === c.defaultChecked;
-            return c.type === 'file' ? !c.files?.length : c.value === c.defaultValue;
+            // The default as the input's type sanitizes it (a range with none shows its
+            // midpoint, a color black).
+            return c.type === 'file'
+                ? !c.files?.length
+                : c.value === shownDefault(el, c.defaultValue);
         default:
             return true;
     }
@@ -347,6 +357,55 @@ const radioName = (c) =>
     c.localName === 'input' && /** @type {any} */ (c).type === 'radio'
         ? /** @type {any} */ (c).name
         : '';
+
+/** A kept control, as `maybeResetForm` took it out of its form. */
+/** @typedef {{ctl: Element, owner: string|null, name: string|null, token: string, temp: string|null}} Detached */
+
+/**
+ * The form `maybeResetForm` is resetting, and the controls it set aside, while its
+ * native `reset()` runs: a `reset` listener (an `az-reset` push_event) still reads
+ * them as the form's.
+ * @type {{form: Element, detached: Detached[]}|null}
+ */
+let _resetting = null;
+
+/** @param {Detached[]} detached */
+function detach(detached) {
+    // Renamed before it leaves the form, so it never joins a formless group.
+    for (const d of detached) {
+        if (d.temp !== null) d.ctl.setAttribute('name', d.temp);
+        d.ctl.setAttribute('form', d.token);
+    }
+}
+
+/** @param {Detached[]} detached */
+function attach(detached) {
+    for (const d of [...detached].reverse()) {
+        if (d.owner === null) d.ctl.removeAttribute('form');
+        else d.ctl.setAttribute('form', d.owner);
+        if (d.name !== null) d.ctl.setAttribute('name', d.name);
+    }
+}
+
+/**
+ * Run `fn` with every control of `form` in it: a form `maybeResetForm` is resetting
+ * gets the controls it set aside back for the call (an `az-reset` push_event's
+ * payload, the server-owned controls it carries).
+ * @template T
+ * @param {Element} form
+ * @param {() => T} fn
+ * @returns {T}
+ */
+export function withAllControls(form, fn) {
+    const r = _resetting;
+    if (r?.form !== form) return fn();
+    attach(r.detached);
+    try {
+        return fn();
+    } finally {
+        detach(r.detached);
+    }
+}
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
@@ -375,28 +434,32 @@ export function maybeResetForm(form, sent) {
     // default and uncheck the one they picked.
     const groups = new Set(kept.map(radioName).filter(Boolean));
     for (const c of ctls) if (!kept.includes(c) && groups.has(radioName(c))) kept.push(c);
+    // An id no element has, and a name prefix no element carries, in each root.
+    const roots = new Set(kept.map((c) => /** @type {any} */ (c.getRootNode())));
     let token = 'az-form-reset-detached';
-    while (kept.some((c) => /** @type {any} */ (c.getRootNode()).getElementById?.(token)))
+    while (
+        [...roots].some((r) => r.getElementById?.(token) || r.querySelector?.(`[name^="${token}"]`))
+    )
         token += '-';
     const temp = new Map(Array.from(groups, (g, i) => [g, `${token}-${i}`]));
-    /** @type {Array<[Element, string|null, string|null]>} */
-    const detached = [];
+    /** @type {Detached[]} */
+    const detached = kept.map((c) => {
+        const group = radioName(c);
+        return {
+            ctl: c,
+            owner: c.getAttribute('form'),
+            name: group ? c.getAttribute('name') : null,
+            token,
+            temp: group ? /** @type {string} */ (temp.get(group)) : null,
+        };
+    });
     try {
-        for (const c of kept) {
-            const group = radioName(c);
-            const was = [c, c.getAttribute('form'), group ? c.getAttribute('name') : null];
-            detached.push(/** @type {[Element, string|null, string|null]} */ (was));
-            // Renamed before it leaves the form, so it never joins a formless group.
-            if (group) c.setAttribute('name', /** @type {string} */ (temp.get(group)));
-            c.setAttribute('form', token);
-        }
+        detach(detached);
+        _resetting = { form, detached };
         f.reset();
     } finally {
-        for (const [c, owner, name] of detached.reverse()) {
-            if (owner === null) c.removeAttribute('form');
-            else c.setAttribute('form', owner);
-            if (name !== null) c.setAttribute('name', name);
-        }
+        _resetting = null;
+        attach(detached);
     }
 }
 
