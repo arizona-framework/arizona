@@ -17,6 +17,7 @@ import {
 import { applyChoosers } from './arizona-attrs.js';
 import { maybeResetForm } from './arizona-commands.js';
 import { embedAttrs, TEST_ATTRS } from './test-proofs.js';
+import { shadowNamedControls } from './test-shadow.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -8571,34 +8572,11 @@ describe('fetch in flight', () => {
         });
 
         describe('a form whose controls shadow its own properties', () => {
-            // HTMLFormElement is [LegacyOverrideBuiltIns]: a control named `id`,
-            // `elements` or `reset` is what the form's property of that name
-            // returns in a browser, as a property of the form itself. jsdom does not
-            // shadow, so this does: `id` on every form (the prototype, so a form a
-            // resync renders too), `elements` and `reset` on the forms on the page.
+            // A browser's form has its controls as named properties; see test-shadow.js.
             /** @type {(() => void)|null} */
             let unshadow = null;
             function shadow() {
-                const real = /** @type {PropertyDescriptor} */ (
-                    Object.getOwnPropertyDescriptor(Element.prototype, 'id')
-                );
-                Object.defineProperty(HTMLFormElement.prototype, 'id', {
-                    configurable: true,
-                    get() {
-                        return this.querySelector('[name="id"]') ?? real.get?.call(this);
-                    },
-                    set(v) {
-                        real.set?.call(this, v);
-                    },
-                });
-                for (const form of document.querySelectorAll('form'))
-                    for (const k of ['elements', 'reset']) {
-                        const named = form.querySelector(`[name="${k}"]`);
-                        if (named) Object.defineProperty(form, k, { value: named });
-                    }
-                unshadow = () => {
-                    delete (/** @type {any} */ (HTMLFormElement.prototype).id);
-                };
+                unshadow = shadowNamedControls();
             }
             afterEach(() => {
                 unshadow?.();
@@ -8631,6 +8609,31 @@ describe('fetch in flight', () => {
                     expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
                     expect(q().value).toBe('');
                 });
+
+            it('keeps a field typed after the reconnect and resets a sent one (elements)', async () => {
+                const html = RESET_FORM(
+                    '<input type="hidden" name="elements" value="7"><input name="q" value=""><input name="r" value="">',
+                );
+                await page(html);
+                shadow();
+                q().value = 'hello';
+                document.querySelector('[name=r]').value = 'x';
+                submit('f');
+                reconnect(html);
+                q().value = 'world';
+                pending[0].resolve(response(200, ''));
+                await flush();
+                expect(q().value).toBe('world');
+                expect(document.querySelector('[name=r]').value).toBe('');
+            });
+
+            it('refocuses an id-less field of a form with an elements control', async () => {
+                await page(ELEMENTS_FORM);
+                shadow();
+                q().focus();
+                reconnect(ELEMENTS_FORM);
+                expect(document.activeElement).toBe(q());
+            });
 
             it('refocuses a field of an edit form after a reconnect', async () => {
                 await page(ID_FORM);
@@ -9307,6 +9310,8 @@ describe('executeJS -- fetch', () => {
 
     afterEach(() => {
         globalThis.fetch = originalFetch;
+        // A spy a failing test left on a prototype (HTMLFormElement's reset).
+        vi.restoreAllMocks();
     });
 
     /** A fake 2xx Response whose body is the {e:[...]} effects wire payload. */
@@ -9556,8 +9561,6 @@ describe('executeJS -- fetch', () => {
     });
 
     describe('az-form-reset keeps what changed while the request was in flight', () => {
-        afterEach(() => vi.restoreAllMocks());
-
         /** Send `form` by fetch; the returned function answers it with a 2xx. */
         function sendHeld(form) {
             /** @type {() => void} */
@@ -10022,7 +10025,7 @@ describe('executeJS -- fetch', () => {
     it('a throwing az-form-reset on a 2xx is logged, not misreported as a network failure', async () => {
         document.body.innerHTML = '<form az-form-reset><input name="n" /></form>';
         const form = /** @type {HTMLFormElement} */ (document.querySelector('form'));
-        const resetSpy = vi.spyOn(HTMLFormElement.prototype, 'reset').mockImplementation(() => {
+        vi.spyOn(HTMLFormElement.prototype, 'reset').mockImplementation(() => {
             throw new Error('reset boom');
         });
         const fetchErr = vi.fn();
@@ -10037,7 +10040,6 @@ describe('executeJS -- fetch', () => {
         expect(fetchErr).not.toHaveBeenCalled();
 
         errorSpy.mockRestore();
-        resetSpy.mockRestore();
         document.removeEventListener('arizona:fetch-error', fetchErr);
     });
 });

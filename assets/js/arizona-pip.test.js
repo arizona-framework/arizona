@@ -12,6 +12,7 @@ import {
     saveFormState,
 } from './arizona.js';
 import { _viewDocs } from './arizona-docs.js';
+import { shadowNamedControls } from './test-shadow.js';
 
 // A minimal stand-in for a Document Picture-in-Picture window, backed by a real
 // (jsdom) Document, so the multi-document patch/effect paths can be exercised
@@ -229,6 +230,30 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(await requestPip('r2')).toBe(again);
         expect(again.document.getElementById('r2')).not.toBeNull();
         again.fire('pagehide');
+    });
+
+    it('re-keys the window to a form view root with a control named id', async () => {
+        // A browser's form has its controls as named properties (see test-shadow.js).
+        const unshadow = shadowNamedControls();
+        try {
+            document.body.innerHTML = '<div id="r1" az-view az="0"><span>old</span></div>';
+            const pip = makePipWindow();
+            Object.defineProperty(pip.document, 'defaultView', { value: pip });
+            stubPip(pip);
+            await requestPip('r1');
+            applyOps([
+                [
+                    OP.REPLACE,
+                    'r1',
+                    '<form id="r2" az-view az="0"><input type="hidden" name="id" value="7"></form>',
+                ],
+            ]);
+            expect(resolveEl('r2')?.ownerDocument).toBe(pip.document);
+            exitPip('r2');
+            expect(pip.closed).toBe(true);
+        } finally {
+            unshadow();
+        }
     });
 
     it("preserves a popped-out form's typed values across a reconnect", async () => {

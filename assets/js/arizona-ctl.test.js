@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { embedAttrs } from './test-proofs.js';
+import { shadowNamedControls } from './test-shadow.js';
 
 // Server-owned controls (`az-ctl`): the attribute a server write changes is only a
 // control's default, and once the user edits the control what it shows is the live
@@ -1111,5 +1112,44 @@ describe('event pacing (az-debounce)', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe('a form with a control named elements', () => {
+    // A browser's form has its controls as named properties; see test-shadow.js.
+    /** @type {(() => void)|null} */
+    let unshadow = null;
+    afterEach(() => {
+        unshadow?.();
+        unshadow = null;
+    });
+    const ELEMENTS = '<input type="hidden" name="elements" value="7" />';
+
+    it('a refused submit reverts its server-owned fields', async () => {
+        await connect(
+            `<form az-submit='[0,"save"]'>${ELEMENTS}<input az="0" name="q" value="5" az-ctl="value" /></form>`,
+        );
+        unshadow = shadowNamedControls();
+        const q = /** @type {HTMLInputElement} */ (document.querySelector('[name=q]'));
+        q.value = '999';
+        document
+            .querySelector('form')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        mock.reply(null, mock.lastRef());
+        expect(q.value).toBe('5');
+    });
+
+    it('a refused radio pick restores its group', async () => {
+        await connect(
+            `<form>${ELEMENTS}<input az="0" type="radio" name="r" value="a" ${CHANGE} az-ctl="checked" />` +
+                `<input az="1" type="radio" name="r" value="b" checked ${CHANGE} az-ctl="checked" /></form>`,
+        );
+        unshadow = shadowNamedControls();
+        const [a, b] = document.querySelectorAll('[name=r]');
+        edit(a, (e) => {
+            e.checked = true;
+        });
+        mock.reply(null, mock.lastRef());
+        expect([a.checked, b.checked]).toEqual([false, true]);
     });
 });
