@@ -491,6 +491,7 @@
     local_attr_raw_affix_builds_bytes/1,
     local_attr_raw_affix_not_utf8_error/1,
     local_attr_raw_affix_layout_error/1,
+    local_attr_raw_affix_not_code_point_error/1,
     local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
@@ -776,6 +777,7 @@ groups() ->
             local_attr_raw_affix_builds_bytes,
             local_attr_raw_affix_not_utf8_error,
             local_attr_raw_affix_layout_error,
+            local_attr_raw_affix_not_code_point_error,
             local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
@@ -2028,7 +2030,9 @@ local_attr_raw_affix_builds_bytes(Config) when is_list(Config) ->
             {1, "<<16#C3, 16#A9>>", <<"é"/utf8>>},
             {2, "<<\"é\"/utf8>>", <<"é"/utf8>>},
             {3, "<<55296>>", <<16#FFFD/utf8>>},
-            {4, "[<<16#C3, 16#A9>>, $x]", <<"éx"/utf8>>}
+            {4, "[<<16#C3, 16#A9>>, $x]", <<"éx"/utf8>>},
+            {5, "<<(<<16#C3, 16#A9>>)/binary>>", <<"é"/utf8>>},
+            {6, "<<+16#C3, 16#A9>>", <<"é"/utf8>>}
         ]
     ).
 
@@ -2084,7 +2088,11 @@ local_attr_raw_affix_layout_error(Config) when is_list(Config) ->
             "<<1:16>>",
             "<<1/little>>",
             "<<1:8/unit:8>>",
-            "[<<0:4398046511104>>]"
+            "[<<0:4398046511104>>]",
+            "<<\"a\":8/utf8>>",
+            "<<(1 + 1)>>",
+            "<<1:(4 + 4)>>",
+            "<<(<<1:4>>)/bitstring>>"
         ]
     ),
     %% `:8` and `/utf8` spell bytes the transform builds as Erlang does.
@@ -2102,6 +2110,26 @@ local_attr_raw_affix_layout_error(Config) when is_list(Config) ->
         #{~"a" => #{~"title" => ~"id"}, ~"ap" => #{~"title" => [<<"ééé"/utf8>>, ~""]}},
         decode_local_descriptor(SSR),
         SSR
+    ).
+
+%% A `/utf8` segment holding no code point does not build at all (Erlang raises), so it
+%% is refused naming that, not its layout.
+local_attr_raw_affix_not_code_point_error(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Raw, N}) ->
+            Result = raw_affix_parse(Raw),
+            ?assertMatch(
+                {error,
+                    [{_File, [{6, arizona_parse_transform, {local_attr_raw_not_code_point, N}}]}],
+                    []},
+                Result,
+                Raw
+            ),
+            {error, [{_, [{_, _, Reason}]}], []} = Result,
+            Msg = lists:flatten(arizona_parse_transform:format_error(Reason)),
+            ?assertNotEqual(nomatch, string:find(Msg, "not a code point"), Msg)
+        end,
+        [{"<<55296/utf8>>", 55296}, {"<<16#110000/utf8>>", 16#110000}, {"<<-1/utf8>>", -1}]
     ).
 
 %% The transform's result for a `?raw` of `Raw` beside an attribute `?local`, the raw on

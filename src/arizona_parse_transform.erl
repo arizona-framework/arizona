@@ -1373,7 +1373,8 @@ format_error(Reason) when
     Reason =:= local_attr_multiple;
     Reason =:= local_attr_mixed;
     Reason =:= local_attr_raw_layout;
-    element(1, Reason) =:= local_attr_raw_not_utf8
+    element(1, Reason) =:= local_attr_raw_not_utf8;
+    element(1, Reason) =:= local_attr_raw_not_code_point
 ->
     format_local_error(Reason);
 %% Render-target errors: nesting one target in another, and a `target/2` call
@@ -1478,12 +1479,22 @@ format_local_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
 format_local_error(local_attr_raw_layout) ->
-    "this ?raw beside an attribute ?local lays its bytes out with a size, a unit or a "
-    "type the transform does not build. Beside a ?local the raw's bytes are folded at "
-    "compile time into the text the client composes the attribute with, and the "
-    "transform builds them itself, never evaluating the literal: spell each segment "
-    "unsized, as :8 or as /utf8 (<<16#C3, 16#A9>>, <<233:8>>, <<\"é\"/utf8>>), or write "
-    "the text as ~\"...\"";
+    "this ?raw beside an attribute ?local lays its bytes out with a size, a unit, a "
+    "type or an operator expression the transform does not build. Beside a ?local the "
+    "raw's bytes are folded at compile time into the text the client composes the "
+    "attribute with, and the transform builds them itself, never evaluating the "
+    "literal: spell each segment as a literal integer, character or string, unsized, as "
+    ":8 or as /utf8 (<<16#C3, 16#A9>>, <<233:8>>, <<\"é\"/utf8>>), or splice a literal "
+    "binary as /binary, or write the text as ~\"...\"";
+format_local_error({local_attr_raw_not_code_point, N}) ->
+    lists:flatten(
+        io_lib:format(
+            "this ?raw beside an attribute ?local has the /utf8 segment ~w, which is not a "
+            "code point (a surrogate, a negative number, or past 16#10FFFF), so Erlang "
+            "cannot build it. Write the character you mean",
+            [N]
+        )
+    );
 format_local_error({local_attr_raw_not_utf8, Bytes}) ->
     lists:flatten(
         io_lib:format(
@@ -5442,17 +5453,18 @@ assert_fixed(Part, Line) ->
         true -> ok;
         {ok, _Markup} -> ok;
         {not_utf8, Bytes} -> parse_error({local_attr_raw_not_utf8, Bytes}, anno(Part));
-        layout -> parse_error(local_attr_raw_layout, anno(Part));
+        {refused, Reason} -> parse_error(Reason, anno(Part));
         error -> parse_error(local_attr_mixed, Line)
     end.
 
 %% The markup a literal `?raw` splices: `{ok, Bin}`, `{not_utf8, Bytes}` when it is not
-%% text, `layout` when it lays bytes out in a way the transform does not build, else
-%% `error`. A raw's argument is a runtime value whose bytes Erlang builds (an integer
-%% segment a byte, a bare `<<"...">>` Latin-1) wherever the raw sits, so the bytes
-%% folded here are the ones it builds -- what the same raw renders beside a dynamic,
-%% converted as the render converts it (arizona_template:to_bin/1). The affix is text
-%% the client composes with, so bytes that are not UTF-8 have none to fold to.
+%% text, `{refused, Reason}` when its literal lays bytes out in a way the transform does
+%% not build or names a character there is none of, else `error`. A raw's argument is a
+%% runtime value whose bytes Erlang builds (an integer segment a byte, a bare
+%% `<<"...">>` Latin-1) wherever the raw sits, so the bytes folded here are the ones it
+%% builds -- what the same raw renders beside a dynamic, converted as the render
+%% converts it (arizona_template:to_bin/1). The affix is text the client composes with,
+%% so bytes that are not UTF-8 have none to fold to.
 raw_affix_markup({call, _, _, [Arg]} = Part) ->
     case is_raw_call(Part) of
         true -> raw_value_bytes(raw_value(Arg));
@@ -5462,7 +5474,7 @@ raw_affix_markup(_Part) ->
     error.
 
 raw_value_bytes({ok, Value}) -> utf8_bytes(Value);
-raw_value_bytes(layout) -> layout;
+raw_value_bytes({refused, _Reason} = Refused) -> Refused;
 raw_value_bytes(computed) -> error.
 
 utf8_bytes(Value) ->
@@ -5477,9 +5489,10 @@ utf8_bytes(Value) ->
     end.
 
 %% The value a raw's literal argument builds, built here rather than evaluated: only the
-%% layouts that spell bytes one by one are taken (a segment unsized, `:8` or `/utf8`),
-%% so a literal's size never reaches the allocator. `{ok, Value}`, `layout` for any other
-%% layout of literals, `computed` for a value read at runtime.
+%% layouts that spell bytes one by one are taken (a segment unsized, `:8` or `/utf8`, or
+%% a literal binary spliced as `/binary`), so a literal's size never reaches the
+%% allocator. `{ok, Value}`, `{refused, Reason}` for any other layout of constants (or a
+%% `/utf8` code that names no character), `computed` for a value read at runtime.
 raw_value({bin, _, Elements}) ->
     fold_raw_parts([raw_segment(E) || E <- Elements], fun erlang:list_to_binary/1);
 raw_value({cons, _, Head, Tail}) ->
@@ -5502,43 +5515,80 @@ fold_raw_parts(Parts, Build) ->
         true ->
             computed;
         false ->
-            case lists:member(layout, Parts) of
-                true -> layout;
-                false -> {ok, Build([V || {ok, V} <:- Parts])}
+            case [R || {refused, _} = R <- Parts] of
+                [Refused | _] -> Refused;
+                [] -> {ok, Build([V || {ok, V} <:- Parts])}
             end
     end.
 
 %% One segment, as Erlang builds it: an integer is its low byte, unsized or `:8`, and
-%% its UTF-8 under `/utf8`; a string the same, character by character.
+%% its UTF-8 under `/utf8`; a string the same, character by character; a literal binary
+%% under `/binary` its own bytes.
+raw_segment({bin_element, _, {bin, _, _} = Inner, default, [Type]}) when
+    Type =:= binary; Type =:= bytes
+->
+    raw_value(Inner);
 raw_segment({bin_element, _, Value, Size, Type}) ->
     case {segment_codes(Value), segment_layout(Size, Type)} of
         {computed, _Layout} -> computed;
         {_Codes, computed} -> computed;
-        {_Codes, layout} -> layout;
+        {_Codes, layout} -> {refused, local_attr_raw_layout};
+        {layout, _Layout} -> {refused, local_attr_raw_layout};
         {Codes, byte} -> {ok, <<<<(C band 255)>> || C <- Codes>>};
         {Codes, utf8} -> utf8_segment(Codes)
     end.
 
 segment_codes({string, _, Chars}) ->
     Chars;
+segment_codes({op, _, '+', {Kind, _, N}}) when Kind =:= integer; Kind =:= char ->
+    [N];
 segment_codes(Value) ->
     case code_point_literal(Value) of
         {ok, N} -> [N];
-        error -> computed
+        error -> constant_kind(Value)
     end.
 
 segment_layout(default, default) -> byte;
 segment_layout({integer, _, 8}, default) -> byte;
 segment_layout(default, [utf8]) -> utf8;
-segment_layout({integer, _, _}, _Type) -> layout;
 segment_layout(default, _Type) -> layout;
-segment_layout(_SizeExpr, _Type) -> computed.
+segment_layout(Size, _Type) -> constant_kind(Size).
+
+%% A value or size built from constants alone is a layout the transform does not build;
+%% anything else may be read at runtime.
+constant_kind(AST) ->
+    case is_constant_expr(AST) of
+        true -> layout;
+        false -> computed
+    end.
+
+is_constant_expr({Kind, _, _}) when
+    Kind =:= integer; Kind =:= char; Kind =:= float; Kind =:= string; Kind =:= atom
+->
+    true;
+is_constant_expr({nil, _}) ->
+    true;
+is_constant_expr({op, _, _Op, A}) ->
+    is_constant_expr(A);
+is_constant_expr({op, _, _Op, A, B}) ->
+    is_constant_expr(A) andalso is_constant_expr(B);
+is_constant_expr({cons, _, H, T}) ->
+    is_constant_expr(H) andalso is_constant_expr(T);
+is_constant_expr({bin, _, Elements}) ->
+    lists:all(
+        fun({bin_element, _, V, Size, _Type}) ->
+            is_constant_expr(V) andalso (Size =:= default orelse is_constant_expr(Size))
+        end,
+        Elements
+    );
+is_constant_expr(_Other) ->
+    false.
 
 %% Erlang raises building a `/utf8` segment that is no code point; so is it refused.
 utf8_segment(Codes) ->
-    case lists:all(fun is_code_point/1, Codes) of
-        true -> {ok, <<<<C/utf8>> || C <- Codes>>};
-        false -> layout
+    case [C || C <- Codes, not is_code_point(C)] of
+        [] -> {ok, <<<<C/utf8>> || C <- Codes>>};
+        [N | _] -> {refused, {local_attr_raw_not_code_point, N}}
     end.
 
 %% The text one fixed part means: static text as written, a literal raw as the text

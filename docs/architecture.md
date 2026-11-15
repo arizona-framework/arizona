@@ -1209,8 +1209,11 @@ anywhere else, a runtime value whose bytes Erlang builds (an integer segment a b
 `<<"...">>` Latin-1), so the transform builds those bytes, as the render would, and refuses
 bytes that are not UTF-8 with `local_attr_raw_not_utf8` at the raw (the affix is text the
 client composes with). It builds them itself and never evaluates the literal, so a size never
-reaches the allocator: each segment is unsized, `:8` or `/utf8`, and any other size, unit or
-type is `local_attr_raw_layout`. It folds valid bytes to the
+reaches the allocator: each segment is a literal integer, character or string (a sign
+allowed), unsized, `:8` or `/utf8`, or a literal binary spliced as `/binary`. Any other size,
+unit, type or operator expression of constants is `local_attr_raw_layout`, a `/utf8` segment
+naming no character is `local_attr_raw_not_code_point`, and a part read at runtime stays
+`local_attr_mixed`. It folds valid bytes to the
 text their markup reads as on its own (the backend's `markup_text/2`, in `attribute`) and
 treats that as static text, which the page holds exactly once escaped (HTML writes a CR
 as `&#13;`, see "Output is UTF-8"). Every affix is the text the page reads back
