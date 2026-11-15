@@ -210,8 +210,7 @@ form: its only pending send is that trailing submission, which its tick delivers
 flush would only reopen the window early. Pacing is a `push_event` mechanism: an
 `arizona_js:fetch` is issued as it is raised, on a submit or any event, and `az-debounce`/
 `az-throttle` do not defer it (a deferred request would need its own answer to the navigate
-epoch and the reconnect replay, both defined for view events, and a paced double submit still posts
-twice); `on_repeat => drop` is what stops a repeat (see "HTTP fetch"). A debounce mode the server switches mid-window sends the slot's latest raise in the new
+epoch, defined for view events, and a paced double submit still posts twice); `on_repeat => drop` is what stops a repeat (see "HTTP fetch"). A debounce mode the server switches mid-window sends the slot's latest raise in the new
 mode: the old timer neither fires a raise the new one replaced nor drops it.
 
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
