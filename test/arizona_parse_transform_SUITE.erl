@@ -130,6 +130,7 @@
     invalid_child_mixed/1,
     error_names_included_file/1,
     module_without_module_attr/1,
+    authored_transformed_attr_still_transforms/1,
     error_after_include_names_main_file/1,
     error_keeps_column/1,
     error_in_included_helper_names_its_file/1,
@@ -1275,6 +1276,7 @@ groups() ->
             improper_attr_value_is_text,
             error_names_included_file,
             module_without_module_attr,
+            authored_transformed_attr_still_transforms,
             error_after_include_names_main_file,
             error_keeps_column,
             error_in_included_helper_names_its_file,
@@ -8873,6 +8875,19 @@ module_without_module_attr(Config) when is_list(Config) ->
             ]
         ]
     ).
+
+%% The transform skips only a module it built itself: an attribute a source writes
+%% under the marker's name is the author's, and the templates still compile.
+authored_transformed_attr_still_transforms(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_authored_marker). "
+        "-arizona_transformed(true). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:target(arizona_html, {p, [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{x => ~"1"}))),
+    ?assertMatch({_, _}, binary:match(HTML, ~"-->1<!--"), HTML).
 
 %% An error inside an included file names that file, not the module's: the
 %% `-file` attribute epp emits at the include boundary is honored.

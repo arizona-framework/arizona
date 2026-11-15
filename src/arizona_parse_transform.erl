@@ -190,8 +190,11 @@ render(Bindings) ->
 %% `undef` at render.
 -define(CHOICES_MARK, '$arizona_choices').
 
-%% The attribute a module this transform has built carries (mark_transformed/1).
+%% The attribute a module this transform has built carries (inject_az_attrs/2), and
+%% its value: one only the transform writes, so an attribute a source authors under the
+%% same name does not make the transform skip the module.
 -define(TRANSFORMED_ATTR, arizona_transformed).
+-define(TRANSFORMED_MARK, {arizona_parse_transform, transformed}).
 
 %% Wraps the `selected` test a choice under a chooser whose value is a `?local` gets
 %% (rewrite_choice/4): the selection is the client's, so the attribute compiles as a
@@ -276,7 +279,7 @@ parse_transform(Forms, Options) ->
         false -> transform_module(Forms, Options)
     end.
 
-is_transformed_attr({attribute, _, ?TRANSFORMED_ATTR, _}) -> true;
+is_transformed_attr({attribute, _, ?TRANSFORMED_ATTR, ?TRANSFORMED_MARK}) -> true;
 is_transformed_attr(_Form) -> false.
 
 transform_module(Forms, Options) ->
@@ -756,7 +759,7 @@ inject_az_attrs(Forms, Deps) ->
     ),
     insert_after_module(Forms, fun(Anno) ->
         %% Also records that this transform built the module (parse_transform/2).
-        [{attribute, Anno, ?TRANSFORMED_ATTR, true}] ++
+        [{attribute, Anno, ?TRANSFORMED_ATTR, ?TRANSFORMED_MARK}] ++
             [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
             [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []]
     end).
