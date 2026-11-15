@@ -476,30 +476,39 @@ let _navEpoch = 0;
  * disconnected (the worker drops it, so no reply comes), so the intent cannot
  * settle onto a later, unrelated reply. A 'replace' transition waits for a
  * navigate, not for an event raised under it, so neither touches it.
- * @param {string} name event name, for the warning
- * @param {Array<*>} frame `[target, event, payload]`
- * @param {number} [epoch] `_navEpoch` when the event was raised
  *
  * `ctls` are the server-owned controls whose state the event sends, as it was when
- * raised: on a live socket the frame then takes a reply ref (the one a waiting
- * transition takes) and each control is held until that reply (`_owned`).
- * @param {typeof _pendingTransition} [transition]
- * @param {Array<[Element, string|boolean]>|null} [ctls]
+ * raised, and `onReply` runs when the reply lands (before its ops and effects) or
+ * the socket goes away. On a live socket either makes the frame take a reply ref,
+ * one per frame, shared with a waiting transition: each control is held until that
+ * reply (`_owned`), and `onReply` is kept by it (`_replyWaiters`).
+ *
+ * Returns whether the frame went out on a live socket, so a reply will come: a
+ * caller whose `onReply` was not kept must run it itself.
+ * @param {string} name event name, for the warning
+ * @param {Array<*>} frame `[target, event, payload]`
+ * @param {{
+ *   epoch?: number,
+ *   transition?: typeof _pendingTransition,
+ *   ctls?: Array<[Element, string|boolean]>|null,
+ *   onReply?: (() => void)|null
+ * }} [opts] `epoch` is `_navEpoch` when the event was raised
+ * @returns {boolean}
  */
-function sendEvent(name, frame, epoch = _navEpoch, transition = null, ctls = null) {
-    // Sent or dropped, the raise is no longer pending (`carry`).
-    if (ctls) release(ctls);
-    const waits =
-        transition !== null &&
-        transition === _pendingTransition &&
-        transition.kind === 'any' &&
-        _transitionRef === null;
+function sendEvent(
+    name,
+    frame,
+    { epoch = _navEpoch, transition = null, ctls = null, onReply = null } = {},
+) {
     if (_navRefs.size > 0 || _navAwaitResync || epoch !== _navEpoch) {
         console.warn(`[arizona] dropped stale event "${name}"`);
-        if (waits) armPendingTransition(null);
-        return;
+        unsent(transition, ctls);
+        return false;
     }
-    if (_connected && (waits || ctls)) {
+    // Sent, the raise is no longer pending (`carry`).
+    if (ctls) release(ctls);
+    const waits = awaitsTransition(transition);
+    if (_connected && (waits || ctls || onReply)) {
         const ref = nextRef();
         if (waits) _transitionRef = ref;
         if (ctls) {
@@ -512,11 +521,63 @@ function sendEvent(name, frame, epoch = _navEpoch, transition = null, ctls = nul
                 ctls.map(([c]) => c),
             );
         }
+        if (onReply) _replyWaiters.set(ref, onReply);
         frame = [...frame, ref];
     } else if (waits) {
         armPendingTransition(null);
     }
     workerPost(W_SEND, JSON.stringify(frame, wellFormed));
+    return _connected;
+}
+
+/**
+ * Is `transition` the pending 'any' one, still waiting for the frame it binds to?
+ * @param {typeof _pendingTransition} transition
+ * @returns {boolean}
+ */
+function awaitsTransition(transition) {
+    return (
+        transition !== null &&
+        transition === _pendingTransition &&
+        transition.kind === 'any' &&
+        _transitionRef === null
+    );
+}
+
+/**
+ * `host.unsent`: a raised event will never be sent. It no longer keeps its controls
+ * pending, and a transition waiting for its reply waits for none.
+ * @param {typeof _pendingTransition} transition
+ * @param {Array<[Element, string|boolean]>|null} ctls
+ */
+function unsent(transition, ctls) {
+    if (ctls) release(ctls);
+    if (awaitsTransition(transition)) armPendingTransition(null);
+}
+
+// What runs when the reply to an event frame lands, by its reply ref: the release of
+// a `push_event`'s `on_repeat: 'drop'` guard. Run before the reply's ops and effects
+// (`settleEventReplies`), so an effect may send the event again, and all at once when
+// the socket goes away (`dropReplyWaiters`), since those replies never come.
+/** @type {Map<number, () => void>} */
+const _replyWaiters = new Map();
+
+/**
+ * Run what waited for the reply a server frame carries the ref of.
+ * @param {number|null} ref
+ */
+function settleEventReplies(ref) {
+    const waiter = ref === null ? undefined : _replyWaiters.get(ref);
+    if (!waiter || ref === null) return;
+    _replyWaiters.delete(ref);
+    waiter();
+}
+
+/** Run every reply waiter: the socket they wait on went away. */
+function dropReplyWaiters() {
+    const waiters = [..._replyWaiters.values()];
+    _replyWaiters.clear();
+    for (const w of waiters) w();
 }
 
 /**
@@ -972,6 +1033,7 @@ function dropOwedReplies() {
     if (_transitionRef !== null) armPendingTransition(null);
     _owned.clear();
     _ownedRefs.clear();
+    dropReplyWaiters();
 }
 
 /**
@@ -1655,6 +1717,8 @@ export function connect(endpoint, params = {}) {
                         // Here, not on arrival: a transition defers this, and the
                         // old DOM stays live (and gated) until the swap is applied.
                         settleNavReplies(msg[5], !!msg[3]);
+                        // Before the ops and effects, which may send the event again.
+                        settleEventReplies(msg[5]);
                         // Re-save what was typed while disconnected: the resync's
                         // OP_REPLACE is about to discard it.
                         if (msg[3] && _savedForms.size > 0) saveFormState();
@@ -1897,6 +1961,7 @@ export function connect(endpoint, params = {}) {
         _navAwaitResync = false;
         _owned.clear();
         _ownedRefs.clear();
+        dropReplyWaiters();
         _pending = new WeakMap();
         _live = new WeakMap();
         _guardWrote = new WeakSet();
@@ -1941,6 +2006,7 @@ setHost({
     keepOrigin,
     carry,
     release,
+    unsent,
     holds,
     ctlEvent,
     navigate: navigateEffect,

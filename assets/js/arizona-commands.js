@@ -521,8 +521,9 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
- * A holder's fetch requests in flight (see `JS_FETCH`): the count of each slot,
- * `METHOD url`, and the node holding them now.
+ * A holder's requests in flight: the count of each slot -- `METHOD url` for a fetch
+ * (see `JS_FETCH`), `event [view, name]` for a push_event under `on_repeat: 'drop'`
+ * awaiting its reply (see `sendPush`) -- and the node holding them now.
  * @typedef {{holder: Element, slots: Map<string, number>}} Flight
  */
 
@@ -535,7 +536,9 @@ export function socketNeeds(cmds, acc, conditional) {
 const _inFlight = new WeakMap();
 
 /**
- * Every flight until its last request settles, for `heldNodes`.
+ * Every flight until its last request settles, for `heldNodes`. A push_event's slot
+ * never outlives a close (the connection releases every reply it waited for), so
+ * only a fetch's is ever rehomed.
  * @type {Set<Flight>}
  */
 const _flights = new Set();
@@ -553,7 +556,8 @@ const _flights = new Set();
 const _resets = new Set();
 
 /**
- * Whether `holder` carries `az-busy` while a request it holds is in flight: a
+ * Whether `holder` carries `az-busy` while a request it holds is in flight (a fetch,
+ * or a push_event under `drop` awaiting its reply): a
  * page element, never the page root (a server effect's holder) or a detached one
  * (a response's stand-in), which no app styles.
  * @param {Element} holder
@@ -624,6 +628,39 @@ function enterSlot(holder, slot) {
             notifyUpdated(now);
         }
     };
+}
+
+/**
+ * Send a push_event raised on `holder`. With a `slot` (`on_repeat: 'drop'`) it is
+ * judged here, as it goes out -- after any pacing, so a raise a debounce replaced is
+ * no repeat: while a send in the slot awaits its reply it is not sent, and
+ * `arizona:event-dropped` is reported where a dropped fetch is; otherwise it takes
+ * the slot until its reply lands, which the connection runs before the reply's
+ * effects, or until the socket closes. One the host does not send (a stale or
+ * disconnected page, a page with no server) awaits no reply, so it lets go at once.
+ * @param {Element} holder
+ * @param {string|null} slot
+ * @param {string} name
+ * @param {Array<*>} frame
+ * @param {{epoch?: number, transition: *, ctls: Array<[Element, string|boolean]>|null}} opts
+ */
+function sendPush(holder, slot, name, frame, opts) {
+    if (slot === null) {
+        host.sendEvent(name, frame, opts);
+        return;
+    }
+    if (_inFlight.get(holder)?.slots.has(slot)) {
+        host.unsent(opts.transition, opts.ctls);
+        (busyMarks(holder) ? holder : document).dispatchEvent(
+            new CustomEvent('arizona:event-dropped', {
+                bubbles: true,
+                detail: { event: name, reason: 'in_flight' },
+            }),
+        );
+        return;
+    }
+    const release = enterSlot(holder, slot);
+    if (!host.sendEvent(name, frame, { ...opts, onReply: release })) release();
 }
 
 /**
@@ -900,9 +937,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const frame = [resolveTarget(el), evt, payload];
             const transition = _transitionScope;
             const ctls = host.carry(el, event);
+            // Under `drop`, what a repeat is: the same event to the same view from the
+            // same holder, the trigger (the form for az-submit, the page root for a
+            // server effect). Lower-case, so no fetch slot (`METHOD href`) is one.
+            const slot =
+                cmd[3]?.on_repeat === 'drop' ? `event ${JSON.stringify([frame[0], evt])}` : null;
             if (event) {
                 const epoch = host.epoch();
-                const send = () => host.sendEvent(evt, frame, epoch, transition, ctls);
+                const send = () => sendPush(el, slot, evt, frame, { epoch, transition, ctls });
                 // A later raise replacing it in its slot means it is never sent.
                 scheduleSend(
                     el,
@@ -914,7 +956,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                     }),
                 );
             } else {
-                host.sendEvent(evt, frame, undefined, transition, ctls);
+                sendPush(el, slot, evt, frame, { transition, ctls });
             }
             break;
         }

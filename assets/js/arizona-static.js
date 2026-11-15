@@ -39,14 +39,18 @@ setHost({
     // Nothing to wait for: commands run whenever an event fires.
     ready: () => true,
     epoch: () => 0,
-    sendEvent: (name) =>
-        warnOnce(`[arizona] push_event "${name}" dropped: this page has no server`, name),
+    // Never sent, so no reply comes.
+    sendEvent: (name) => {
+        warnOnce(`[arizona] push_event "${name}" dropped: this page has no server`, name);
+        return false;
+    },
     // A navigate/patch loads a page, so no frame answers it.
     awaitsReply: () => false,
     armTransition: () => {},
     // No server writes a control here.
     carry: () => null,
     release: () => {},
+    unsent: () => {},
     holds: () => false,
     ctlEvent: () => {},
     keepOrigin: () => (fn) => fn(),
