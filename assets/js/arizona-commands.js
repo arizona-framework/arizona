@@ -5,7 +5,7 @@ import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
 import { runTransition } from './arizona-transitions.js';
-import { warnOnce } from './arizona-util.js';
+import { closestForm, formControls, isForm, resetForm, warnOnce } from './arizona-util.js';
 
 /**
  * Append an encoded query to a URL, before its fragment: everything after the first
@@ -79,7 +79,9 @@ export function applyEffects(effects) {
  * @returns {string|null}
  */
 export function resolveTarget(el) {
-    return el.getAttribute('az-target') || el.closest('[az-view]')?.id || null;
+    // The attribute: a view root that is a <form> holding a control named `id` has
+    // that control as its `id` property.
+    return el.getAttribute('az-target') || el.closest('[az-view]')?.getAttribute('id') || null;
 }
 
 /**
@@ -112,7 +114,7 @@ function multiValuedNames(form) {
     const names = new Set();
     /** @type {Map<string, {boxes: number, enabled: boolean}>} */
     const groups = new Map();
-    for (const el of form.elements) {
+    for (const el of formControls(form)) {
         const f = /** @type {any} */ (el);
         const name = f.name;
         if (!name) continue;
@@ -295,6 +297,26 @@ function shownState(el) {
 }
 
 /**
+ * What a field shows as its value: an input's, textarea's, select's or output's, or a
+ * custom element's string `value`. Anything else has none here -- an <li>'s `value` is
+ * its ordinal, a <button>'s the data it submits, and a form's a control named `value`.
+ * @param {Element} el
+ * @returns {string|undefined}
+ */
+function fieldValue(el) {
+    const v = /** @type {any} */ (el).value;
+    switch (el.localName) {
+        case 'input':
+        case 'textarea':
+        case 'select':
+        case 'output':
+            return v;
+        default:
+            return el.localName.includes('-') && typeof v === 'string' ? v : undefined;
+    }
+}
+
+/**
  * @param {unknown} a
  * @param {unknown} b
  */
@@ -310,7 +332,7 @@ const sameState = (a, b) =>
  * @returns {Map<Element, unknown>}
  */
 function formSnapshot(form) {
-    return new Map(Array.from(form.elements, (c) => [c, shownState(c)]));
+    return new Map(Array.from(formControls(form), (c) => [c, shownState(c)]));
 }
 
 /**
@@ -426,7 +448,7 @@ export function withAllControls(form, fn) {
 export function maybeResetForm(form, sent) {
     if (!form.hasAttribute('az-form-reset')) return;
     const f = /** @type {HTMLFormElement} */ (form);
-    const ctls = Array.from(f.elements);
+    const ctls = Array.from(formControls(f));
     const kept = sent
         ? ctls.filter((c) => (sent.has(c) ? !sameState(shownState(c), sent.get(c)) : !atDefault(c)))
         : [];
@@ -463,7 +485,7 @@ export function maybeResetForm(form, sent) {
     try {
         detach(detached);
         _resetting = { form, detached: [...outer, ...detached] };
-        f.reset();
+        resetForm(f);
     } finally {
         _resetting = prev;
         attach(detached);
@@ -499,12 +521,36 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
- * The fetch requests in flight, per holder (see `JS_FETCH`): the count of each slot,
- * `METHOD url`, it holds. Keyed by the node, so a holder a re-render replaces is a
- * new one with nothing in flight.
- * @type {WeakMap<Element, Map<string, number>>}
+ * A holder's fetch requests in flight (see `JS_FETCH`): the count of each slot,
+ * `METHOD url`, and the node holding them now.
+ * @typedef {{holder: Element, slots: Map<string, number>}} Flight
+ */
+
+/**
+ * The flights, per holder. Keyed by the node, so a holder a re-render replaces is
+ * a new one with nothing in flight -- except across a reconnect resync, which the
+ * app never chose: `rehome` moves the flight onto the node that took its place.
+ * @type {WeakMap<Element, Flight>}
  */
 const _inFlight = new WeakMap();
+
+/**
+ * Every flight until its last request settles, for `heldNodes`.
+ * @type {Set<Flight>}
+ */
+const _flights = new Set();
+
+/**
+ * A `fetch` form's reset waiting for its response: the form it resets now, and
+ * what its controls showed as the request went out.
+ * @typedef {{form: Element, sent: Map<Element, unknown>|undefined}} PendingReset
+ */
+
+/**
+ * Every pending reset until its request settles, for `heldNodes`.
+ * @type {Set<PendingReset>}
+ */
+const _resets = new Set();
 
 /**
  * Whether `holder` carries `az-busy` while a request it holds is in flight: a
@@ -515,6 +561,14 @@ const _inFlight = new WeakMap();
  */
 function busyMarks(holder) {
     return holder.isConnected && holder !== holder.ownerDocument.documentElement;
+}
+
+/** @param {Element} holder */
+function markBusy(holder) {
+    if (busyMarks(holder) && !holder.hasAttribute('az-busy')) {
+        holder.setAttribute('az-busy', '');
+        notifyUpdated(holder);
+    }
 }
 
 /**
@@ -538,19 +592,22 @@ function fetchHref(holder, url) {
 
 /**
  * Count a request in `slot` of `holder` as in flight, marking the holder busy.
- * Returns its release, which takes effect once however often it is called.
+ * Returns its release, which takes effect once however often it is called, on the
+ * node holding the flight by then.
  * @param {Element} holder
  * @param {string} slot
  * @returns {() => void}
  */
 function enterSlot(holder, slot) {
-    const slots = _inFlight.get(holder) ?? new Map();
-    _inFlight.set(holder, slots);
-    slots.set(slot, (slots.get(slot) ?? 0) + 1);
-    if (busyMarks(holder) && !holder.hasAttribute('az-busy')) {
-        holder.setAttribute('az-busy', '');
-        notifyUpdated(holder);
+    let flight = _inFlight.get(holder);
+    if (!flight) {
+        flight = { holder, slots: new Map() };
+        _inFlight.set(holder, flight);
+        _flights.add(flight);
     }
+    const { slots } = flight;
+    slots.set(slot, (slots.get(slot) ?? 0) + 1);
+    markBusy(holder);
     let settled = false;
     return () => {
         if (settled) return;
@@ -559,12 +616,95 @@ function enterSlot(holder, slot) {
         if (n > 0) slots.set(slot, n);
         else slots.delete(slot);
         if (slots.size > 0) return;
-        _inFlight.delete(holder);
-        if (holder.hasAttribute('az-busy')) {
-            holder.removeAttribute('az-busy');
-            notifyUpdated(holder);
+        const now = /** @type {Flight} */ (flight).holder;
+        _inFlight.delete(now);
+        _flights.delete(/** @type {Flight} */ (flight));
+        if (now.hasAttribute('az-busy')) {
+            now.removeAttribute('az-busy');
+            notifyUpdated(now);
         }
     };
+}
+
+/**
+ * The page nodes holding a request in flight or a pending form reset, for a
+ * reconnect resync to find again once it has replaced them (see `rehome`).
+ * @returns {Set<Element>}
+ */
+export function heldNodes() {
+    /** @type {Set<Element>} */
+    const nodes = new Set();
+    for (const f of _flights) if (f.holder.isConnected) nodes.add(f.holder);
+    for (const r of _resets) if (r.form.isConnected) nodes.add(r.form);
+    return nodes;
+}
+
+/**
+ * Move what `from` holds onto `to`, the node a reconnect resync rendered in its
+ * place: its flight (and `az-busy`), and the resets pending on it as a form, whose
+ * sent snapshot is matched to the new form's controls by name and position among
+ * the same-named ones (unnamed ones by position), the way a field is found again
+ * for focus. A control with no counterpart is left out, so the reset judges it as
+ * one added since.
+ * @param {Element} from
+ * @param {Element} to
+ */
+export function rehome(from, to) {
+    const flight = _inFlight.get(from);
+    if (flight && !_inFlight.has(to)) {
+        _inFlight.delete(from);
+        flight.holder = to;
+        _inFlight.set(to, flight);
+        markBusy(to);
+    }
+    for (const r of _resets) {
+        if (r.form !== from) continue;
+        r.form = to;
+        if (r.sent) r.sent = remapSent(r.sent, /** @type {HTMLFormElement} */ (to));
+    }
+}
+
+/**
+ * @param {Element} c
+ * @returns {string}
+ */
+const ctlName = (c) => c.getAttribute('name') ?? '';
+
+/**
+ * @param {Map<Element, unknown>} sent
+ * @param {HTMLFormElement} form
+ * @returns {Map<Element, unknown>}
+ */
+function remapSent(sent, form) {
+    /** @type {Map<string, Element[]>} */
+    const byName = new Map();
+    for (const c of Array.from(formControls(form))) {
+        const list = byName.get(ctlName(c)) ?? [];
+        list.push(c);
+        byName.set(ctlName(c), list);
+    }
+    /** @type {Map<string, number>} */
+    const seen = new Map();
+    /** @type {Map<Element, unknown>} */
+    const out = new Map();
+    for (const [old, state] of sent) {
+        const name = ctlName(old);
+        const i = seen.get(name) ?? 0;
+        seen.set(name, i + 1);
+        const c = byName.get(name)?.[i];
+        if (!c || c.localName !== old.localName) continue;
+        // A select's state is its selected options: the new select's at the same
+        // positions.
+        out.set(
+            c,
+            c.localName === 'select'
+                ? /** @type {any[]} */ (state).map(
+                      (o) => /** @type {any} */ (c).options[o.index] ?? o,
+                  )
+                : state,
+        );
+    }
+    return out;
 }
 
 /**
@@ -778,21 +918,23 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             }
             break;
         }
+        // The attribute, not the `hidden` property: a form's control named `hidden`
+        // is the form's `hidden`.
         case JS_TOGGLE:
             withQueryAll(cmd[1], (t) => {
-                t.hidden = !t.hidden;
+                t.toggleAttribute('hidden');
                 notifyUpdated(t);
             });
             break;
         case JS_SHOW:
             withQueryAll(cmd[1], (t) => {
-                t.hidden = false;
+                t.removeAttribute('hidden');
                 notifyUpdated(t);
             });
             break;
         case JS_HIDE:
             withQueryAll(cmd[1], (t) => {
-                t.hidden = true;
+                t.setAttribute('hidden', '');
                 notifyUpdated(t);
             });
             break;
@@ -895,7 +1037,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
-            const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
+            const form = el ? closestForm(el) : null;
             // Every field, those a reset in progress set aside included (a fetch its
             // `reset` listener runs).
             const formData = (/** @type {HTMLFormElement} */ f) =>
@@ -907,7 +1049,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const holder =
                 opts.body === undefined && form ? form : (el ?? document.documentElement);
             const slot = `${method} ${fetchHref(holder, url)}`;
-            if (opts.on_repeat === 'drop' && _inFlight.get(holder)?.has(slot)) {
+            if (opts.on_repeat === 'drop' && _inFlight.get(holder)?.slots.has(slot)) {
                 // Dropped, not queued: a queued repeat is the duplicate request.
                 (busyMarks(holder) ? holder : document).dispatchEvent(
                     new CustomEvent('arizona:fetch-dropped', {
@@ -952,9 +1094,13 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             };
             // What the form showed as it was sent, for a reset on the 2xx to keep what
             // the user changed while the request was in flight.
-            const sent = form?.hasAttribute('az-form-reset')
-                ? withAllControls(form, () => formSnapshot(form))
-                : undefined;
+            /** @type {PendingReset|null} */
+            const reset = form && {
+                form,
+                sent: form.hasAttribute('az-form-reset')
+                    ? withAllControls(form, () => formSnapshot(form))
+                    : undefined,
+            };
             // A synchronous throw here leaves nothing in flight: the slot and the
             // frame origin are taken once the request is out.
             const req = fetch(target, {
@@ -966,6 +1112,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             });
             const later = host.keepOrigin();
             const release = enterSlot(holder, slot);
+            if (reset) _resets.add(reset);
             req.then((resp) =>
                 resp.text().then((text) =>
                     later(() => {
@@ -993,6 +1140,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         // Settled before its effects or on_error run, so either (or
                         // the user, at once) may issue the same request again.
                         release();
+                        if (reset) _resets.delete(reset);
                         // Effect application is isolated from the trailing network
                         // .catch: a throw here is an app bug on a request that
                         // SUCCEEDED (the body parsed), so it is logged -- letting it
@@ -1020,9 +1168,11 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         // error (a non-2xx) keeps the typed fields, and only the
                         // fields still showing what was sent. Same isolation as the
                         // effects above.
-                        if (resp.ok && form) {
+                        if (resp.ok && reset) {
                             try {
-                                maybeResetForm(form, sent);
+                                // The form as it is now: a reconnect resync may have
+                                // re-homed the reset onto the form that replaced it.
+                                maybeResetForm(reset.form, reset.sent);
                             } catch (err) {
                                 console.error('[arizona] az-form-reset failed', err);
                             }
@@ -1032,6 +1182,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             ).catch((error) =>
                 later(() => {
                     release();
+                    if (reset) _resets.delete(reset);
                     onError({ url, error });
                 }),
             );
@@ -1046,13 +1197,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
         case JS_RESET_FORM:
             // Broadcast (all matches, main + PiP docs), like the class/visibility
             // effects: reset every matching form. A non-form match (no reset()) is
-            // a safe no-op. Fires updated() so a hook observes it like a diff.
+            // a safe no-op. Fires updated() so a hook observes it like a diff. A form
+            // is reset through the prototype: a control named `reset` is its `reset`.
             withQueryAll(cmd[1], (t) => {
                 const f = /** @type {any} */ (t);
-                if (typeof f.reset === 'function') {
-                    f.reset();
-                    notifyUpdated(t);
-                }
+                if (isForm(t)) resetForm(t);
+                else if (typeof f.reset === 'function') f.reset();
+                else return;
+                notifyUpdated(t);
             });
             break;
         case JS_SELECT:
@@ -1070,7 +1222,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // (event command only); a missing/blocked clipboard is a safe no-op. Not
             // a DOM mutation, so no notifyUpdated.
             withQuery(cmd[1], (t) => {
-                const text = /** @type {any} */ (t).value ?? t.textContent ?? '';
+                const text = fieldValue(t) ?? t.textContent ?? '';
                 // writeText rejects without permission / a secure context; catch it
                 // (like JS_OS) so a blocked copy is a logged no-op, not an unhandled
                 // rejection.

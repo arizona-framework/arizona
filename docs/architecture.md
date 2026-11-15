@@ -1010,7 +1010,8 @@ handle_event(~"inc", _P, B) ->
   the default, or `drop`) decides what a repeat does while the previous request is in flight -- the
   same method and URL from the same holder (the form the request posts, else the trigger); `drop`
   issues none and dispatches `arizona:fetch-dropped` instead. The holder carries `az-busy` while a
-  request it holds is in flight, under either policy. See "HTTP fetch" in `CLAUDE.md`.
+  request it holds is in flight, under either policy; a reconnect resync moves the request, and a
+  pending `az-form-reset`, onto the node that replaces its holder. See "HTTP fetch" in `CLAUDE.md`.
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
@@ -1019,7 +1020,8 @@ handle_event(~"inc", _P, B) ->
   safe no-op
 - `select/1` -- select (highlight) the first matching `<input>`/`<textarea>`'s text
   (`HTMLInputElement.select`); a non-input match is a safe no-op
-- `copy_to_clipboard/1` -- copy the first match's `value` (form control) or `textContent` to the
+- `copy_to_clipboard/1` -- copy the first match's `value` (an `input`, `textarea`, `select` or
+  `output`, or a custom element's string `value`) or else its `textContent` to the
   clipboard (`navigator.clipboard.writeText`); needs a secure context + user gesture, so it is an
   **event command only** (not a handler effect); a missing/blocked clipboard is a safe no-op
 - `show_modal/1`, `close_modal/1` -- open the first matching `<dialog>` as a true modal

@@ -17,6 +17,7 @@ import {
 import { applyChoosers } from './arizona-attrs.js';
 import { maybeResetForm } from './arizona-commands.js';
 import { embedAttrs, TEST_ATTRS } from './test-proofs.js';
+import { shadowNamedControls } from './test-shadow.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2145,6 +2146,11 @@ describe('applyEffects -- broadcast effects target all matching elements', () =>
         document.body.innerHTML = '<div class="f"></div>';
         expect(() => applyEffects([[25, '.f']])).not.toThrow();
     });
+
+    it('reset_form is a safe no-op on an SVG form', () => {
+        document.body.innerHTML = '<svg><form class="f"></form></svg>';
+        expect(() => executeJS(document.body, null, [25, '.f'])).not.toThrow();
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -2754,6 +2760,98 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         const writeText = stubClipboard();
         executeJS(document.body, null, [27, '#t']); // op 27 = copy_to_clipboard
         expect(writeText).toHaveBeenCalledWith('secret-token');
+    });
+
+    it('copy_to_clipboard copies the text of a form with a control named value', () => {
+        // A browser's form has its controls as named properties (see test-shadow.js).
+        document.body.innerHTML =
+            '<form id="f">Code 42<input type="hidden" name="value" value="x" /></form>';
+        const unshadow = shadowNamedControls();
+        try {
+            const writeText = stubClipboard();
+            executeJS(document.body, null, [27, '#f']);
+            expect(writeText).toHaveBeenCalledWith('Code 42');
+        } finally {
+            unshadow();
+        }
+    });
+
+    // Toggle reads `hidden`, which a control named so is: `!form.hidden` is false, so
+    // the form never hid. Show and hide only assign, which runs the prototype setter
+    // in a browser too; they write the attribute for the same reading.
+    it('toggles, shows and hides a form with a control named hidden', () => {
+        document.body.innerHTML =
+            '<form id="f"><input type="hidden" name="hidden" value="x" /></form>';
+        const unshadow = shadowNamedControls();
+        try {
+            const form = /** @type {HTMLElement} */ (document.getElementById('f'));
+            executeJS(document.body, null, [1, '#f']); // toggle
+            expect(form.hasAttribute('hidden')).toBe(true);
+            executeJS(document.body, null, [1, '#f']);
+            expect(form.hasAttribute('hidden')).toBe(false);
+            executeJS(document.body, null, [3, '#f']); // hide
+            expect(form.hasAttribute('hidden')).toBe(true);
+            executeJS(document.body, null, [2, '#f']); // show
+            expect(form.hasAttribute('hidden')).toBe(false);
+        } finally {
+            unshadow();
+        }
+    });
+
+    it('copy_to_clipboard copies the text of an element whose value is no field value', () => {
+        // An <li>'s value is its ordinal (0 unless set), a <button>'s the data it submits.
+        document.body.innerHTML =
+            '<ul><li id="i">Item text</li></ul><button id="b" value="">Label</button>';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#i']);
+        executeJS(document.body, null, [27, '#b']);
+        expect(writeText.mock.calls).toEqual([['Item text'], ['Label']]);
+    });
+
+    it('copy_to_clipboard copies the value of an output and of a custom field element', () => {
+        if (!customElements.get('x-copy-field'))
+            customElements.define(
+                'x-copy-field',
+                class extends HTMLElement {
+                    get value() {
+                        return 'field value';
+                    }
+                },
+            );
+        document.body.innerHTML =
+            '<output id="o">5</output><x-copy-field id="x">shown</x-copy-field>';
+        /** @type {HTMLOutputElement} */ (document.getElementById('o')).value = '7';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#o']);
+        executeJS(document.body, null, [27, '#x']);
+        expect(writeText.mock.calls).toEqual([['7'], ['field value']]);
+    });
+
+    it('copy_to_clipboard copies what a textarea and a select show', () => {
+        document.body.innerHTML =
+            '<textarea id="t">default</textarea><select id="s"><option>a</option><option>b</option></select>';
+        /** @type {HTMLTextAreaElement} */ (document.getElementById('t')).value = 'typed';
+        /** @type {HTMLSelectElement} */ (document.getElementById('s')).value = 'b';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#t']);
+        executeJS(document.body, null, [27, '#s']);
+        expect(writeText.mock.calls).toEqual([['typed'], ['b']]);
+    });
+
+    it('copy_to_clipboard copies the text of a custom element whose value is no string', () => {
+        if (!customElements.get('x-copy-count'))
+            customElements.define(
+                'x-copy-count',
+                class extends HTMLElement {
+                    get value() {
+                        return 3;
+                    }
+                },
+            );
+        document.body.innerHTML = '<x-copy-count id="x">three items</x-copy-count>';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#x']);
+        expect(writeText).toHaveBeenCalledWith('three items');
     });
 
     it('copy_to_clipboard falls back to textContent for a non-form element', () => {
@@ -4611,6 +4709,27 @@ describe('saveFormState / restoreFormState', () => {
 
         restoreFormState();
         expect(document.querySelector('input[name="title"]').value).toBe('hello');
+    });
+
+    it('skips a saved form whose id now names an element that is not a form', () => {
+        document.body.innerHTML =
+            '<form id="f"><input name="a" value="1"></form><form id="g"><input name="b" value="2"></form>';
+        saveFormState();
+        document.body.innerHTML =
+            '<div id="f"><input name="a" value=""></div><form id="g"><input name="b" value=""></form>';
+        expect(() => restoreFormState()).not.toThrow();
+        expect(document.querySelector('[name=a]').value).toBe('');
+        expect(document.querySelector('[name=b]').value).toBe('2');
+    });
+
+    it('saves around an SVG form with an id', () => {
+        document.body.innerHTML =
+            '<svg><form id="s"></form></svg><form id="f"><input name="a" value="1"></form>';
+        expect(() => saveFormState()).not.toThrow();
+        document.body.innerHTML =
+            '<svg><form id="s"></form></svg><form id="f"><input name="a"></form>';
+        restoreFormState();
+        expect(document.querySelector('[name=a]').value).toBe('1');
     });
 
     it('ignores forms without id', () => {
@@ -7844,6 +7963,91 @@ describe('form submit', () => {
         }
     });
 
+    // az-submit belongs on the form: one on an element around a plain form is not
+    // that form's, so the form submits as the page wrote it, natively.
+    it('leaves a form alone that only an element around it carries az-submit for', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<div id="w" az-submit='[0,"go"]'><form id="f"><input name="q"></form></div>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const dropped = vi.fn();
+        document.addEventListener('arizona:submit-dropped', dropped);
+        try {
+            for (let n = 0; n < 2; n++) {
+                const ev = new Event('submit', { bubbles: true, cancelable: true });
+                document.getElementById('f').dispatchEvent(ev);
+                expect(ev.defaultPrevented).toBe(false);
+            }
+            expect(mock.getSentMessages()).toHaveLength(0);
+            expect(dropped).not.toHaveBeenCalled();
+            expect(warn.mock.calls).toEqual([
+                [
+                    '[arizona] az-submit on a <div> is ignored for the <form> inside it: it belongs on that <form>',
+                ],
+            ]);
+        } finally {
+            document.removeEventListener('arizona:submit-dropped', dropped);
+            warn.mockRestore();
+        }
+    });
+
+    // A submit app code dispatches on an element that is no form: nothing to post.
+    // A submit app code dispatches on an element that is no HTML form (an SVG
+    // `form` included), or on an element inside the az-submit form: nothing to post.
+    it.each([
+        [
+            'an az-submit element that is not a form',
+            `<div id="t" az-submit='[0,"go"]' az-form-reset><input name="q" value="kept"></div>`,
+            '[arizona] az-submit on a <div> is ignored: it belongs on an HTML <form>',
+        ],
+        [
+            'an az-submit SVG form',
+            `<svg><form id="t" az-submit='[0,"go"]' az-form-reset><rect></rect></form></svg><input name="q" value="kept">`,
+            '[arizona] az-submit on an SVG <form> is ignored: it belongs on an HTML <form>',
+        ],
+        [
+            'an element inside an az-submit form',
+            `<form az-submit='[0,"go"]' az-form-reset><div id="t"></div><input name="q" value="kept"></form>`,
+            '[arizona] a submit on a <div> is ignored: az-submit on a <form> runs only for a submit of that element, as an HTML <form>',
+        ],
+        [
+            'an element inside an az-submit element that is not a form',
+            `<div az-submit='[0,"go"]' az-form-reset><span id="t"></span><input name="q" value="kept"></div>`,
+            '[arizona] a submit on a <span> is ignored: az-submit on a <div> runs only for a submit of that element, as an HTML <form>',
+        ],
+        [
+            'an SVG form inside an az-submit element that is not a form',
+            `<div az-submit='[0,"go"]' az-form-reset><svg><form id="t"></form></svg><input name="q" value="kept"></div>`,
+            '[arizona] a submit on an SVG <form> is ignored: az-submit on a <div> runs only for a submit of that element, as an HTML <form>',
+        ],
+    ])('leaves a submit on %s alone', async (_what, html, message) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', html);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const errors = vi.fn();
+        window.addEventListener('error', errors);
+        try {
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            document.getElementById('t').dispatchEvent(ev);
+            expect(ev.defaultPrevented).toBe(false);
+            expect(errors).not.toHaveBeenCalled();
+            expect(mock.getSentMessages()).toHaveLength(0);
+            expect(warn.mock.calls).toEqual([[message]]);
+            expect(document.querySelector('[name=q]').value).toBe('kept');
+        } finally {
+            window.removeEventListener('error', errors);
+            warn.mockRestore();
+        }
+    });
+
     // A one-time console line is invisible to the user who pressed submit; every
     // drop warns and tells the app on the form, so it can show feedback.
     it('warns and dispatches arizona:submit-dropped on every dropped submit', async () => {
@@ -8435,6 +8639,268 @@ describe('fetch in flight', () => {
         warn.mockRestore();
         expect(globalThis.fetch).toHaveBeenCalledTimes(2);
         expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+    });
+
+    describe('across a reconnect resync', () => {
+        const RESET_FORM = (inner = '<input name="q" value="">') =>
+            `<form id="f" method="post" az-form-reset az-submit='${cmd([22, '/send', DROP])}'>${inner}</form>`;
+        const q = () => /** @type {HTMLInputElement} */ (document.querySelector('[name=q]'));
+
+        /** Drop the socket and resync the view to `html`, as a reconnect does. */
+        function reconnect(html) {
+            mock.simulateClose(1006);
+            mock.simulateOpen(true);
+            mock.simulateMessage([[8, 'page', `<div id="page" az-view>${html}</div>`]], null, true);
+        }
+
+        it('keeps the form busy, the repeat dropped and the 2xx reset on the new form', async () => {
+            await page(RESET_FORM());
+            const old = document.getElementById('f');
+            q().value = 'hello';
+            submit('f');
+            reconnect(RESET_FORM());
+            const fresh = document.getElementById('f');
+            expect(fresh).not.toBe(old);
+            expect(q().value).toBe('hello');
+            expect(fresh.hasAttribute('az-busy')).toBe(true);
+            submit('f');
+            expect(urls()).toEqual(['/send']);
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(fresh.hasAttribute('az-busy')).toBe(false);
+            expect(q().value).toBe('');
+            submit('f');
+            expect(urls()).toEqual(['/send', '/send']);
+        });
+
+        it('keeps a field the user changed after the reconnect', async () => {
+            await page(RESET_FORM('<input name="q" value=""><input name="r" value="">'));
+            q().value = 'hello';
+            document.querySelector('[name=r]').value = 'x';
+            submit('f');
+            reconnect(RESET_FORM('<input name="q" value=""><input name="r" value="">'));
+            q().value = 'world';
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(q().value).toBe('world');
+            expect(document.querySelector('[name=r]').value).toBe('');
+        });
+
+        it('compares a select by the options the new form holds', async () => {
+            const sel =
+                '<select name="s"><option value="a">a</option><option value="b">b</option></select>';
+            await page(RESET_FORM(sel));
+            document.querySelector('select').value = 'b';
+            submit('f');
+            reconnect(RESET_FORM(sel));
+            expect(document.querySelector('select').value).toBe('b');
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(document.querySelector('select').value).toBe('a');
+        });
+
+        it('clears az-busy on the new form when the request fails, keeping the fields', async () => {
+            await page(RESET_FORM());
+            q().value = 'hello';
+            submit('f');
+            reconnect(RESET_FORM());
+            pending[0].resolve(response(422, '{"e":[]}'));
+            await flush();
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            expect(q().value).toBe('hello');
+            submit('f');
+            pending[1].reject(new TypeError('Failed to fetch'));
+            reconnect(RESET_FORM());
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(true);
+            await flush();
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            expect(urls()).toEqual(['/send', '/send']);
+        });
+
+        it('tells a hook on the new form when az-busy comes and goes', async () => {
+            const seen = vi.fn();
+            const html = `<form id="f" method="post" az-hook="Busy" az-submit='[22,"/x",{}]'></form>`;
+            const mod = await page(html);
+            mod.hooks.Busy = {
+                mounted() {},
+                updated() {
+                    seen(this.el.isConnected, this.el.hasAttribute('az-busy'));
+                },
+            };
+            mod.mountHooks(document);
+            submit('f');
+            reconnect(html);
+            expect(seen.mock.calls.at(-1)).toEqual([true, true]);
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(seen.mock.calls.at(-1)).toEqual([true, false]);
+        });
+
+        it('keeps a trigger holder matched by its id, or by its form and name', async () => {
+            const html = `<button id="b" az-click='${cmd([22, '/b', { ...DROP, body: {} }])}'>B</button>
+                <form id="g"><button type="button" name="go" az-click='${cmd([22, '/g', { ...DROP, body: {} }])}'>G</button></form>`;
+            await page(html);
+            const go = () => /** @type {HTMLElement} */ (document.querySelector('[name=go]'));
+            document.getElementById('b').click();
+            go().click();
+            reconnect(html);
+            expect(document.getElementById('b').hasAttribute('az-busy')).toBe(true);
+            expect(go().hasAttribute('az-busy')).toBe(true);
+            document.getElementById('b').click();
+            go().click();
+            expect(urls()).toEqual(['/b', '/g']);
+            pending[0].resolve(response(200, ''));
+            pending[1].resolve(response(200, ''));
+            await flush();
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+        });
+
+        it('finds no field in an element the resync renders under the form id that is no form', async () => {
+            await page(RESET_FORM());
+            q().focus();
+            submit('f');
+            expect(() =>
+                reconnect(
+                    '<fieldset id="f"><input name="q" value=""></fieldset><p id="after"></p>',
+                ),
+            ).not.toThrow();
+            expect(document.getElementById('after')).not.toBeNull();
+            expect(document.activeElement).toBe(document.body);
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+        });
+
+        it('takes no SVG form the resync renders under the form id for the form', async () => {
+            await page(RESET_FORM());
+            q().focus();
+            submit('f');
+            expect(() =>
+                reconnect(
+                    '<svg><form id="f"><input name="q" value=""></form></svg><p id="after"></p>',
+                ),
+            ).not.toThrow();
+            expect(document.getElementById('after')).not.toBeNull();
+            expect(document.activeElement).toBe(document.body);
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+        });
+
+        it('carries nothing across a navigate, nor through a later reconnect', async () => {
+            await page(RESET_FORM());
+            q().value = 'hello';
+            submit('f');
+            mock.simulateMessage(
+                [[8, 'page', `<div id="page" az-view>${RESET_FORM()}</div>`]],
+                null,
+            );
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            q().value = 'typed';
+            reconnect(RESET_FORM());
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(q().value).toBe('typed');
+            submit('f');
+            expect(urls()).toEqual(['/send', '/send']);
+        });
+
+        describe('a form whose controls shadow its own properties', () => {
+            // A browser's form has its controls as named properties; see test-shadow.js.
+            /** @type {(() => void)|null} */
+            let unshadow = null;
+            function shadow() {
+                unshadow = shadowNamedControls();
+            }
+            afterEach(() => {
+                unshadow?.();
+                unshadow = null;
+            });
+
+            const ID_FORM = RESET_FORM(
+                '<input type="hidden" name="id" value="7"><input name="q" value="">',
+            );
+            const ELEMENTS_FORM = RESET_FORM(
+                '<input type="hidden" name="elements" value="7"><input name="q" value="">',
+            );
+
+            for (const [what, html] of [
+                ['id', ID_FORM],
+                ['elements', ELEMENTS_FORM],
+            ])
+                it(`keeps its request in flight and its fields across a reconnect (${what})`, async () => {
+                    await page(html);
+                    shadow();
+                    q().value = 'hello';
+                    submit('f');
+                    reconnect(html);
+                    expect(q().value).toBe('hello');
+                    expect(document.getElementById('f').hasAttribute('az-busy')).toBe(true);
+                    submit('f');
+                    expect(urls()).toEqual(['/send']);
+                    pending[0].resolve(response(200, ''));
+                    await flush();
+                    expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+                    expect(q().value).toBe('');
+                });
+
+            it('keeps a field typed after the reconnect and resets a sent one (elements)', async () => {
+                const html = RESET_FORM(
+                    '<input type="hidden" name="elements" value="7"><input name="q" value=""><input name="r" value="">',
+                );
+                await page(html);
+                shadow();
+                q().value = 'hello';
+                document.querySelector('[name=r]').value = 'x';
+                submit('f');
+                reconnect(html);
+                q().value = 'world';
+                pending[0].resolve(response(200, ''));
+                await flush();
+                expect(q().value).toBe('world');
+                expect(document.querySelector('[name=r]').value).toBe('');
+            });
+
+            it('refocuses an id-less field of a form with an elements control', async () => {
+                await page(ELEMENTS_FORM);
+                shadow();
+                q().focus();
+                reconnect(ELEMENTS_FORM);
+                expect(document.activeElement).toBe(q());
+            });
+
+            it('refocuses a field of an edit form after a reconnect', async () => {
+                await page(ID_FORM);
+                shadow();
+                q().focus();
+                reconnect(ID_FORM);
+                expect(document.activeElement).toBe(q());
+            });
+
+            it('sends the events of a view root form to its id', async () => {
+                await page(
+                    `<form id="child" az-view><input type="hidden" name="id" value="7"><button type="button" id="b" az-click='${cmd([0, 'go', {}])}'>B</button></form>`,
+                );
+                shadow();
+                document.getElementById('b').click();
+                expect(mock.getSentMessages().map((m) => m[0])).toEqual(['child']);
+            });
+
+            it('is reset with a control named reset', async () => {
+                const html = RESET_FORM(
+                    '<input name="q" value=""><button type="button" name="reset">R</button>',
+                );
+                const mod = await page(html);
+                shadow();
+                const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+                q().value = 'hello';
+                submit('f');
+                pending[0].resolve(response(200, ''));
+                await flush();
+                expect(err).not.toHaveBeenCalled();
+                expect(q().value).toBe('');
+                q().value = 'again';
+                mod.applyEffects([[25, '#f']]);
+                expect(q().value).toBe('');
+            });
+        });
     });
 });
 
@@ -9075,6 +9541,8 @@ describe('executeJS -- fetch', () => {
 
     afterEach(() => {
         globalThis.fetch = originalFetch;
+        // A spy a failing test left on a prototype (HTMLFormElement's reset).
+        vi.restoreAllMocks();
     });
 
     /** A fake 2xx Response whose body is the {e:[...]} effects wire payload. */
@@ -9085,6 +9553,15 @@ describe('executeJS -- fetch', () => {
             text: () => Promise.resolve(JSON.stringify({ e: effects })),
         };
     }
+
+    it('posts the HTML form around an SVG form holding the trigger', async () => {
+        document.body.innerHTML =
+            '<form method="post"><input name="q" value="1" /><svg><form><g id="b"></g></form></svg></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+        executeJS(document.getElementById('b'), null, [22, '/x', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        expect(String(globalThis.fetch.mock.calls[0][1].body)).toBe('q=1');
+    });
 
     it('submits the trigger form as urlencoded with same-origin credentials', async () => {
         document.body.innerHTML =
@@ -9348,7 +9825,7 @@ describe('executeJS -- fetch', () => {
             document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
             $('#a').value = 'sent';
             const form = $('form');
-            const reset = vi.spyOn(form, 'reset');
+            const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
             const answer = sendHeld(form);
             await answer();
             expect(reset).toHaveBeenCalledTimes(1);
@@ -9365,7 +9842,7 @@ describe('executeJS -- fetch', () => {
             $('#t').value = 'sent t';
             $('#u').value = 'sent u';
             const form = $('form');
-            const reset = vi.spyOn(form, 'reset');
+            const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
             const answer = sendHeld(form);
             $('#b').value = 'next';
             $('#u').value = 'next u';
@@ -9632,7 +10109,7 @@ describe('executeJS -- fetch', () => {
             document.body.innerHTML = '<form az-form-reset><input id="a" name="a" /></form>';
             $('#a').value = 'sent';
             const form = $('form');
-            const reset = vi.spyOn(form, 'reset');
+            const reset = vi.spyOn(HTMLFormElement.prototype, 'reset');
             const answer = sendHeld(form);
             form.insertAdjacentHTML('beforeend', '<button>Go</button><fieldset></fieldset>');
             await answer();
@@ -9729,9 +10206,9 @@ describe('executeJS -- fetch', () => {
                 '<form az-form-reset><input id="a" name="a" /><input id="b" name="b" /></form>';
             $('#a').value = 'sent';
             const form = $('form');
-            form.reset = () => {
+            vi.spyOn(HTMLFormElement.prototype, 'reset').mockImplementation(() => {
                 throw new Error('reset boom');
-            };
+            });
             const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
             const answer = sendHeld(form);
             $('#b').value = 'typed';
@@ -9788,9 +10265,9 @@ describe('executeJS -- fetch', () => {
     it('a throwing az-form-reset on a 2xx is logged, not misreported as a network failure', async () => {
         document.body.innerHTML = '<form az-form-reset><input name="n" /></form>';
         const form = /** @type {HTMLFormElement} */ (document.querySelector('form'));
-        form.reset = () => {
+        vi.spyOn(HTMLFormElement.prototype, 'reset').mockImplementation(() => {
             throw new Error('reset boom');
-        };
+        });
         const fetchErr = vi.fn();
         document.addEventListener('arizona:fetch-error', fetchErr);
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

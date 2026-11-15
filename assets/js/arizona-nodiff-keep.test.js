@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyOps, hooks, mountHooks, OP } from './arizona.js';
 import { resolveHtml } from './arizona-core.js';
+import { shadowNamedControls } from './test-shadow.js';
 
 // ---------------------------------------------------------------------------
 // Kept az-nodiff elements: a wholesale re-render around an az-nodiff element (a container
@@ -159,6 +160,24 @@ describe('a child view az-nodiff element', () => {
         applyOps([[OP.TEXT, `page:${SLOT}`, SWITCH, true]]);
         expect(old.isConnected).toBe(false);
         expect(document.getElementById('rc2')).not.toBeNull();
+    });
+
+    it('is replaced when the id of the form view holding it changes', () => {
+        // The view root is a form with a control named `id`: a browser's form has it
+        // as its `id` property (see test-shadow.js), whatever the view's id.
+        const unshadow = shadowNamedControls();
+        try {
+            const view = (id) =>
+                `<form az-view id="${id}"><input type="hidden" name="id" value="7"><div az-nodiff="OAJKXF">w</div></form>`;
+            document.body.innerHTML = `<main id="page" az-view><div az="${SLOT}"><!--az:${SLOT}-->${view('f1')}<!--/az--></div></main>`;
+            const old = document.querySelector('[az-nodiff]');
+            applyOps([[OP.TEXT, `page:${SLOT}`, view('f2'), true]]);
+            expect(old.isConnected).toBe(false);
+            applyOps([[OP.TEXT, `page:${SLOT}`, view('f2'), true]]);
+            expect(document.getElementById('f2')).not.toBeNull();
+        } finally {
+            unshadow();
+        }
     });
 
     it('is kept under the same id', () => {

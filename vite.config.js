@@ -168,7 +168,7 @@ export default defineConfig(({ mode }) => ({
         coverage: {
             provider: 'v8',
             include: ['assets/**/*.js'],
-            exclude: ['assets/**/*.test.js', 'assets/js/test-setup.js'],
+            exclude: ['assets/**/*.test.js', 'assets/js/test-setup.js', 'assets/js/test-shadow.js'],
             thresholds: {
                 perFile: true,
                 statements: 80,

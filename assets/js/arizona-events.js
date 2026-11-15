@@ -2,7 +2,7 @@ import { executeJS, flushTimer, maybeResetForm, socketNeeds } from './arizona-co
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
-import { warnOnce } from './arizona-util.js';
+import { describeEl, formControls, isForm, warnOnce } from './arizona-util.js';
 
 /**
  * The exported `mountHooks`: the escape hatch a host app calls after inserting
@@ -389,6 +389,20 @@ function scanEvents(root) {
 }
 
 /**
+ * Why a submit reaching an az-submit element is not that element's to run.
+ * @param {Element} carrier the element carrying az-submit
+ * @param {Element} submitted the element the submit was dispatched on
+ * @returns {string}
+ */
+function ignoredSubmit(carrier, submitted) {
+    if (carrier === submitted)
+        return `[arizona] az-submit on ${describeEl(carrier)} is ignored: it belongs on an HTML <form>`;
+    if (isForm(submitted))
+        return `[arizona] az-submit on ${describeEl(carrier)} is ignored for the <form> inside it: it belongs on that <form>`;
+    return `[arizona] a submit on ${describeEl(submitted)} is ignored: az-submit on ${describeEl(carrier)} runs only for a submit of that element, as an HTML <form>`;
+}
+
+/**
  * Tell the console and the app that a submit ran nothing: every drop warns and
  * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
  * @param {Element} form
@@ -443,8 +457,17 @@ export function bindDocumentEvents(target, signal, abort) {
     target.addEventListener(
         'submit',
         (e) => {
-            const form = /** @type {Element} */ (e.target).closest('[az-submit]');
+            const submitted = /** @type {Element} */ (e.target);
+            const form = submitted.closest('[az-submit]');
             if (!form) return;
+            // A submit bubbles, but az-submit belongs on the HTML <form> it submits:
+            // one on an element around this form is not its, so the form submits as
+            // the page wrote it, and a submit app code dispatched on anything else
+            // (an element that is no form, an SVG `form`) has nothing to post.
+            if (form !== submitted || !isForm(submitted)) {
+                warnOnce(ignoredSubmit(form, submitted), 'az-submit-ignored');
+                return;
+            }
             // Unconditionally, before anything can return: an az-submit form that is
             // let through submits natively with its own method -- a GET unless it
             // says otherwise -- which puts every field, a password included, in the
@@ -483,16 +506,16 @@ export function bindDocumentEvents(target, signal, abort) {
                 // Flush pending debounced inputs so the server sees them before the
                 // submit. Only while connected: a flush now would send them into a
                 // closed socket, while a still-armed timer can deliver them later.
-                // `form.elements` too: a control associated by `form="id"` sits
-                // outside the form element, and a missed flush lands after the submit.
+                // Its listed controls too (`formControls`): a control associated by
+                // `form="id"` sits outside the form element, and a missed flush lands
+                // after the submit.
                 if (host.ready()) {
                     const sel = '[az-debounce],[az-throttle]';
                     const pending = new Set(form.querySelectorAll(sel));
                     // The form's own slots too: a form-level az-debounce paces the
                     // field events it delegates.
                     if (form.matches(sel)) pending.add(form);
-                    for (const el of /** @type {HTMLFormElement} */ (form).elements)
-                        if (el.matches(sel)) pending.add(el);
+                    for (const el of formControls(form)) if (el.matches(sel)) pending.add(el);
                     for (const el of pending) flushTimer(el);
                 }
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));

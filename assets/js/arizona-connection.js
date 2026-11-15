@@ -3,7 +3,9 @@ import {
     applyEffects,
     executeJS,
     formFields,
+    heldNodes,
     osHost,
+    rehome,
     replayEvents,
     withAllControls,
 } from './arizona-commands.js';
@@ -20,7 +22,7 @@ import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
-import { isWebUrl, loadPage } from './arizona-util.js';
+import { formControls, isForm, isWebUrl, loadPage } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -620,7 +622,7 @@ function ctlGroup(ctl) {
     const r = /** @type {HTMLInputElement} */ (ctl);
     if (r.type !== 'radio' || !r.name || ctl.localName !== 'input') return [ctl];
     const scope = r.form
-        ? r.form.elements
+        ? formControls(r.form)
         : /** @type {Document} */ (ctl.getRootNode()).querySelectorAll(
               `input[name="${CSS.escape(r.name)}"]`,
           );
@@ -660,19 +662,18 @@ function carry(el, event) {
     // A submit is always prevented (the client sends it), its fields still edited.
     const prevented = event?.defaultPrevented && event.type !== 'submit';
     if (prevented || /** @type {any} */ (event)?.dataTransfer) return null;
-    const ctls =
-        el.localName === 'form'
-            ? withAllControls(el, () =>
-                  Array.from(/** @type {HTMLFormElement} */ (el).elements).filter(
-                      (c) =>
-                          isCtl(c) &&
-                          /** @type {HTMLInputElement} */ (c).name &&
-                          !c.matches(':disabled'),
-                  ),
-              )
-            : isCtl(el)
-              ? ctlGroup(el)
-              : [];
+    const ctls = isForm(el)
+        ? withAllControls(el, () =>
+              Array.from(formControls(el)).filter(
+                  (c) =>
+                      isCtl(c) &&
+                      /** @type {HTMLInputElement} */ (c).name &&
+                      !c.matches(':disabled'),
+              ),
+          )
+        : isCtl(el)
+          ? ctlGroup(el)
+          : [];
     if (!ctls.length) return null;
     /** @type {Array<[Element, string|boolean]>} */
     const carried = ctls.map((c) => [c, ctlState(c)]);
@@ -1151,6 +1152,7 @@ export function saveFormState(suspect = null) {
     // preserve the user's typing there exactly as it does on the main page.
     for (const doc of allDocs()) {
         doc.querySelectorAll('form[id]').forEach((form) => {
+            if (!isForm(form)) return; // an SVG `form` holds no fields
             const data = formFields(
                 new FormData(/** @type {HTMLFormElement} */ (form)),
                 /** @type {HTMLFormElement} */ (form),
@@ -1158,24 +1160,72 @@ export function saveFormState(suspect = null) {
             // Only under a proven name: anything else is app data, which a
             // replay would otherwise run as commands.
             const azChange = (proven('az-change') && form.getAttribute('az-change')) || null;
-            const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
-            _savedForms.set(form.id, { fields: data, azChange, replay });
+            // The attribute: a control named `id` is the form's `id` property.
+            const id = /** @type {string} */ (form.getAttribute('id'));
+            const replay = !suspect?.has(id) && (held.get(id)?.replay ?? true);
+            _savedForms.set(id, { fields: data, azChange, replay });
         });
     }
 }
 
 /**
+ * What the fresh markup of a resync carries again for an element it rebuilds: its
+ * id, or its form's id plus its name and position among that form's same-named
+ * fields.
  * @typedef {{doc: Document, el: Element, id: string|null, form: string|null,
- *   name: string|null, nth: number, sel: [number, number, string]|null}} FocusMark
+ *   name: string|null, nth: number}} NodeMark
  */
 
 /**
+ * @param {Element} el
+ * @returns {NodeMark}
+ */
+function nodeMark(el) {
+    const f = /** @type {HTMLInputElement} */ (el);
+    // A <form>'s own `form` is undefined; a <form name> is not one of its fields.
+    const owner = isForm(el) ? null : f.form;
+    // Attributes, not properties: a control named `id` is its form's `id`.
+    const form = owner?.getAttribute('id') || null;
+    const name = (owner && f.name) || null;
+    let nth = 0;
+    if (owner && form && name) {
+        nth = [...formControls(owner)]
+            .filter((x) => /** @type {any} */ (x).name === name)
+            .indexOf(el);
+    }
+    return { doc: el.ownerDocument, el, id: el.getAttribute('id') || null, form, name, nth };
+}
+
+/**
+ * The element a `nodeMark` names after the resync: the same node when it was
+ * kept (inside a kept az-nodiff element), else the one the fresh markup carries
+ * at its place.
+ * @param {NodeMark} mark
+ * @returns {any}
+ */
+function findMarked({ doc, el, id, form, name, nth }) {
+    // Duck-typed, not `instanceof`: a popped-out (PiP) view's elements belong
+    // to another window's constructors.
+    /** @type {any} */
+    let target = null;
+    if (el.isConnected) target = el;
+    else if (id) target = doc.getElementById(id);
+    if (!target && form && name) {
+        const f = doc.getElementById(form);
+        if (f && isForm(f)) {
+            target =
+                [...formControls(f)].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
+        }
+    }
+    return target;
+}
+
+/** @typedef {NodeMark & {sel: [number, number, string]|null}} FocusMark */
+
+/**
  * Record each hosting document's focused element before a resync replaces the
- * view: the element itself (a kept az-nodiff element survives the resync as the
- * same node), and what the fresh markup will carry again for one that is
- * rebuilt -- its id, or its form's id plus its name and position among that
- * form's same-named fields. The caret and selection ride along -- restoring
- * values moves the caret to the end.
+ * view (see `nodeMark`). The caret and selection ride along -- restoring values
+ * moves the caret to the end.
  * @returns {FocusMark[]}
  */
 function captureFocus() {
@@ -1185,15 +1235,6 @@ function captureFocus() {
         const el = doc.activeElement;
         if (!el || el === doc.body || el === doc.documentElement) continue;
         const f = /** @type {HTMLInputElement} */ (el);
-        const owner = f.form;
-        const form = owner?.id || null;
-        const name = f.name || null;
-        let nth = 0;
-        if (owner && form && name) {
-            nth = [...owner.elements]
-                .filter((x) => /** @type {any} */ (x).name === name)
-                .indexOf(el);
-        }
         /** @type {[number, number, string]|null} */
         let sel = null;
         try {
@@ -1205,7 +1246,7 @@ function captureFocus() {
                 ];
             }
         } catch {}
-        marks.push({ doc, el, id: el.id || null, form, name, nth, sel });
+        marks.push({ ...nodeMark(el), sel });
     }
     return marks;
 }
@@ -1217,28 +1258,14 @@ function captureFocus() {
  * @param {FocusMark[]} marks
  */
 function restoreFocus(marks) {
-    for (const { doc, el, id, form, name, nth, sel } of marks) {
+    for (const mark of marks) {
+        const { doc, el, sel } = mark;
         const active = doc.activeElement;
         if (active === el) continue; // untouched: focus and caret survived
         if (active && active !== doc.body && active !== doc.documentElement) continue;
-        // Duck-typed, not `instanceof`: a popped-out (PiP) view's elements belong
-        // to another window's constructors.
-        /** @type {any} */
-        let target = null;
-        if (el.isConnected) {
-            // Kept (inside a kept az-nodiff element): the same node, but moving
-            // it through the parsed fragment detached it, which dropped focus.
-            target = el;
-        } else if (id) {
-            target = doc.getElementById(id);
-        }
-        if (!target && form && name) {
-            const f = /** @type {any} */ (doc.getElementById(form));
-            if (f?.elements) {
-                target =
-                    [...f.elements].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
-            }
-        }
+        // A kept node is the same one, but moving it through the parsed fragment
+        // detached it, which dropped focus.
+        const target = findMarked(mark);
         if (typeof target?.focus !== 'function') continue;
         target.focus({ preventScroll: true });
         if (sel) {
@@ -1246,6 +1273,28 @@ function restoreFocus(marks) {
                 target.setSelectionRange(sel[0], sel[1], /** @type {any} */ (sel[2]));
             } catch {}
         }
+    }
+}
+
+/**
+ * Record the nodes holding a fetch in flight or a pending form reset before a
+ * reconnect resync replaces the view. The app never chose that re-render, so the
+ * request still belongs to the page: `rehomeHeld` moves it onto the node the
+ * fresh markup carries at the same place. A navigate is a new page and carries
+ * nothing (its old nodes are detached by the time a resync comes).
+ * @returns {NodeMark[]}
+ */
+function captureHeld() {
+    return Array.from(heldNodes(), nodeMark);
+}
+
+/** @param {NodeMark[]} marks */
+function rehomeHeld(marks) {
+    for (const mark of marks) {
+        if (mark.el.isConnected) continue; // kept: still the holder
+        const target = findMarked(mark);
+        if (target?.localName === mark.el.localName && target.namespaceURI === mark.el.namespaceURI)
+            rehome(mark.el, target);
     }
 }
 
@@ -1260,8 +1309,12 @@ export function restoreFormState() {
         // out to a PiP window is not reachable from the main document.
         let form = null;
         for (const doc of allDocs()) {
-            form = doc.getElementById(formId);
-            if (form) break;
+            const el = doc.getElementById(formId);
+            // The id may name an element that is no form now: nothing to restore.
+            if (el && isForm(el)) {
+                form = el;
+                break;
+            }
         }
         if (!form) continue;
         const formEl = /** @type {HTMLFormElement} */ (form);
@@ -1280,7 +1333,7 @@ export function restoreFormState() {
         };
         // Matched by local name, not `instanceof`: a resync re-parses a popped-out
         // (PiP) form in its window's realm, whose constructors are not ours.
-        for (const field of formEl.elements) {
+        for (const field of formControls(formEl)) {
             const el = /** @type {any} */ (field);
             if (el.localName === 'input') {
                 if (!el.name || el.type === 'file') continue;
@@ -1608,10 +1661,14 @@ export function connect(endpoint, params = {}) {
                         // ...and so is the element being typed into: put focus
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
+                        // ...and so are the nodes holding a fetch in flight.
+                        const held = msg[3] ? captureHeld() : null;
                         _inFrame = true;
                         _applying = msg[5];
                         try {
                             if (msg[1]) applyOps(msg[1], !!msg[3]);
+                            // Before the frame's effects, which may fetch again.
+                            if (held) rehomeHeld(held);
                             // Identity-checked: an OP_REPLACE in this frame consumed it.
                             if (patchReply && _pendingScroll === armedScroll) {
                                 if (msg[1]?.length) applyScroll(armedScroll);
