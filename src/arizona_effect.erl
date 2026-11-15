@@ -40,6 +40,7 @@ content shipped to the page.
 -export([target/0]).
 -export([push_event/1]).
 -export([push_event/2]).
+-export([push_event/3]).
 -export([navigate/1]).
 -export([navigate/2]).
 -export([patch/1]).
@@ -98,6 +99,34 @@ push_event(Event) -> {?MODULE, [?EFFECT_PUSH_EVENT, Event]}.
     Event :: binary(),
     Payload :: map().
 push_event(Event, Payload) -> {?MODULE, [?EFFECT_PUSH_EVENT, Event, Payload]}.
+
+-doc """
+Pushes the named event with an explicit payload and options. The protocol defines:
+
+- `on_repeat` -- what a repeat does while the event's previous send awaits its
+  reply: `allow` (the default) sends it, `drop` does not. What a repeat is, and how
+  a drop is reported, is the client's; the web client's is in `arizona_js:push_event/3`.
+  Anything else raises `{bad_on_repeat, Value}`.
+
+The options ride as the command's fourth element, and only when one differs from
+its default, so `push_event(E, P, #{})` is `push_event(E, P)`: a client that reads
+no options sees the command it always did, and treats a `drop` like `allow`.
+""".
+-spec push_event(Event, Payload, Opts) -> cmd() when
+    Event :: binary(),
+    Payload :: map(),
+    Opts :: #{on_repeat => allow | drop}.
+push_event(Event, Payload, #{on_repeat := Repeat} = Opts) when
+    Repeat =/= allow, Repeat =/= drop
+->
+    erlang:error({bad_on_repeat, Repeat}, [Event, Payload, Opts], [
+        {error_info, #{module => ?MODULE}}
+    ]);
+push_event(Event, Payload, Opts) ->
+    case push_opts(Opts) of
+        Wire when map_size(Wire) =:= 0 -> push_event(Event, Payload);
+        Wire -> {?MODULE, [?EFFECT_PUSH_EVENT, Event, Payload, Wire]}
+    end.
 
 -doc "Navigates to the route `Path`, replacing the live view.".
 -spec navigate(Path) -> cmd() when
@@ -244,11 +273,17 @@ by `erl_error:format_exception/3`.
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
 format_error({flash_outside_live_effect, Op}, _Stacktrace) ->
-    #{general => flash_message(Op)}.
+    #{general => flash_message(Op)};
+format_error({bad_on_repeat, Value}, _Stacktrace) ->
+    #{general => io_lib:format("push_event: on_repeat must be allow or drop, got ~tp", [Value])}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% A push_event's options as the client gets them: a default goes without saying.
+push_opts(#{on_repeat := allow} = Opts) -> maps:remove(on_repeat, Opts);
+push_opts(Opts) -> Opts.
 
 %% A command, or a command list flattened in order with `[]` items dropped.
 bare({?MODULE, Cmd}) ->

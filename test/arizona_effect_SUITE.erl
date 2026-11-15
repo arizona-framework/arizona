@@ -1,6 +1,7 @@
 -module(arizona_effect_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("arizona/include/arizona_effect.hrl").
+-dialyzer({nowarn_function, push_event_refuses_a_bad_on_repeat/1}).
 
 -export([all/0]).
 -export([groups/0]).
@@ -12,6 +13,8 @@
 -export([encode_refuses_non_utf8_like_json/1]).
 -export([protocol_builders_build_protocol_ops/1]).
 -export([platform_builders_share_protocol_builders/1]).
+-export([push_event_carries_on_repeat_only_when_not_default/1]).
+-export([push_event_refuses_a_bad_on_repeat/1]).
 -export([nested_reaches_wire_as_plain_list/1]).
 -export([mapfold_nested_walks_every_nested_list/1]).
 -export([nested_flash_refused_whatever_the_op/1]).
@@ -30,7 +33,9 @@ groups() ->
         ]},
         {protocol, [parallel], [
             protocol_builders_build_protocol_ops,
-            platform_builders_share_protocol_builders
+            platform_builders_share_protocol_builders,
+            push_event_carries_on_repeat_only_when_not_default,
+            push_event_refuses_a_bad_on_repeat
         ]},
         {nested, [parallel], [
             nested_reaches_wire_as_plain_list,
@@ -125,6 +130,14 @@ encode_refuses_non_utf8_like_json(Config) when is_list(Config) ->
 %% Helpers
 %% --------------------------------------------------------------------
 
+formatted_error(Fun) ->
+    try Fun() of
+        Result -> error({no_error, Result})
+    catch
+        error:Reason:Stacktrace ->
+            unicode:characters_to_binary(erl_error:format_exception(error, Reason, Stacktrace))
+    end.
+
 escape_attr_ref(Json) ->
     <<<<(escape_attr_byte(C))/binary>> || <<C>> <= Json>>.
 
@@ -205,6 +218,48 @@ protocol_builders_build_protocol_ops(Config) when is_list(Config) ->
         arizona_effect:patch(~"/p", #{replace => true})
     ).
 
+%% The options ride as a fourth element, and only when one differs from its default:
+%% the default `allow` builds the very command `push_event/2` does, so a client that
+%% reads no options (a native one) sees nothing new.
+push_event_carries_on_repeat_only_when_not_default(Config) when is_list(Config) ->
+    ?assertEqual(
+        arizona_effect:push_event(~"e", #{a => 1}),
+        arizona_effect:push_event(~"e", #{a => 1}, #{on_repeat => allow})
+    ),
+    ?assertEqual(
+        arizona_effect:push_event(~"e", #{a => 1}), arizona_effect:push_event(~"e", #{a => 1}, #{})
+    ),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_PUSH_EVENT, ~"e", #{a => 1}, #{on_repeat => drop}]},
+        arizona_effect:push_event(~"e", #{a => 1}, #{on_repeat => drop})
+    ),
+    ?assertEqual(
+        [?EFFECT_PUSH_EVENT, ~"e", #{~"a" => 1}, #{~"on_repeat" => ~"drop"}],
+        json:decode(
+            arizona_effect:encode_json(
+                arizona_effect:push_event(~"e", #{a => 1}, #{on_repeat => drop})
+            )
+        )
+    ).
+
+%% Any other value is refused where it is written, not ignored by the client (which
+%% would quietly send every repeat).
+push_event_refuses_a_bad_on_repeat(Config) when is_list(Config) ->
+    [
+        begin
+            Fun = fun() -> arizona_effect:push_event(~"e", #{}, #{on_repeat => Bad}) end,
+            ?assertError({bad_on_repeat, Bad}, Fun()),
+            ?assertNotEqual(
+                nomatch,
+                string:find(formatted_error(Fun), ~"push_event: on_repeat must be allow or drop")
+            ),
+            ?assertError(
+                {bad_on_repeat, Bad}, arizona_js:push_event(~"e", #{}, #{on_repeat => Bad})
+            )
+        end
+     || Bad <- [queue, ~"drop", true]
+    ].
+
 %% Every platform's builders return the very protocol command, so a client of any
 %% platform receives the same op.
 platform_builders_share_protocol_builders(Config) when is_list(Config) ->
@@ -214,6 +269,7 @@ platform_builders_share_protocol_builders(Config) when is_list(Config) ->
     Calls = [
         {push_event, [~"e"]},
         {push_event, [~"e", #{a => 1}]},
+        {push_event, [~"e", #{a => 1}, #{on_repeat => drop}]},
         {navigate, [~"/p"]},
         {navigate, [~"/p", #{replace => true}]},
         {patch, [~"/p"]},
