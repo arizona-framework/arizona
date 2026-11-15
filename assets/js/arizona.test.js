@@ -8436,6 +8436,140 @@ describe('fetch in flight', () => {
         expect(globalThis.fetch).toHaveBeenCalledTimes(2);
         expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
     });
+
+    describe('across a reconnect resync', () => {
+        const RESET_FORM = (inner = '<input name="q" value="">') =>
+            `<form id="f" method="post" az-form-reset az-submit='${cmd([22, '/send', DROP])}'>${inner}</form>`;
+        const q = () => /** @type {HTMLInputElement} */ (document.querySelector('[name=q]'));
+
+        /** Drop the socket and resync the view to `html`, as a reconnect does. */
+        function reconnect(html) {
+            mock.simulateClose(1006);
+            mock.simulateOpen(true);
+            mock.simulateMessage([[8, 'page', `<div id="page" az-view>${html}</div>`]], null, true);
+        }
+
+        it('keeps the form busy, the repeat dropped and the 2xx reset on the new form', async () => {
+            await page(RESET_FORM());
+            const old = document.getElementById('f');
+            q().value = 'hello';
+            submit('f');
+            reconnect(RESET_FORM());
+            const fresh = document.getElementById('f');
+            expect(fresh).not.toBe(old);
+            expect(q().value).toBe('hello');
+            expect(fresh.hasAttribute('az-busy')).toBe(true);
+            submit('f');
+            expect(urls()).toEqual(['/send']);
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(fresh.hasAttribute('az-busy')).toBe(false);
+            expect(q().value).toBe('');
+            submit('f');
+            expect(urls()).toEqual(['/send', '/send']);
+        });
+
+        it('keeps a field the user changed after the reconnect', async () => {
+            await page(RESET_FORM('<input name="q" value=""><input name="r" value="">'));
+            q().value = 'hello';
+            document.querySelector('[name=r]').value = 'x';
+            submit('f');
+            reconnect(RESET_FORM('<input name="q" value=""><input name="r" value="">'));
+            q().value = 'world';
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(q().value).toBe('world');
+            expect(document.querySelector('[name=r]').value).toBe('');
+        });
+
+        it('compares a select by the options the new form holds', async () => {
+            const sel =
+                '<select name="s"><option value="a">a</option><option value="b">b</option></select>';
+            await page(RESET_FORM(sel));
+            document.querySelector('select').value = 'b';
+            submit('f');
+            reconnect(RESET_FORM(sel));
+            expect(document.querySelector('select').value).toBe('b');
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(document.querySelector('select').value).toBe('a');
+        });
+
+        it('clears az-busy on the new form when the request fails, keeping the fields', async () => {
+            await page(RESET_FORM());
+            q().value = 'hello';
+            submit('f');
+            reconnect(RESET_FORM());
+            pending[0].resolve(response(422, '{"e":[]}'));
+            await flush();
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            expect(q().value).toBe('hello');
+            submit('f');
+            pending[1].reject(new TypeError('Failed to fetch'));
+            reconnect(RESET_FORM());
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(true);
+            await flush();
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            expect(urls()).toEqual(['/send', '/send']);
+        });
+
+        it('tells a hook on the new form when az-busy comes and goes', async () => {
+            const seen = vi.fn();
+            const html = `<form id="f" method="post" az-hook="Busy" az-submit='[22,"/x",{}]'></form>`;
+            const mod = await page(html);
+            mod.hooks.Busy = {
+                mounted() {},
+                updated() {
+                    seen(this.el.isConnected, this.el.hasAttribute('az-busy'));
+                },
+            };
+            mod.mountHooks(document);
+            submit('f');
+            reconnect(html);
+            expect(seen.mock.calls.at(-1)).toEqual([true, true]);
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(seen.mock.calls.at(-1)).toEqual([true, false]);
+        });
+
+        it('keeps a trigger holder matched by its id, or by its form and name', async () => {
+            const html = `<button id="b" az-click='${cmd([22, '/b', { ...DROP, body: {} }])}'>B</button>
+                <form id="g"><button type="button" name="go" az-click='${cmd([22, '/g', { ...DROP, body: {} }])}'>G</button></form>`;
+            await page(html);
+            const go = () => /** @type {HTMLElement} */ (document.querySelector('[name=go]'));
+            document.getElementById('b').click();
+            go().click();
+            reconnect(html);
+            expect(document.getElementById('b').hasAttribute('az-busy')).toBe(true);
+            expect(go().hasAttribute('az-busy')).toBe(true);
+            document.getElementById('b').click();
+            go().click();
+            expect(urls()).toEqual(['/b', '/g']);
+            pending[0].resolve(response(200, ''));
+            pending[1].resolve(response(200, ''));
+            await flush();
+            expect(document.querySelectorAll('[az-busy]')).toHaveLength(0);
+        });
+
+        it('carries nothing across a navigate, nor through a later reconnect', async () => {
+            await page(RESET_FORM());
+            q().value = 'hello';
+            submit('f');
+            mock.simulateMessage(
+                [[8, 'page', `<div id="page" az-view>${RESET_FORM()}</div>`]],
+                null,
+            );
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            q().value = 'typed';
+            reconnect(RESET_FORM());
+            expect(document.getElementById('f').hasAttribute('az-busy')).toBe(false);
+            pending[0].resolve(response(200, ''));
+            await flush();
+            expect(q().value).toBe('typed');
+            submit('f');
+            expect(urls()).toEqual(['/send', '/send']);
+        });
+    });
 });
 
 // ---------------------------------------------------------------------------

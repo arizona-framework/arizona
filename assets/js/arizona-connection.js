@@ -3,7 +3,9 @@ import {
     applyEffects,
     executeJS,
     formFields,
+    heldNodes,
     osHost,
+    rehome,
     replayEvents,
     withAllControls,
 } from './arizona-commands.js';
@@ -1165,17 +1167,59 @@ export function saveFormState(suspect = null) {
 }
 
 /**
+ * What the fresh markup of a resync carries again for an element it rebuilds: its
+ * id, or its form's id plus its name and position among that form's same-named
+ * fields.
  * @typedef {{doc: Document, el: Element, id: string|null, form: string|null,
- *   name: string|null, nth: number, sel: [number, number, string]|null}} FocusMark
+ *   name: string|null, nth: number}} NodeMark
  */
 
 /**
+ * @param {Element} el
+ * @returns {NodeMark}
+ */
+function nodeMark(el) {
+    const f = /** @type {HTMLInputElement} */ (el);
+    // A <form>'s own `form` is undefined; a <form name> is not one of its fields.
+    const owner = el.localName === 'form' ? null : f.form;
+    const form = owner?.id || null;
+    const name = (owner && f.name) || null;
+    let nth = 0;
+    if (owner && form && name) {
+        nth = [...owner.elements].filter((x) => /** @type {any} */ (x).name === name).indexOf(el);
+    }
+    return { doc: el.ownerDocument, el, id: el.id || null, form, name, nth };
+}
+
+/**
+ * The element a `nodeMark` names after the resync: the same node when it was
+ * kept (inside a kept az-nodiff element), else the one the fresh markup carries
+ * at its place.
+ * @param {NodeMark} mark
+ * @returns {any}
+ */
+function findMarked({ doc, el, id, form, name, nth }) {
+    // Duck-typed, not `instanceof`: a popped-out (PiP) view's elements belong
+    // to another window's constructors.
+    /** @type {any} */
+    let target = null;
+    if (el.isConnected) target = el;
+    else if (id) target = doc.getElementById(id);
+    if (!target && form && name) {
+        const f = /** @type {any} */ (doc.getElementById(form));
+        if (f?.elements) {
+            target = [...f.elements].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
+        }
+    }
+    return target;
+}
+
+/** @typedef {NodeMark & {sel: [number, number, string]|null}} FocusMark */
+
+/**
  * Record each hosting document's focused element before a resync replaces the
- * view: the element itself (a kept az-nodiff element survives the resync as the
- * same node), and what the fresh markup will carry again for one that is
- * rebuilt -- its id, or its form's id plus its name and position among that
- * form's same-named fields. The caret and selection ride along -- restoring
- * values moves the caret to the end.
+ * view (see `nodeMark`). The caret and selection ride along -- restoring values
+ * moves the caret to the end.
  * @returns {FocusMark[]}
  */
 function captureFocus() {
@@ -1185,15 +1229,6 @@ function captureFocus() {
         const el = doc.activeElement;
         if (!el || el === doc.body || el === doc.documentElement) continue;
         const f = /** @type {HTMLInputElement} */ (el);
-        const owner = f.form;
-        const form = owner?.id || null;
-        const name = f.name || null;
-        let nth = 0;
-        if (owner && form && name) {
-            nth = [...owner.elements]
-                .filter((x) => /** @type {any} */ (x).name === name)
-                .indexOf(el);
-        }
         /** @type {[number, number, string]|null} */
         let sel = null;
         try {
@@ -1205,7 +1240,7 @@ function captureFocus() {
                 ];
             }
         } catch {}
-        marks.push({ doc, el, id: el.id || null, form, name, nth, sel });
+        marks.push({ ...nodeMark(el), sel });
     }
     return marks;
 }
@@ -1217,28 +1252,14 @@ function captureFocus() {
  * @param {FocusMark[]} marks
  */
 function restoreFocus(marks) {
-    for (const { doc, el, id, form, name, nth, sel } of marks) {
+    for (const mark of marks) {
+        const { doc, el, sel } = mark;
         const active = doc.activeElement;
         if (active === el) continue; // untouched: focus and caret survived
         if (active && active !== doc.body && active !== doc.documentElement) continue;
-        // Duck-typed, not `instanceof`: a popped-out (PiP) view's elements belong
-        // to another window's constructors.
-        /** @type {any} */
-        let target = null;
-        if (el.isConnected) {
-            // Kept (inside a kept az-nodiff element): the same node, but moving
-            // it through the parsed fragment detached it, which dropped focus.
-            target = el;
-        } else if (id) {
-            target = doc.getElementById(id);
-        }
-        if (!target && form && name) {
-            const f = /** @type {any} */ (doc.getElementById(form));
-            if (f?.elements) {
-                target =
-                    [...f.elements].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
-            }
-        }
+        // A kept node is the same one, but moving it through the parsed fragment
+        // detached it, which dropped focus.
+        const target = findMarked(mark);
         if (typeof target?.focus !== 'function') continue;
         target.focus({ preventScroll: true });
         if (sel) {
@@ -1246,6 +1267,27 @@ function restoreFocus(marks) {
                 target.setSelectionRange(sel[0], sel[1], /** @type {any} */ (sel[2]));
             } catch {}
         }
+    }
+}
+
+/**
+ * Record the nodes holding a fetch in flight or a pending form reset before a
+ * reconnect resync replaces the view. The app never chose that re-render, so the
+ * request still belongs to the page: `rehomeHeld` moves it onto the node the
+ * fresh markup carries at the same place. A navigate is a new page and carries
+ * nothing (its old nodes are detached by the time a resync comes).
+ * @returns {NodeMark[]}
+ */
+function captureHeld() {
+    return Array.from(heldNodes(), nodeMark);
+}
+
+/** @param {NodeMark[]} marks */
+function rehomeHeld(marks) {
+    for (const mark of marks) {
+        if (mark.el.isConnected) continue; // kept: still the holder
+        const target = findMarked(mark);
+        if (target?.localName === mark.el.localName) rehome(mark.el, target);
     }
 }
 
@@ -1608,10 +1650,14 @@ export function connect(endpoint, params = {}) {
                         // ...and so is the element being typed into: put focus
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
+                        // ...and so are the nodes holding a fetch in flight.
+                        const held = msg[3] ? captureHeld() : null;
                         _inFrame = true;
                         _applying = msg[5];
                         try {
                             if (msg[1]) applyOps(msg[1], !!msg[3]);
+                            // Before the frame's effects, which may fetch again.
+                            if (held) rehomeHeld(held);
                             // Identity-checked: an OP_REPLACE in this frame consumed it.
                             if (patchReply && _pendingScroll === armedScroll) {
                                 if (msg[1]?.length) applyScroll(armedScroll);

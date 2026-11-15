@@ -1010,7 +1010,8 @@ handle_event(~"inc", _P, B) ->
   the default, or `drop`) decides what a repeat does while the previous request is in flight -- the
   same method and URL from the same holder (the form the request posts, else the trigger); `drop`
   issues none and dispatches `arizona:fetch-dropped` instead. The holder carries `az-busy` while a
-  request it holds is in flight, under either policy. See "HTTP fetch" in `CLAUDE.md`.
+  request it holds is in flight, under either policy; a reconnect resync moves the request, and a
+  pending `az-form-reset`, onto the node that replaces its holder. See "HTTP fetch" in `CLAUDE.md`.
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
