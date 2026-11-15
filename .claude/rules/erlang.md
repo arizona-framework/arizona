@@ -87,7 +87,7 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, false}` | `{hidden, false}` | Stripped (`?json` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
 
-A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target
+A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target and in HTML content (not inside `<svg>`)
 (appended after its attributes), so a submit made before the client script runs never puts the
 fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 

@@ -40,7 +40,7 @@
 -export([supports_nodiff_keep/0]).
 -export([supports_keyed_item_ops/0]).
 -export([format_error/1]).
--export([implied_attrs/2]).
+-export([implied_attrs/3]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
 -export([escape/1]).
@@ -131,7 +131,7 @@ format_error(each_stream_body_control_flow) -> "text: a stream item must be one 
 format_error(stream_each_multi_root) -> "text: a stream item has one root";
 format_error({stateful_in_layout, _Mod, _Fun, _Handler}) -> "text: no ?stateful in a layout".
 
-implied_attrs(_Tag, _Names) -> [].
+implied_attrs(_Tag, _Names, _Context) -> [].
 
 boolean_attrs() -> presence.
 

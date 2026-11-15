@@ -272,7 +272,7 @@ The callbacks, by whether a backend must implement them (every one is documented
 
 | Kind | Callbacks |
 | --- | --- |
-| Required | `name/1`, `element_open/1`, `az_attr/1`, `element_open_end/2`, `element_void_close/0`, `element_close/1`, `attr/2`, `attr_bool/2`, `attr_command/2`, `attr_dynamic_prefix/1`, `children_sep/0`, `each_items/1`, `text_child/1`, `content_slot_az/2`, `content_slot_open/1`, `content_slot_close/0`, `is_void/1`, `raw_text_kind/2`, `content_context/2`, `scope_static/3`, `supports_list_patch/0`, `target/0`, `supports_live_root/0`, `content_type/0`, `supports_local/0`, `supports_nodiff_keep/0`, `implied_attrs/2`, `single_root_document/0`, `supports_keyed_item_ops/0`, `boolean_attrs/0`, `attr_names/0`, `escape/1`, `wire_escape/1`, `neutralize_raw_text/4`, `render_attr/2`, `wire_attr/2`, `format_error/1` |
+| Required | `name/1`, `element_open/1`, `az_attr/1`, `element_open_end/2`, `element_void_close/0`, `element_close/1`, `attr/2`, `attr_bool/2`, `attr_command/2`, `attr_dynamic_prefix/1`, `children_sep/0`, `each_items/1`, `text_child/1`, `content_slot_az/2`, `content_slot_open/1`, `content_slot_close/0`, `is_void/1`, `raw_text_kind/2`, `content_context/2`, `scope_static/3`, `supports_list_patch/0`, `target/0`, `supports_live_root/0`, `content_type/0`, `supports_local/0`, `supports_nodiff_keep/0`, `implied_attrs/3`, `single_root_document/0`, `supports_keyed_item_ops/0`, `boolean_attrs/0`, `attr_names/0`, `escape/1`, `wire_escape/1`, `neutralize_raw_text/4`, `render_attr/2`, `wire_attr/2`, `format_error/1` |
 | Optional | `selection_role/2`, `controlled/3`, `embed_attrs/2` |
 | Required if | `markup_text/2` when `supports_local/0` is `true`; `mark_choices/2` when `selection_role/2` is implemented |
 
@@ -295,7 +295,8 @@ rename `attr_dyn_name/1` to `attr_dynamic_prefix/1`, `text_az/2` to `content_slo
 `text_slot_open/1` to `content_slot_open/1`, `text_slot_close/0` to `content_slot_close/0`,
 `raw_text/4` to `neutralize_raw_text/4`, `live_root/0` to `supports_live_root/0` and
 `keyed_item_ops/0` to `supports_keyed_item_ops/0`; take `element_open_end/2` (the tag and its
-content context) instead of `element_open_end/0`; implement the new required `format_error/1`;
+content context) instead of `element_open_end/0` and `implied_attrs/3` (the content context
+added) instead of `implied_attrs/2`; implement the new required `format_error/1`;
 and read the root content context as `undefined` (`content_context()` is any atom, no longer
 `html | foreign`). A backend written against a later commit may also carry names that were
 added and changed since: `static_document/2` is now `embed_attrs/2`, `markup_text/1` is

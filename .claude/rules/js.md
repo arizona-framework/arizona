@@ -244,7 +244,7 @@ check, since a declared suppression needs no server.
 
 The listener cannot act before `arizona.js` has run (Enter while the deferred module still loads),
 so the server closes that window: the `?html` target renders `method="post"` on a `form` carrying
-`az-submit` and no `method` of its own (`arizona_renderer:implied_attrs/2`). Such a submit is then a
+`az-submit` and no `method` of its own (`arizona_renderer:implied_attrs/3`, in HTML content only). Such a submit is then a
 POST with the fields in the body -- a live route answers `405` -- never a GET with them in the URL.
 The client's `fetch` already treats a method-less form as POST, so nothing else changes; an
 author's `method` (static, dynamic, any casing) is never overridden, and `?json`/`?terminal`

@@ -250,8 +250,13 @@ attributes imply, given the tag and the wire names of the attributes it carries
 (a `false` one excluded: it renders nothing). Emitted after the author's
 attributes. HTML gives a method-less `az-submit` form `method="post"`; a backend
 with nothing to imply returns `[]`.
+
+`Context` is the content context the element sits in (`content_context/2` of its
+parent): HTML implies nothing outside HTML content, since a `form` inside `<svg>` is no
+HTML form.
 """.
--callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
+-callback implied_attrs(Tag :: tag(), AttrNames :: [binary()], Context :: content_context()) ->
+    [{binary(), binary()}].
 
 -doc """
 The part `Tag` plays when one element picks some of its descendants by a value:
