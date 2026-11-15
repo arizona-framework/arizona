@@ -129,6 +129,7 @@
     invalid_child_empty_tuple/1,
     invalid_child_mixed/1,
     error_names_included_file/1,
+    module_without_module_attr/1,
     error_after_include_names_main_file/1,
     error_keeps_column/1,
     error_in_included_helper_names_its_file/1,
@@ -1273,6 +1274,7 @@ groups() ->
             improper_template_list_rejected,
             improper_attr_value_is_text,
             error_names_included_file,
+            module_without_module_attr,
             error_after_include_names_main_file,
             error_keeps_column,
             error_in_included_helper_names_its_file,
@@ -8809,6 +8811,38 @@ invalid_element_single(Config) when is_list(Config) ->
     %% A tag may be a binary as well as an atom, so the advice names both.
     Msg = arizona_parse_transform:format_error(invalid_element),
     ?assertNotEqual(nomatch, string:find(Msg, "an atom or a literal binary"), Msg).
+
+%% A source with no module definition, or a malformed one, gets the compiler's own
+%% error: the transform leaves it as it is rather than crashing on it.
+module_without_module_attr(Config) when is_list(Config) ->
+    Dir = proplists:get_value(priv_dir, Config),
+    Include = filename:join(code:lib_dir(arizona), "include"),
+    lists:foreach(
+        fun({Name, ModLine, Expected}) ->
+            File = filename:join(Dir, Name ++ ".erl"),
+            ok = file:write_file(File, [
+                ModLine,
+                "-include(\"arizona_stateless.hrl\").\n"
+                "-export([render/1]).\n"
+                "render(Bindings) -> ?html({p, [{az_click, arizona_js:push_event(~\"go\")}],"
+                " [?get(x)]}).\n"
+            ]),
+            {error, Errors, _Warnings} = compile:file(File, [binary, return, {i, Include}]),
+            Descriptors = [D || {_File, Ds} <- Errors, D <- Ds],
+            ?assertEqual(
+                [],
+                [D || {_, compile, {parse_transform, _, _}} = D <- Descriptors],
+                Descriptors
+            ),
+            ?assertMatch(
+                [_ | _], [D || {_, Mod, _} = D <- Descriptors, Mod =:= Expected], Descriptors
+            )
+        end,
+        [
+            {"pt_no_module", "", erl_lint},
+            {"pt_bad_module", "-module(bad mod).\n", erl_parse}
+        ]
+    ).
 
 %% An error inside an included file names that file, not the module's: the
 %% `-file` attribute epp emits at the include boundary is honored.

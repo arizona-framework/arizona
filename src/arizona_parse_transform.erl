@@ -754,16 +754,19 @@ inject_az_attrs(Forms, Deps) ->
             L -> L
         end
     ),
-    {Before, [ModAttr | After]} = lists:splitwith(
-        fun(Form) -> not is_module_attr(Form) end, Forms
-    ),
-    Anno = element(2, ModAttr),
-    %% Also records that this transform built the module (parse_transform/2).
-    Attrs =
-        [{attribute, Anno, ?TRANSFORMED_ATTR, true}] ++
-            [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
-            [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
-    Before ++ [ModAttr | Attrs] ++ After.
+    case lists:splitwith(fun(Form) -> not is_module_attr(Form) end, Forms) of
+        {Before, [ModAttr | After]} ->
+            Anno = element(2, ModAttr),
+            %% Also records that this transform built the module (parse_transform/2).
+            Attrs =
+                [{attribute, Anno, ?TRANSFORMED_ATTR, true}] ++
+                    [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
+                    [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
+            Before ++ [ModAttr | Attrs] ++ After;
+        {Forms, []} ->
+            %% No module definition (missing, or malformed): the compiler reports it.
+            Forms
+    end.
 
 %% The modules this module can take markup from, as literal atoms: the component
 %% modules its templates name, and every module it calls, imports, or takes a
