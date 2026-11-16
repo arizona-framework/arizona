@@ -295,7 +295,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %%   listener that accepted the raw request), same order, same percent-decoded
 %%   bindings, a segment holding a malformed escape (`%G1`) kept as written.
 %% - Return `error` for a URL an HTTP request would refuse (a query past the
-%%   adapter's key cap): the caller then does a full page load, which gets the
+%%   adapter's key cap): a navigate then does a full page load, which gets the
 %%   same answer.
 %% - `RouteOpts` is what that route renders with: `bindings`, `on_mount`,
 %%   `layouts` (the socket compares them to decide whether a navigate can swap
