@@ -3718,6 +3718,32 @@ describe('?local -- set/get content', () => {
         expect(get('v', 'title')).toBe('new');
     });
 
+    it('skips an az-local that is no descriptor, warning once, and serves the rest', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            setupView(
+                'v',
+                `<i id="bad" az-local="{bad"></i>` +
+                    `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>`,
+            );
+            set('v', 'title', 'one');
+            expect(document.querySelector('[az="0"]').textContent).toBe('one');
+            setAll('title', 'two');
+            expect(document.querySelector('[az="0"]').textContent).toBe('two');
+            expect(get('v', 'title')).toBe('two');
+            expect(get('title')).toBe('two');
+            const warns = warn.mock.calls.filter((c) => String(c[0]).includes('az-local'));
+            expect(warns).toHaveLength(1);
+            expect(String(warns[0][0])).toContain('{bad');
+            // Rewritten (a set_attr effect, raw markup), it is read again.
+            document.getElementById('bad').setAttribute('az-local', '{"a":{"data-t":"title"}}');
+            set('v', 'title', 'three');
+            expect(document.getElementById('bad').getAttribute('data-t')).toBe('three');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it('get returns the SSR initial before any set', () => {
         contentView('v', 'title', 'hello');
         expect(get('v', 'title')).toBe('hello');

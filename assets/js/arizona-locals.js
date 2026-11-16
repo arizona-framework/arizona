@@ -15,6 +15,7 @@ import {
     forEachNodeInSlot,
     setMarkerText,
 } from './arizona-slots.js';
+import { warnOnce } from './arizona-util.js';
 
 /**
  * Reconstruct a content slot's comment-marker az from the element's runtime az
@@ -182,28 +183,39 @@ function affix(a) {
 
 // Parsed `az-local` descriptors, cached per element. NOT a persistent index --
 // discovery still queries the live DOM every call; only the JSON.parse of each
-// element's descriptor is memoized. The attribute is written once at SSR and a
-// ?local slot is never diffed, so a descriptor is immutable for its element's
-// lifetime; a re-rendered slot is a NEW element (a fresh cache key) and dropped
-// elements fall out of the WeakMap with GC.
-/** @type {WeakMap<Element, LocalDesc>} */
+// element's descriptor is memoized, with the text it was parsed from: the server
+// writes the attribute once at SSR and never diffs a ?local slot, but a
+// `set_attr` effect or `?raw` markup can write it too, with any value. A
+// re-rendered slot is a NEW element (a fresh cache key) and dropped elements fall
+// out of the WeakMap with GC.
+/** @type {WeakMap<Element, {raw: string, desc: LocalDesc|null}>} */
 const _localDescs = new WeakMap();
 
 /**
- * The `az-local` descriptor of `el`, parsed once; `null` when it has none.
+ * The `az-local` descriptor of `el`, parsed once per value; `null` when it has
+ * none, or one that is not JSON -- skipped with a warning, so the locals after it
+ * are still served.
  * @param {Element} el
  * @returns {LocalDesc|null}
  */
 function localDesc(el) {
-    let parsed = _localDescs.get(el);
-    if (parsed === undefined) {
-        const desc = el.getAttribute('az-local');
-        if (!desc) return null;
-        // The descriptor is always framework-generated valid JSON.
-        parsed = /** @type {LocalDesc} */ (JSON.parse(desc));
-        _localDescs.set(el, parsed);
+    const raw = el.getAttribute('az-local');
+    if (!raw) return null;
+    const cached = _localDescs.get(el);
+    if (cached?.raw === raw) return cached.desc;
+    /** @type {LocalDesc|null} */
+    let desc = null;
+    try {
+        desc = JSON.parse(raw);
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        warnOnce(
+            `[arizona] az-local ${raw} is no ?local descriptor; skipped: ${detail}`,
+            'az-local',
+        );
     }
-    return parsed;
+    _localDescs.set(el, { raw, desc });
+    return desc;
 }
 
 /**
