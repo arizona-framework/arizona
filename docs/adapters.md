@@ -77,8 +77,8 @@ the listener keeps accepting and the reconnects land on it.
 
 `parse_bindings/1` (binary keys, percent-decoded values), `parse_params/1` (form decoding: `+` is a
 space, each escape the octet it encodes, a bare key `true`; a malformed escape such as `%G1` is not
-portable yet -- roadrunner keeps it as written, Cowboy answers `400` and a navigate to it closes
-the socket `4500`), `parse_cookies/1`,
+portable yet -- roadrunner keeps it as written, Cowboy answers `400` and a navigate to a route
+reading it closes the socket `4500`), `parse_cookies/1`,
 `parse_headers/1` (lowercase names; a repeated field combined in order, `Cookie` lines joined by a semicolon),
 `read_body/1` (`{ok, Body, Raw1}`, or `{error, too_large | trailers_too_large | timeout |
 invalid}`), and `scheme/1` (the connection's own, `https` only on TLS). `resolve_route/3` resolves a

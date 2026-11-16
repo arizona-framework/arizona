@@ -232,17 +232,18 @@ Each key targets a binding:
 - `params` / `headers` / `cookies` / `body` / `method` / `user_agent` --
   stored under the same-named key (`params` as `arizona_req:params/1` decodes
   it: a malformed escape such as `%G1` is kept on roadrunner, `400` on Cowboy,
-  where a navigate to it closes the socket `4500`)
+  where a navigate to a route reading it closes the socket `4500`)
 
 Path bindings and query params are the octets their percent-escapes encode, not
 necessarily UTF-8, so validate a value before rendering it: a non-UTF-8 one
 fails a dev-mode render and any `?json` render (`500`), and any live frame that
 renders it: a navigate to its page or a reconnect resync (socket closed `4501`),
-or a later diff. Only the HTTP render of a production `?html` page carries its
-raw bytes, so such a page loads and then dies on its first reconnect.
-`unicode:characters_to_binary/1` returns a binary unchanged only when it is
-UTF-8; apply it to each binary, since a `*name` binding is a list of segments
-(the call would join them into one) and a bare query flag (`?debug`) is `true`.
+or a patch or a later diff (socket closed `4500`). Only the HTTP render of a
+production `?html` page carries its raw bytes, so such a page loads and then
+dies on its first reconnect. `unicode:characters_to_binary/1` returns a binary
+unchanged only when it is UTF-8; apply it to each binary, since a `*name`
+binding is a list of segments (the call would join them into one) and a bare
+query flag (`?debug`) is `true`.
 
 `body` is the one key that can fail: when the transport cannot deliver the body
 (only possible when the server reads it on demand, e.g. roadrunner's

@@ -428,11 +428,11 @@ A value is the octets its percent-escapes encode, not necessarily UTF-8 (as with
 `params/1`), so validate it before rendering it: a non-UTF-8 one fails a
 dev-mode render and any `?json` render (`500`), and any live frame that renders
 it: a navigate to its page or a reconnect resync (socket closed `4501`), or a
-later diff. Only the HTTP render of a production `?html` page carries its raw
-bytes, so such a page loads and then dies on its first reconnect.
-`unicode:characters_to_binary/1` returns a binary unchanged only when it is
-UTF-8; a `*name` binding is a list of segments, so apply it to each (the call
-would join them into one).
+patch or a later diff (socket closed `4500`). Only the HTTP render of a
+production `?html` page carries its raw bytes, so such a page loads and then
+dies on its first reconnect. `unicode:characters_to_binary/1` returns a binary
+unchanged only when it is UTF-8; a `*name` binding is a list of segments, so
+apply it to each (the call would join them into one).
 """.
 -spec bindings(request()) -> {bindings(), request()}.
 bindings(#{bindings := Bindings} = Req) ->
@@ -450,8 +450,8 @@ A value is decoded as form encoding is: `+` is a space and each escape the octet
 it encodes, UTF-8 or not, and a bare key (`?debug`) is `true`. A malformed
 escape (`%G1`, a trailing `%4`) depends on the server: roadrunner keeps the text
 as written, while Cowboy fails the request with `400` once the query is parsed
-(always on a WebSocket upgrade, which reads it), and a navigate to it closes the
-socket `4500`.
+(always on a WebSocket upgrade, which reads it), and a navigate to a route that
+reads it closes the socket `4500`.
 """.
 -spec params(request()) -> {params(), request()}.
 params(#{params := Params} = Req) ->
