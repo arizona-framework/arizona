@@ -255,8 +255,9 @@ match_pattern(_Pattern, _Segments, _Bindings) ->
 %% Captures are decoded once, on the winning route, to the octets their escapes
 %% encode, UTF-8 or not, with `+` kept (no form encoding); a malformed escape
 %% keeps the segment raw rather than failing a match on client-controlled input.
-%% `uri_string:percent_decode/1` is no fit: it throws on a result that is not
-%% UTF-8, so `%FF` would crash the request.
+%% `uri_string:percent_decode/1` is no fit: it refuses a result that is not
+%% UTF-8 by design, and on a binary it throws that error instead of returning
+%% it (erlang/otp#11654, fixed by erlang/otp#11657), so `%FF` crashed the request.
 decode(Bindings) ->
     #{Name => decode_value(Value) || Name := Value <- Bindings}.
 
