@@ -471,11 +471,12 @@ let _navEpoch = 0;
  * auto-collected form fields.
  *
  * `transition` is the view transition the event was raised under: when it is
- * the pending 'any' one, the frame is tagged with the reply ref it waits for. A
- * dropped event takes that transition with it, and so does one raised while
- * disconnected (the worker drops it, so no reply comes), so the intent cannot
- * settle onto a later, unrelated reply. A 'replace' transition waits for a
- * navigate, not for an event raised under it, so neither touches it.
+ * the pending 'any' one, the frame is tagged with the reply ref it waits for. One
+ * raised while disconnected takes that transition with it (the worker drops it, so
+ * no reply comes), so the intent cannot settle onto a later, unrelated reply. A
+ * stale event never finds its transition pending: a navigate disarms a pending
+ * 'any' one, and none is armed while its window is open (`host.armTransition`). A
+ * 'replace' transition waits for a navigate, not for an event raised under it.
  *
  * `ctls` are the server-owned controls whose state the event sends, as it was when
  * raised, and `onReply` runs when the reply lands (before its ops and effects) or
@@ -503,7 +504,6 @@ function sendEvent(
     if (_navRefs.size > 0 || _navAwaitResync || epoch !== _navEpoch) {
         console.warn(`[arizona] dropped stale event "${name}"`);
         if (ctls) release(ctls);
-        if (awaitsTransition(transition)) armPendingTransition(null);
         return false;
     }
     // Sent, the raise is no longer pending (`carry`).
@@ -564,8 +564,9 @@ function unsent(transition, ctls) {
 }
 
 // The pending transition, and the ref of the frame it was bound to, that the last
-// one armed (`by`) displaced, for `unsent` to put back. Dropped once that frame's
-// reply lands or can no longer come.
+// one armed (`by`) displaced, for `unsent` to put back. Nothing clears it when that
+// reply lands: put back after it, the transition waits for a ref that never comes
+// again (refs are never reused), so it animates nothing and the next arm replaces it.
 /** @type {{by: {types?: string[], kind: 'replace'|'any'}, transition: {types?: string[], kind: 'replace'|'any'}, ref: number|null}|null} */
 let _displaced = null;
 
@@ -582,7 +583,6 @@ const _replyWaiters = new Map();
  */
 function settleEventReplies(ref) {
     if (ref === null) return;
-    if (_displaced?.ref === ref) _displaced = null;
     const waiter = _replyWaiters.get(ref);
     if (!waiter) return;
     _replyWaiters.delete(ref);
@@ -591,7 +591,6 @@ function settleEventReplies(ref) {
 
 /** Run every reply waiter: the socket they wait on went away. */
 function dropReplyWaiters() {
-    _displaced = null;
     const waiters = [..._replyWaiters.values()];
     _replyWaiters.clear();
     for (const w of waiters) w();

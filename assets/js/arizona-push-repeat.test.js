@@ -342,6 +342,134 @@ describe('push_event on_repeat: drop', () => {
         });
     });
 
+    describe("az-form-reset follows the submit's own events", () => {
+        const typeIn = (q, v) => {
+            q.value = v;
+        };
+
+        it('resets when one of them was sent, though another was dropped', async () => {
+            await connect(
+                `<form id="f" az-submit='${cmd([
+                    [0, 'save', {}],
+                    [0, 'track', {}, DROP],
+                ])}' az-form-reset><input name="q" /></form>`,
+            );
+            const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+            const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+            typeIn(q, 'first');
+            submit(form);
+            typeIn(q, 'second');
+            submit(form);
+            expect(mock.sent().map((f) => f[1])).toEqual(['save', 'track', 'save']);
+            expect(q.value).toBe('');
+        });
+
+        it('a drop its commands did not cause does not keep its fields', async () => {
+            await connect(
+                `<input id="o" az-debounce="blur" az-input='${cmd([0, 'o', {}, DROP])}' />
+                 <form id="f" az-submit='${cmd([
+                     [0, 'save', {}],
+                     [11, '#q'],
+                 ])}' az-form-reset><input id="q" name="q" /></form>`,
+            );
+            const o = /** @type {HTMLInputElement} */ (document.getElementById('o'));
+            const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+            const q = /** @type {HTMLInputElement} */ (document.getElementById('q'));
+            const dropped = droppedEvents();
+            const input = (v) => {
+                o.value = v;
+                o.dispatchEvent(new Event('input', { bubbles: true }));
+            };
+            o.focus();
+            input('a');
+            o.blur();
+            o.focus();
+            input('ab');
+            typeIn(q, 'typed');
+            // The submit's focus command moves focus off `o`, whose blur flush is a
+            // repeat of its event in flight.
+            submit(form);
+            expect(dropped).toHaveLength(1);
+            expect(mock.sent().map((f) => f[1])).toEqual(['o', 'save']);
+            expect(q.value).toBe('');
+        });
+
+        describe('a throttled submit decides when its send is judged', () => {
+            const THROTTLED = () =>
+                `<form id="f" az-throttle="1000" az-submit='${SAVE}' az-form-reset><input name="q" /></form>`;
+
+            it('keeps what was typed when its trailing send is a dropped repeat', async () => {
+                vi.useFakeTimers();
+                await connect(THROTTLED());
+                const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+                const dropped = droppedEvents();
+                typeIn(q, 'first');
+                submit(form);
+                expect(q.value).toBe('');
+                typeIn(q, 'second');
+                submit(form);
+                expect(q.value).toBe('second');
+                vi.advanceTimersByTime(1000);
+                expect(dropped).toHaveLength(1);
+                expect(mock.sent()).toHaveLength(1);
+                expect(q.value).toBe('second');
+            });
+
+            it('waits for every one of its paced events, resetting when one went out', async () => {
+                vi.useFakeTimers();
+                await connect(
+                    `<form id="f" az-throttle="1000" az-submit='${cmd([
+                        [0, 'save', {}, DROP],
+                        [0, 'log', {}],
+                    ])}' az-form-reset><input name="q" /></form>`,
+                );
+                const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+                typeIn(q, 'first');
+                submit(form);
+                typeIn(q, 'second');
+                submit(form);
+                expect(q.value).toBe('second');
+                vi.advanceTimersByTime(1000);
+                // `save` is a repeat of the first, dropped; `log` went out.
+                expect(mock.sent().map((f) => f[1])).toEqual(['save', 'log', 'log']);
+                expect(q.value).toBe('');
+            });
+
+            it('resets once its trailing send goes out, keeping what was typed since', async () => {
+                vi.useFakeTimers();
+                await connect(THROTTLED());
+                const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+                typeIn(q, 'first');
+                submit(form);
+                mock.reply(mock.sent()[0][3]);
+                typeIn(q, 'second');
+                submit(form);
+                expect(q.value).toBe('second');
+                vi.advanceTimersByTime(1000);
+                expect(mock.sent().map((f) => f[2])).toEqual([{ q: 'first' }, { q: 'second' }]);
+                expect(q.value).toBe('');
+                // A third submit raised while the second waits, replaced by a fourth:
+                // only the fourth's send decides, and the text typed after it stays.
+                mock.reply(mock.sent()[1][3]);
+                vi.advanceTimersByTime(1000);
+                typeIn(q, 'x');
+                submit(form);
+                typeIn(q, 'y');
+                submit(form);
+                typeIn(q, 'z');
+                submit(form);
+                typeIn(q, 'later');
+                mock.reply(mock.sent()[2][3]);
+                vi.advanceTimersByTime(1000);
+                expect(mock.sent().map((f) => f[2].q)).toEqual(['first', 'second', 'x', 'z']);
+                expect(q.value).toBe('later');
+            });
+        });
+    });
+
     describe('server-owned controls', () => {
         it('a dropped repeat lets go of the controls it carried', async () => {
             await connect(

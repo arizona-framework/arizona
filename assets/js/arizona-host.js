@@ -27,7 +27,8 @@
  * @property {(transition: {types?: string[], kind: 'any'|'replace'}|null,
  *   ctls: Array<[Element, string|boolean]>|null) => void} unsent a raised event will
  *   never be sent (a repeat `on_repeat: 'drop'` refused): let go of the controls it
- *   carries and of the view transition waiting for its reply
+ *   carries, and give the pending view transition back to the one its transition
+ *   displaced, or, with none displaced, leave its own armed for a command beside it
  * @property {(el: Element, name: string, val: string|null) => boolean|'defer'} holds
  *   whether a server write of `name` to `el` (a control, or an option of one) must leave
  *   its live state alone, or (`'defer'`) not happen yet

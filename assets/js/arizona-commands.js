@@ -643,14 +643,14 @@ function enterSlot(holder, slot) {
  * @param {string} name
  * @param {Array<*>} frame
  * @param {{epoch?: number, transition: *, ctls: Array<[Element, string|boolean]>|null}} opts
+ * @returns {boolean} false when it was refused as a repeat
  */
 function sendPush(holder, slot, name, frame, opts) {
     if (slot === null) {
         host.sendEvent(name, frame, opts);
-        return;
+        return true;
     }
     if (_inFlight.get(holder)?.slots.has(slot)) {
-        _droppedRepeat = true;
         host.unsent(opts.transition, opts.ctls);
         (busyMarks(holder) ? holder : document).dispatchEvent(
             new CustomEvent('arizona:event-dropped', {
@@ -658,10 +658,85 @@ function sendPush(holder, slot, name, frame, opts) {
                 detail: { event: name, reason: 'in_flight' },
             }),
         );
-        return;
+        return false;
     }
     const release = enterSlot(holder, slot);
     if (!host.sendEvent(name, frame, { ...opts, onReply: release })) release();
+    return true;
+}
+
+/**
+ * An az-submit's push_events -- those it raised with its form as holder -- and what
+ * became of them, which decides its `az-form-reset` (`openSubmit`/`closeSubmit`).
+ * `raised` counts them as its commands run, `judged` as each send is judged (at
+ * once, or when its throttle fires) or replaced by a later raise, `sent` whether one
+ * went out rather than being refused as a repeat. `shown` is what the form's
+ * controls showed as its commands ran, for a reset its pacing deferred.
+ * @typedef {{form: Element, raised: number, judged: number, sent: boolean,
+ *   ran: boolean, shown?: Map<Element, unknown>}} Submission
+ */
+
+/**
+ * The submissions under way, by their submit event.
+ * @type {WeakMap<Event, Submission>}
+ */
+const _submissions = new WeakMap();
+
+/**
+ * Start tracking the push_events `form`'s submit `event` raises, ahead of its
+ * commands. A submit whose fetch resets the form itself is never closed.
+ * @param {Element} form
+ * @param {Event} event
+ */
+export function openSubmit(form, event) {
+    _submissions.set(event, {
+        form,
+        raised: 0,
+        judged: 0,
+        sent: false,
+        ran: false,
+    });
+}
+
+/**
+ * The submit's commands have run: reset its `az-form-reset` form now when it raised
+ * no push_event of its own or every one was judged, else once the last is -- as long
+ * as one of them was sent. A submit whose only event was refused as a repeat keeps
+ * its fields, as a dropped fetch does. A reset waiting on a paced send keeps a
+ * control the user changed meanwhile, as a fetch's reset does.
+ * @param {Element} form
+ * @param {Event} event
+ */
+export function closeSubmit(form, event) {
+    const sub = /** @type {Submission} */ (_submissions.get(event));
+    sub.ran = true;
+    if (sub.raised === 0) {
+        maybeResetForm(form);
+    } else if (sub.judged < sub.raised) {
+        sub.shown = withAllControls(form, () =>
+            formSnapshot(/** @type {HTMLFormElement} */ (form)),
+        );
+    } else {
+        finishSubmit(sub);
+    }
+}
+
+/**
+ * One of a submission's push_events was judged: `sent`, or refused or replaced.
+ * @param {Submission|null} sub
+ * @param {boolean} sent
+ */
+function judgeSubmit(sub, sent) {
+    if (!sub) return;
+    sub.judged++;
+    if (sent) sub.sent = true;
+    if (sub.ran) finishSubmit(sub);
+}
+
+/** @param {Submission} sub */
+function finishSubmit(sub) {
+    if (sub.judged < sub.raised) return;
+    if (sub.sent) maybeResetForm(sub.form, sub.shown);
 }
 
 /**
@@ -841,24 +916,10 @@ function canonicalCmdsText(text) {
  * @param {Element} el - the element that triggered the event
  * @param {Event|null} event - the DOM event (null for programmatic dispatch)
  * @param {Array<*>} cmds - parsed JSON command(s)
- * @returns {boolean} false when a push_event among them was dropped as a repeat
  */
 export function executeJS(el, event, cmds) {
-    const outer = _droppedRepeat;
-    _droppedRepeat = false;
-    try {
-        runCommands(el, event, cmds, '');
-        return !_droppedRepeat;
-    } finally {
-        _droppedRepeat = outer;
-    }
+    runCommands(el, event, cmds, '');
 }
-
-// Whether the `executeJS` running now refused a push_event as a repeat
-// (`sendPush`), for its caller to tell: an az-submit whose event was dropped keeps
-// its fields, as one whose fetch was dropped does. Only a send judged as the
-// commands run counts -- a paced one is judged later, outside it.
-let _droppedRepeat = false;
 
 // The view transition whose inner commands are running now, if it waits for a
 // reply. A push_event among them captures it, so the transition settles on that
@@ -959,7 +1020,12 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 cmd[3]?.on_repeat === 'drop' ? `event ${JSON.stringify([frame[0], evt])}` : null;
             if (event) {
                 const epoch = host.epoch();
-                const send = () => sendPush(el, slot, evt, frame, { epoch, transition, ctls });
+                // An az-submit's own event: what becomes of it decides its form reset.
+                const sub = _submissions.get(event);
+                const own = sub?.form === el ? sub : null;
+                if (own) own.raised++;
+                const send = () =>
+                    judgeSubmit(own, sendPush(el, slot, evt, frame, { epoch, transition, ctls }));
                 // A later raise replacing it in its slot means it is never sent.
                 scheduleSend(
                     el,
@@ -967,7 +1033,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                     prefix,
                     index,
                     Object.assign(send, {
-                        drop: () => ctls && host.release(ctls),
+                        drop: () => {
+                            if (ctls) host.release(ctls);
+                            judgeSubmit(own, false);
+                        },
                     }),
                 );
             } else {
