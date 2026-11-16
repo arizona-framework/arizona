@@ -9,6 +9,7 @@
     list_routes_formats_shapes/1,
     list_routes_names_each_listener/1,
     list_routes_listener_without_routes/1,
+    list_routes_prints_adapter_route_shape/1,
     list_routes_none_running/1,
     get_logs_returns_captured_output/1,
     get_logs_rejects_unknown_level/1,
@@ -65,6 +66,7 @@ all() ->
         list_routes_formats_shapes,
         list_routes_names_each_listener,
         list_routes_listener_without_routes,
+        list_routes_prints_adapter_route_shape,
         list_routes_none_running,
         get_logs_returns_captured_output,
         get_logs_rejects_unknown_level,
@@ -200,6 +202,19 @@ list_routes_listener_without_routes(_Config) ->
     ok = arizona_server_registry:listener_down(arizona_http),
     ok = arizona_server_registry:listener_up(arizona_fake_server, host_http, []),
     ?assertMatch({reply, ~"host_http: (no routes)", _}, call(~"list_routes", #{})).
+
+%% A listener reports its adapter's own route shapes beside core's, and their
+%% second element need not be a path: each is listed as the term it is.
+list_routes_prints_adapter_route_shape(_Config) ->
+    ok = arizona_server_registry:listener_up(arizona_fake_server, host_http, [
+        {grpc, [chat_service], #{health => true}},
+        {live, ~"/host", host_page, #{}}
+    ]),
+    {reply, Text, _} = call(~"list_routes", #{}),
+    ?assertMatch(
+        {_, _},
+        binary:match(Text, ~"\nhost_http:\n  {grpc,[chat_service],#{health => true}}\n  live /host")
+    ).
 
 list_routes_none_running(_Config) ->
     ok = arizona_server_registry:listener_down(arizona_http),

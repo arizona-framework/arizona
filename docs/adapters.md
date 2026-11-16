@@ -94,6 +94,14 @@ lacks raises `arizona_route:unsupported/2` while compiling, so the listener refu
 `loop` reply), and so is an `mcp` route (`arizona_mcp_handler`, buffered JSON and `loop`
 replies, gating its own requests), so an adapter that sends loops serves both like any other
 controller route.
+
+`arizona_route:route()` is the type of the routes core defines. An adapter may serve route shapes
+of its own beside them (a feature its server has and Arizona does not define): it matches them
+before calling `kind/1`, declares its route type as `arizona_route:route()` or its own shapes,
+and reports them to `arizona_server_registry:listener_up/3` with the rest. On any other adapter
+such a shape reaches `kind/1` and fails with `unknown_route`, so a route list is never served
+in part.
+
 Compile from `arizona_route` rather than restating its rules:
 
 - `path/1`, `methods/1` -- the pattern and the allowlist (`GET` implies `HEAD`; `any`).
