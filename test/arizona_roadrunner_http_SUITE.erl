@@ -184,7 +184,7 @@ manual_body_oversized_trailer_halts_with_431(Config) when is_list(Config) ->
 body_read_across_recvs_is_a_binary(Config) when is_list(Config) ->
     #{body_reader := Reader} =
         Raw0 = framed_body_req(~"0123456789", ~"01234", 1024, arizona_about, #{}),
-    Raw = Raw0#{body_reader := Reader#{recv := fun() -> {ok, ~"56789"} end}},
+    Raw = Raw0#{body_reader := Reader#{recv := fun(_Deadline) -> {ok, ~"56789"} end}},
     ?assertMatch(
         {ok, ~"0123456789", _}, arizona_req:body(arizona_roadrunner_req:new(Raw))
     ).
@@ -243,16 +243,16 @@ framed_body_req(Declared, Buffered, Max, Handler, Bindings) ->
         version => {1, 1},
         headers => [{~"host", ~"localhost"}],
         bindings => #{},
-        body_reader => #{
-            framing => {content_length, byte_size(Declared)},
-            buffered => Buffered,
-            bytes_read => 0,
-            pending => <<>>,
-            done => false,
-            recv => fun() -> {error, closed} end,
-            max => Max,
-            trailer_limits => {8192, 10240, 100}
-        },
+        %% Built by roadrunner itself, so the reader keeps the shape its body
+        %% functions read; the socket reports closed past the buffer.
+        body_reader => roadrunner_conn:make_body_reader(
+            {content_length, byte_size(Declared)},
+            Buffered,
+            fun(_Deadline) -> {error, closed} end,
+            Max,
+            {8192, 10240, 100},
+            erlang:monotonic_time(millisecond) + 5000
+        ),
         state => #{
             arizona => #{
                 handler => Handler,
