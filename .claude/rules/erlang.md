@@ -375,7 +375,7 @@ and then dies on its first reconnect. `unicode:characters_to_binary/1` returns a
 unchanged only when it is UTF-8; apply it to each binary, since a `*name` binding is a
 list of segments (the call would join them into one) and a bare query flag (`?debug`) is
 `true`. A query param with a malformed escape (`%G1`) is kept as written on roadrunner
-and answered `400` on Cowboy.
+and answered `400` on Cowboy (a navigate to it closes the socket `4500`).
 
 - A non-ASCII `<<"...">>` that is a **template static** (content or attribute value) is
   folded as UTF-8 by the parse transform and renders correctly.
