@@ -490,6 +490,37 @@ describe('push_event on_repeat: drop', () => {
                 expect(cmds.heldNodes().size).toBe(0);
             });
 
+            // The same under `drop`: its slot was free, so the send takes it, finds
+            // the socket down and lets go at once -- no az-busy, nothing held, and
+            // the next submit after the reconnect is no repeat.
+            it('keeps what was typed when its drop trailing send finds the socket closed', async () => {
+                vi.useFakeTimers();
+                await connect(THROTTLED());
+                const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+                typeIn(q, 'first');
+                submit(form);
+                mock.reply(mock.sent()[0][3]);
+                typeIn(q, 'second');
+                submit(form);
+                mock.close(1006);
+                vi.advanceTimersByTime(1000);
+                expect(q.value).toBe('second');
+                expect(form.hasAttribute('az-busy')).toBe(false);
+                expect(cmds.heldNodes().size).toBe(0);
+                mock.open(true);
+                mock.resync(THROTTLED());
+                const f2 = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                const q2 = /** @type {HTMLInputElement} */ (f2.querySelector('input'));
+                expect(q2.value).toBe('second');
+                const dropped = droppedEvents();
+                vi.advanceTimersByTime(2000);
+                submit(f2);
+                expect(dropped).toHaveLength(0);
+                expect(mock.sent().at(-1).slice(1, 3)).toEqual(['save', { q: 'second' }]);
+                expect(q2.value).toBe('');
+            });
+
             it('resets the form a reconnect put in its place', async () => {
                 vi.useFakeTimers();
                 await connect(THROTTLED());
