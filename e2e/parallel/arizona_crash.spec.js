@@ -66,7 +66,11 @@ test.describe('crash recovery', () => {
         test.setTimeout(60000);
         /** @type {number[]} */
         const loads = [];
-        page.on('load', () => loads.push(Date.now()));
+        // Firefox also fires `load` for the initial about:blank, so count only
+        // loads of the page under test.
+        page.on('load', () => {
+            if (new URL(page.url()).pathname === '/crash-on-connect') loads.push(Date.now());
+        });
         // The page renders at SSR; only the live mount fails (closes 4501).
         await page.goto('/crash-on-connect');
         await expect(page.locator('p:has-text("Status:")')).toBeVisible();
