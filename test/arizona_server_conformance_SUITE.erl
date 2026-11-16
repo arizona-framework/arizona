@@ -660,7 +660,7 @@ path_with_a_malformed_escape_keeps_its_segment_raw(Config) ->
             {200, _, Body} = req(Config, ~"GET", <<"/items/", Raw/binary>>, []),
             ?assertEqual(Raw, rendered(~"Item", Body))
         end
-     || Raw <- [~"%G1", ~"a%41%G1", ~"%4", ~"a%"]
+     || Raw <- [~"%G1", ~"a%41%G1", ~"%41%F", ~"%4", ~"a%"]
     ].
 
 %% A query component whose escapes do not all decode is kept as written, `+`
@@ -1142,8 +1142,6 @@ ws_navigate_to_non_utf8_param_route_replaces(Config) ->
 ws_navigate_keeps_a_malformed_escape_raw(Config) ->
     [
         begin
-            {200, _, Body} = req(Config, ~"GET", <<"/items/", Raw/binary>>, []),
-            ?assertEqual(Raw, rendered(~"Item", Body)),
             Sock = live_socket(Config, ~"/"),
             ok = navigate(Sock, ~"navigate", <<"/items/", Raw/binary>>),
             {text, Resp} = arizona_wire_client:ws_recv(Sock),
