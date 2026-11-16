@@ -30,6 +30,7 @@ import {
     isWebUrl,
     loadPage,
     pageUrl,
+    warnOnce,
 } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
@@ -1393,9 +1394,10 @@ function rehomeHeld(marks) {
 
 /**
  * Replay the `push_event`s of a restored form's `az-change`. A value that is no
- * command list (an app's data under a proven name) is skipped with a warning, as
- * the live `change` listener skips it: a throw here would leave the forms after
- * it unrestored and the resync frame unfinished (focus, `arizona:connected`).
+ * command list (an app's data under a proven name) is skipped with a warning,
+ * once per form, as the live `change` listener skips it: a throw here would leave
+ * the forms after it unrestored and the resync frame unfinished (focus,
+ * `arizona:connected`).
  * @param {HTMLFormElement} form
  * @param {string} formId
  * @param {string} azChange
@@ -1406,7 +1408,11 @@ function replayForm(form, formId, azChange) {
         events = replayEvents(JSON.parse(azChange));
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        console.warn(`[arizona] az-change of form #${formId} was not replayed: ${detail}`);
+        // Once per form: the value stays bad, and every reconnect would repeat it.
+        warnOnce(
+            `[arizona] az-change of form #${formId} was not replayed: ${detail}`,
+            `az-change-replay:${formId}`,
+        );
         return;
     }
     if (events.length === 0) return;

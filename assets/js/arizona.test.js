@@ -5965,6 +5965,36 @@ describe('crash and mount-failure recovery', () => {
         });
     });
 
+    it('a bad az-change warns once per form, not on every reconnect', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const view =
+                '<div id="page" az-view>' +
+                '<form id="a" az-change="null"><input name="x" value=""></form>' +
+                '<form id="b" az-change="null"><input name="y" value=""></form></div>';
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            for (let i = 0; i < 3; i++) {
+                field('x').value = `x${i}`;
+                field('y').value = `y${i}`;
+                m.simulateClose(1006);
+                m.simulateOpen(true);
+                m.simulateMessage([[8, 'page', view]], null, true);
+                expect(field('x').value).toBe(`x${i}`);
+            }
+            const replayWarns = warn.mock.calls
+                .map((c) => String(c[0]))
+                .filter((w) => w.includes('was not replayed'));
+            expect(replayWarns).toHaveLength(2);
+            expect(replayWarns[0]).toContain('form #a');
+            expect(replayWarns[1]).toContain('form #b');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';
