@@ -423,9 +423,10 @@ Returns route-pattern path bindings. Lazy-loaded via the adapter on
 first access, cached in the returned request for subsequent calls.
 
 A value is the octets its percent-escapes encode, not necessarily UTF-8 (as with
-`params/1`): validate it (e.g. `unicode:characters_to_binary/1`) before rendering
-it, since a non-UTF-8 value fails a live frame and a dev-mode render and reaches
-the page as raw bytes in production.
+`params/1`): validate it (e.g. `unicode:characters_to_binary/1`) before
+rendering it, since a non-UTF-8 value fails a live frame, a dev-mode render and
+any `?json` render (`500`), and only a production `?html` page carries its raw
+bytes.
 """.
 -spec bindings(request()) -> {bindings(), request()}.
 bindings(#{bindings := Bindings} = Req) ->
