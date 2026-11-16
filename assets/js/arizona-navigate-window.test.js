@@ -421,6 +421,20 @@ describe('isFragmentOfPage', () => {
         expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
     });
 
+    // The same through an az-navigate click.
+    it.each([
+        ['/start#x', false],
+        ['/start?#x', true],
+    ])('an az-navigate click to %s on /start sends a frame: %s', async (url, frame) => {
+        await connected();
+        const a = document.createElement('a');
+        a.setAttribute('href', url);
+        a.setAttribute('az-navigate', '');
+        document.body.appendChild(a);
+        a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
+    });
+
     // Back and Forward across that edge cross between two pages, so each asks the
     // server again; across a fragment of the page they only scroll.
     it.each([
