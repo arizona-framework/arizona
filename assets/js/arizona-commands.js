@@ -650,6 +650,7 @@ function sendPush(holder, slot, name, frame, opts) {
         return;
     }
     if (_inFlight.get(holder)?.slots.has(slot)) {
+        _droppedRepeat = true;
         host.unsent(opts.transition, opts.ctls);
         (busyMarks(holder) ? holder : document).dispatchEvent(
             new CustomEvent('arizona:event-dropped', {
@@ -840,10 +841,24 @@ function canonicalCmdsText(text) {
  * @param {Element} el - the element that triggered the event
  * @param {Event|null} event - the DOM event (null for programmatic dispatch)
  * @param {Array<*>} cmds - parsed JSON command(s)
+ * @returns {boolean} false when a push_event among them was dropped as a repeat
  */
 export function executeJS(el, event, cmds) {
-    runCommands(el, event, cmds, '');
+    const outer = _droppedRepeat;
+    _droppedRepeat = false;
+    try {
+        runCommands(el, event, cmds, '');
+        return !_droppedRepeat;
+    } finally {
+        _droppedRepeat = outer;
+    }
 }
+
+// Whether the `executeJS` running now refused a push_event as a repeat
+// (`sendPush`), for its caller to tell: an az-submit whose event was dropped keeps
+// its fields, as one whose fetch was dropped does. Only a send judged as the
+// commands run counts -- a paced one is judged later, outside it.
+let _droppedRepeat = false;
 
 // The view transition whose inner commands are running now, if it waits for a
 // reply. A push_event among them captures it, so the transition settles on that

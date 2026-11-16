@@ -320,6 +320,28 @@ describe('push_event on_repeat: drop', () => {
         });
     });
 
+    describe('az-form-reset', () => {
+        it('a dropped submit keeps its fields, as a dropped fetch does', async () => {
+            await connect(
+                `<form id="f" az-submit='${SAVE}' az-form-reset><input name="q" /></form>`,
+            );
+            const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+            const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+            q.value = 'first';
+            submit(form);
+            expect(mock.sent()[0][2]).toEqual({ q: 'first' });
+            expect(q.value).toBe('');
+            q.value = 'second';
+            submit(form);
+            expect(mock.sent()).toHaveLength(1);
+            expect(q.value).toBe('second');
+            mock.reply(mock.sent()[0][3]);
+            submit(form);
+            expect(mock.sent()[1][2]).toEqual({ q: 'second' });
+            expect(q.value).toBe('');
+        });
+    });
+
     describe('server-owned controls', () => {
         it('a dropped repeat lets go of the controls it carried', async () => {
             await connect(

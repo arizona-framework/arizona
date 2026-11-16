@@ -483,6 +483,9 @@ export function bindDocumentEvents(target, signal, abort) {
             const raw = form.getAttribute('az-submit');
             /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
             let needs = {};
+            // A dropped repeat event (`on_repeat: 'drop'`) sent nothing, so the form
+            // keeps what the user typed for the next submit.
+            let sent = true;
             try {
                 const cmds = raw ? JSON.parse(raw) : null;
                 if (cmds) needs = socketNeeds(cmds, {}, false);
@@ -518,7 +521,7 @@ export function bindDocumentEvents(target, signal, abort) {
                     for (const el of formControls(form)) if (el.matches(sel)) pending.add(el);
                     for (const el of pending) flushTimer(el);
                 }
-                if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+                if (cmds) sent = executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 warnOnce(
@@ -528,7 +531,7 @@ export function bindDocumentEvents(target, signal, abort) {
             }
             // A fetch command resets on its own 2xx response (so a validation error
             // keeps the typed fields); everything else resets synchronously here.
-            if (!needs.fetch) maybeResetForm(form);
+            if (!needs.fetch && sent) maybeResetForm(form);
         },
         { signal },
     );

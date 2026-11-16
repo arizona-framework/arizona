@@ -12,6 +12,15 @@ const JS_PATCH = 24;
 const JS_SET_TITLE = 14;
 const JS_TRANSITION = 20;
 
+const DROP = { on_repeat: 'drop' };
+
+/** The event frames sent so far, parsed. */
+const sentFrames = () =>
+    _mock.posted
+        .filter((d) => d[0] === 1)
+        .map((d) => JSON.parse(d[1]))
+        .filter((f) => f[0] !== 'navigate' && f[0] !== 'patch');
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -266,6 +275,45 @@ describe('view transitions -- push_event', () => {
         const ref = _mock.lastRef();
         _mock.simulateMessage([[OP.TEXT, 'page:1', 'tick']]);
         expect(fn).not.toHaveBeenCalled();
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    // A repeat refused under `on_repeat: 'drop'` armed a transition of its own
+    // before it was judged; the first raise's, bound to the frame still in flight,
+    // gets the pending slot back and animates that frame's reply.
+    it('a dropped repeat leaves the first raise its animation', () => {
+        const fn = document.startViewTransition;
+        const drop = JSON.stringify([JS_TRANSITION, {}, [JS_PUSH_EVENT, 'save', {}, DROP]]);
+        document.body.innerHTML = `<div id="page" az-view><p az="0">old</p><button id="b" az-click='${drop}'>b</button></div>`;
+        const b = document.getElementById('b');
+        b.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const ref = _mock.lastRef();
+        b.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(sentFrames()).toHaveLength(1);
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    // With no transition displaced, a dropped repeat leaves its own armed: an event
+    // beside it under the same transition still goes out and is the one animated.
+    it('a dropped repeat leaves its transition to the event beside it', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML =
+            '<div id="page" az-view><p az="0">old</p><button id="b">b</button></div>';
+        const b = document.getElementById('b');
+        executeJS(b, null, [JS_PUSH_EVENT, 'save', {}, DROP]);
+        executeJS(b, null, [
+            JS_TRANSITION,
+            {},
+            [
+                [JS_PUSH_EVENT, 'save', {}, DROP],
+                [JS_PUSH_EVENT, 'other'],
+            ],
+        ]);
+        expect(sentFrames().map((f) => f[1])).toEqual(['save', 'other']);
+        const ref = _mock.lastRef();
+        expect(ref).toEqual(expect.any(Number));
         _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
         expect(fn).toHaveBeenCalledOnce();
     });

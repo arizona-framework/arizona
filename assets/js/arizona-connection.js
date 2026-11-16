@@ -502,7 +502,8 @@ function sendEvent(
 ) {
     if (_navRefs.size > 0 || _navAwaitResync || epoch !== _navEpoch) {
         console.warn(`[arizona] dropped stale event "${name}"`);
-        unsent(transition, ctls);
+        if (ctls) release(ctls);
+        if (awaitsTransition(transition)) armPendingTransition(null);
         return false;
     }
     // Sent, the raise is no longer pending (`carry`).
@@ -545,15 +546,28 @@ function awaitsTransition(transition) {
 }
 
 /**
- * `host.unsent`: a raised event will never be sent. It no longer keeps its controls
- * pending, and a transition waiting for its reply waits for none.
+ * `host.unsent`: a raised event was refused as a repeat (`on_repeat: 'drop'`) and
+ * will never be sent. It no longer keeps its controls pending. A transition it armed
+ * gives the pending slot back to the one it displaced -- the first raise's, whose
+ * frame is still in flight and is the one to animate -- and with none displaced it
+ * stays armed, for a command beside the dropped event under it to bind.
  * @param {typeof _pendingTransition} transition
  * @param {Array<[Element, string|boolean]>|null} ctls
  */
 function unsent(transition, ctls) {
     if (ctls) release(ctls);
-    if (awaitsTransition(transition)) armPendingTransition(null);
+    if (_displaced?.by === transition && awaitsTransition(transition)) {
+        _pendingTransition = _displaced.transition;
+        _transitionRef = _displaced.ref;
+        _displaced = null;
+    }
 }
+
+// The pending transition, and the ref of the frame it was bound to, that the last
+// one armed (`by`) displaced, for `unsent` to put back. Dropped once that frame's
+// reply lands or can no longer come.
+/** @type {{by: {types?: string[], kind: 'replace'|'any'}, transition: {types?: string[], kind: 'replace'|'any'}, ref: number|null}|null} */
+let _displaced = null;
 
 // What runs when the reply to an event frame lands, by its reply ref: the release of
 // a `push_event`'s `on_repeat: 'drop'` guard. Run before the reply's ops and effects
@@ -567,14 +581,17 @@ const _replyWaiters = new Map();
  * @param {number|null} ref
  */
 function settleEventReplies(ref) {
-    const waiter = ref === null ? undefined : _replyWaiters.get(ref);
-    if (!waiter || ref === null) return;
+    if (ref === null) return;
+    if (_displaced?.ref === ref) _displaced = null;
+    const waiter = _replyWaiters.get(ref);
+    if (!waiter) return;
     _replyWaiters.delete(ref);
     waiter();
 }
 
 /** Run every reply waiter: the socket they wait on went away. */
 function dropReplyWaiters() {
+    _displaced = null;
     const waiters = [..._replyWaiters.values()];
     _replyWaiters.clear();
     for (const w of waiters) w();
@@ -2001,6 +2018,11 @@ setHost({
     // own transition, which then dies with the dropped event.
     armTransition: (t) => {
         if (t.kind === 'any' && (_navRefs.size > 0 || _navAwaitResync)) return;
+        _displaced = _pendingTransition && {
+            by: t,
+            transition: _pendingTransition,
+            ref: _transitionRef,
+        };
         armPendingTransition(t);
     },
     keepOrigin,
