@@ -367,10 +367,12 @@ and is converted (and validated) by `to_bin/1`. The usual non-UTF-8 source is a 
 `<<"café">>`: one byte per character, Latin-1. Write `~"café"` or `<<"café"/utf8>>`, or
 convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
 Path bindings and query params are the octets their percent-escapes encode, not
-necessarily UTF-8: validate one (e.g. `unicode:characters_to_binary/1`) before rendering
-it, since a non-UTF-8 value fails a dev-mode render and any `?json` render (`500`),
-closes the socket of a navigate to its page (`4501`), and only a production `?html` page
-carries its raw bytes.
+necessarily UTF-8, so validate a value before rendering it: a non-UTF-8 one fails a
+dev-mode render and any `?json` render (`500`), closes the socket of a navigate to its
+page (`4501`), and only a production `?html` page carries its raw bytes.
+`unicode:characters_to_binary/1` returns a binary unchanged only when it is UTF-8; apply
+it to each binary, since a `*name` binding is a list of segments (the call would join
+them into one) and a bare query flag (`?debug`) is `true`.
 
 - A non-ASCII `<<"...">>` that is a **template static** (content or attribute value) is
   folded as UTF-8 by the parse transform and renders correctly.
