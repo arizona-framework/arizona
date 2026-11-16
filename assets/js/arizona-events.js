@@ -1,4 +1,11 @@
-import { closeSubmit, executeJS, flushTimer, openSubmit, socketNeeds } from './arizona-commands.js';
+import {
+    closeSubmit,
+    executeJS,
+    flushTimer,
+    isCommandList,
+    openSubmit,
+    socketNeeds,
+} from './arizona-commands.js';
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
@@ -406,10 +413,11 @@ function ignoredSubmit(carrier, submitted) {
  * Tell the console and the app that a submit ran nothing: every drop warns and
  * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
  * @param {Element} form
- * @param {'disconnected'|'unproven'} reason
+ * @param {'disconnected'|'unproven'|'invalid'} reason
+ * @param {string} [detail] what made it so, for the console
  */
-function dropSubmit(form, reason) {
-    console.warn(`[arizona] az-submit dropped: ${reason}`);
+function dropSubmit(form, reason, detail) {
+    console.warn(`[arizona] az-submit dropped: ${reason}${detail ? ` (${detail})` : ''}`);
     form.dispatchEvent(
         new CustomEvent('arizona:submit-dropped', { bubbles: true, detail: { reason } }),
     );
@@ -481,12 +489,25 @@ export function bindDocumentEvents(target, signal, abort) {
                 return;
             }
             const raw = form.getAttribute('az-submit');
+            // A value that is not a command list (`isCommandList`: one that does not
+            // parse, is no array, or holds an item that is no command the server
+            // encoder builds) runs nothing, so it sends nothing and keeps the
+            // fields: a drop, which the app hears about. A bare `az-submit` holds no
+            // commands and runs as an empty list.
+            /** @type {*} */
+            let cmds = null;
             /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
             let needs = {};
+            try {
+                cmds = raw ? JSON.parse(raw) : null;
+                if (raw && !isCommandList(cmds)) throw new Error('not a command list');
+                if (cmds) needs = socketNeeds(cmds, {}, false);
+            } catch (err) {
+                dropSubmit(form, 'invalid', err instanceof Error ? err.message : String(err));
+                return;
+            }
             openSubmit(form, e);
             try {
-                const cmds = raw ? JSON.parse(raw) : null;
-                if (cmds) needs = socketNeeds(cmds, {}, false);
                 // While the socket is down (the worker drops pre-open sends):
                 // - an SPA navigation alone degrades to a full load of its URL, as a
                 //   disconnected az-navigate click does, and resets as the same
@@ -532,7 +553,8 @@ export function bindDocumentEvents(target, signal, abort) {
             }
             // A fetch command resets on its own 2xx response (so a validation error
             // keeps the typed fields); everything else resets here, by what became of
-            // the push_events it raised (`closeSubmit`).
+            // the push_events it raised (`closeSubmit`) -- a command that throws as it
+            // runs (a URL that does not parse) included: what ran before it stands.
             if (!needs.fetch) closeSubmit(form, e);
         },
         { signal },

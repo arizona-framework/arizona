@@ -255,6 +255,78 @@ export const JS_PUSH_EVENT = 0,
     JS_SHOW_MODAL = 28,
     JS_CLOSE_MODAL = 29;
 
+/**
+ * The fewest elements each command the server encoder builds has, its opcode
+ * included (`arizona_js`, `arizona_effect`, `arizona_os`): what `isCommandList`
+ * holds a command to. Keyed by the opcodes above, so a new command is added here
+ * beside its code.
+ * @type {Map<number, number>}
+ */
+export const COMMAND_ARITY = new Map([
+    [JS_PUSH_EVENT, 2],
+    [JS_TOGGLE, 2],
+    [JS_SHOW, 2],
+    [JS_HIDE, 2],
+    [JS_ADD_CLASS, 3],
+    [JS_REMOVE_CLASS, 3],
+    [JS_TOGGLE_CLASS, 3],
+    [JS_SET_ATTR, 4],
+    [JS_REMOVE_ATTR, 3],
+    [JS_DISPATCH_EVENT, 3],
+    [JS_NAVIGATE, 2],
+    [JS_FOCUS, 2],
+    [JS_BLUR, 2],
+    [JS_SCROLL_TO, 2],
+    [JS_SET_TITLE, 2],
+    [JS_RELOAD, 1],
+    [JS_ON_KEY, 3],
+    [JS_SET_LOCAL, 3],
+    [JS_REQUEST_PIP, 2],
+    [JS_EXIT_PIP, 2],
+    [JS_TRANSITION, 3],
+    [JS_TOGGLE_ATTR, 3],
+    [JS_FETCH, 3],
+    [JS_OS, 2],
+    [JS_PATCH, 2],
+    [JS_RESET_FORM, 2],
+    [JS_SELECT, 2],
+    [JS_COPY_TO_CLIPBOARD, 2],
+    [JS_SHOW_MODAL, 2],
+    [JS_CLOSE_MODAL, 2],
+]);
+
+/**
+ * Whether `value` is a command list as the server encoder emits one: a command
+ * (`[OpCode, ...Args]`, a known opcode with at least its arity), or an array of
+ * commands, `[]` included (the encoder flattens nested lists and drops `[]`
+ * items, so it never emits either inside a list). The commands a `transition` or
+ * an `on_key` runs and a `fetch`'s `on_error` are command lists too.
+ * @param {*} value
+ * @returns {boolean}
+ */
+export function isCommandList(value) {
+    if (!Array.isArray(value)) return false;
+    if (value.length === 0) return true;
+    return Array.isArray(value[0]) ? value.every(isCommand) : isCommand(value);
+}
+
+/**
+ * @param {*} cmd
+ * @returns {boolean}
+ */
+function isCommand(cmd) {
+    if (!Array.isArray(cmd)) return false;
+    const arity = COMMAND_ARITY.get(cmd[0]);
+    if (arity === undefined || cmd.length < arity) return false;
+    if (cmd[0] === JS_TRANSITION || cmd[0] === JS_ON_KEY) return isCommandList(cmd[2]);
+    if (cmd[0] === JS_FETCH) {
+        const opts = cmd[2];
+        if (opts === null || typeof opts !== 'object' || Array.isArray(opts)) return false;
+        return opts.on_error === undefined || isCommandList(opts.on_error);
+    }
+    return true;
+}
+
 // arizona_js credentials atoms -> fetch() credentials mode
 /** @type {Record<string, RequestCredentials>} */
 const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omit' };

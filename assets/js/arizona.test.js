@@ -15,7 +15,8 @@ import {
     setAll,
 } from './arizona.js';
 import { applyChoosers } from './arizona-attrs.js';
-import { maybeResetForm } from './arizona-commands.js';
+import * as commands from './arizona-commands.js';
+import { isCommandList, maybeResetForm } from './arizona-commands.js';
 import { embedAttrs, TEST_ATTRS } from './test-proofs.js';
 import { shadowNamedControls } from './test-shadow.js';
 
@@ -8793,6 +8794,93 @@ describe('form submit', () => {
         history.replaceState(null, '', '/');
     });
 
+    // A bare az-submit holds no commands: it runs as an empty list, so the submit
+    // is no drop, and an az-form-reset form resets as one that raised no
+    // push_event does.
+    it('runs a bare az-submit as an empty command list', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-form-reset az-submit><input name="q" value=""></form>`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        document.querySelector('[name=q]').value = 'typed';
+        const form = document.getElementById('f');
+        const dropped = vi.fn();
+        form.addEventListener('arizona:submit-dropped', dropped);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        try {
+            form.dispatchEvent(ev);
+        } finally {
+            warn.mockRestore();
+        }
+        expect(ev.defaultPrevented).toBe(true);
+        expect(dropped).not.toHaveBeenCalled();
+        expect(document.querySelector('[name=q]').value).toBe('');
+    });
+
+    // An az-submit whose value is not a command list -- one that does not parse,
+    // parses to something else, or is an array of malformed commands -- runs
+    // nothing, so it sends nothing and keeps its fields, with the socket up or
+    // down. It is a drop the app hears about.
+    it.each([
+        ['[0,', 'open'],
+        ['[0,', 'never'],
+        ['{}', 'open'],
+        ['5', 'open'],
+        ['"save"', 'open'],
+        ['null', 'never'],
+        ['[[0,"x"],null]', 'open'],
+        ['[[0,"x"],null]', 'never'],
+        ['[[20]]', 'open'],
+        ['[20,{}]', 'never'],
+        ['[[16,"Enter"]]', 'open'],
+        ['[null]', 'open'],
+        ['[{}]', 'open'],
+        ['[5]', 'open'],
+        ['[[99]]', 'open'],
+        ['[20,{},5]', 'open'],
+        ['[[20,{},5]]', 'never'],
+        ['[[16,"Enter",5]]', 'open'],
+        ['[[0,"x"],5]', 'open'],
+        ['[[22,"/x",{"on_error":5}]]', 'open'],
+        ['[[22,"/x",5]]', 'open'],
+        ['[[22,"/x",null]]', 'open'],
+        ['[[22,"/x",[]]]', 'open'],
+    ])(
+        'keeps the fields of an az-form-reset submit whose value is %s (%s)',
+        async (raw, socket) => {
+            vi.resetModules();
+            const mod = await import('./arizona.js');
+            setupView(
+                'page',
+                `<form id="f" az-form-reset az-submit='${raw}'><input name="q" value=""></form>`,
+            );
+            mock = setupMockWorker(mod);
+            if (socket === 'open') mock.simulateOpen();
+            document.querySelector('[name=q]').value = 'typed';
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const form = document.getElementById('f');
+            const seen = [];
+            const onDrop = (/** @type {Event} */ d) => seen.push(d);
+            form.addEventListener('arizona:submit-dropped', onDrop);
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            try {
+                form.dispatchEvent(ev);
+                expect(
+                    warn.mock.calls.some(([m]) => m.includes('az-submit dropped: invalid')),
+                ).toBe(true);
+            } finally {
+                form.removeEventListener('arizona:submit-dropped', onDrop);
+                warn.mockRestore();
+            }
+            expect(ev.defaultPrevented).toBe(true);
+            expect(seen.map((d) => d.detail)).toEqual([{ reason: 'invalid' }]);
+            expect(document.querySelector('[name=q]').value).toBe('typed');
+            expect(mock.getSentMessages()).toHaveLength(0);
+        },
+    );
+
     // A navigation whose URL does not parse throws as it runs, with the socket up
     // (inside its commands) or down (degraded to a load): it started, so the
     // submit resets alike.
@@ -11620,5 +11708,147 @@ describe('hook updated() on container child-list changes', () => {
         applyOps([[OP.LIST_PATCH, 'v:0', []]]);
         // Nothing was mutated, so this is not an update TO the container.
         expect(containerCalls()).toBe(0);
+    });
+});
+
+describe('isCommandList', () => {
+    // What the server encoder emits (`arizona_effect:encode_json/1` of every
+    // builder, a nested list and `[]`), captured from `erl`: none may be refused.
+    it.each([
+        '[0,"inc"]',
+        '[0,"inc",{"a":1}]',
+        '[0,"inc",{},{"on_repeat":"drop"}]',
+        '[1,"#m"]',
+        '[2,"#m"]',
+        '[3,"#m"]',
+        '[4,"#m","c"]',
+        '[5,"#m","c"]',
+        '[6,"#m","c"]',
+        '[7,"#m","a","v"]',
+        '[7,"#m","az-click",[0,"x"]]',
+        '[8,"#m","a"]',
+        '[21,"#m","d"]',
+        '[21,"#m","t","a","b"]',
+        '[9,"ev",{}]',
+        '[10,"/p"]',
+        '[10,"/p",{"full":true}]',
+        '[24,"/p"]',
+        '[24,"/p",{"replace":true}]',
+        '[11,"#m"]',
+        '[12,"#m"]',
+        '[13,"#m"]',
+        '[13,"#m",{"block":"center"}]',
+        '[14,"T"]',
+        '[15]',
+        '[16,"Enter",[0,"go"]]',
+        '[16,["Enter","Escape"],[[0,"go"],[3,"#m"]]]',
+        '[16,"Enter",[]]',
+        '[17,"k","v"]',
+        '[17,"k","v","v1"]',
+        '[17,"k","v",true]',
+        '[18,"v"]',
+        '[18,"v",{"width":1}]',
+        '[19,"v"]',
+        '[20,{},[1,"#m"]]',
+        '[20,{"types":["s"]},[[1,"#m"],[10,"/p"]]]',
+        '[20,{},[]]',
+        '[22,"/x",{}]',
+        '[22,"/x",{"method":"post","on_error":[1,"#e"]}]',
+        '[22,"/x",{"on_error":[[1,"#e"],[3,"#f"]]}]',
+        '[22,"/x",{"on_error":[]}]',
+        '[23,"focus"]',
+        '[23,"window_title","T"]',
+        '[25,"#f"]',
+        '[26,"#t"]',
+        '[27,"#t"]',
+        '[28,"#d"]',
+        '[29,"#d"]',
+        '[]',
+        '[[0,"inc"],[0,"inc",{"a":1}],[0,"inc",{},{"on_repeat":"drop"}],[1,"#m"],[2,"#m"],[3,"#m"],[4,"#m","c"],[5,"#m","c"],[6,"#m","c"],[7,"#m","a","v"],[7,"#m","az-click",[0,"x"]],[8,"#m","a"],[21,"#m","d"],[21,"#m","t","a","b"],[9,"ev",{}],[10,"/p"],[10,"/p",{"full":true}],[24,"/p"],[24,"/p",{"replace":true}],[11,"#m"],[12,"#m"],[13,"#m"],[13,"#m",{"block":"center"}],[14,"T"],[15],[16,"Enter",[0,"go"]],[16,["Enter","Escape"],[[0,"go"],[3,"#m"]]],[16,"Enter",[]],[17,"k","v"],[17,"k","v","v1"],[17,"k","v",true],[18,"v"],[18,"v",{"width":1}],[19,"v"],[20,{},[1,"#m"]],[20,{"types":["s"]},[[1,"#m"],[10,"/p"]]],[20,{},[]],[22,"/x",{}],[22,"/x",{"method":"post","on_error":[1,"#e"]}],[22,"/x",{"on_error":[[1,"#e"],[3,"#f"]]}],[22,"/x",{"on_error":[]}],[23,"focus"],[23,"window_title","T"],[25,"#f"],[26,"#t"],[27,"#t"],[28,"#d"],[29,"#d"]]',
+        '[[1,"#a"],[3,"#b"],[0,"x"]]',
+    ])('accepts %s', (json) => {
+        expect(isCommandList(JSON.parse(json))).toBe(true);
+    });
+
+    // Anything else is refused -- returned false, never thrown, so the caller
+    // can tell a bad value from a broken check.
+    it.each([
+        '{}',
+        '5',
+        'null',
+        '[null]',
+        '[{}]',
+        '[5]',
+        '[[99]]',
+        '[[0,"x"],5]',
+        '[20,{},5]',
+        '[[16,"Enter",5]]',
+        '[[22,"/x",5]]',
+        '[[22,"/x",null]]',
+        '[[22,"/x",[]]]',
+        '[[22,"/x",{"on_error":5}]]',
+    ])('refuses %s', (json) => {
+        expect(isCommandList(JSON.parse(json))).toBe(false);
+    });
+
+    // The fewest elements each opcode's builder emits, read off the encoder's
+    // own output (`arizona_effect:encode_json/1` of every `arizona_js`,
+    // `arizona_effect` and `arizona_os` builder, as captured above): written out
+    // here, so a wrong entry in `COMMAND_ARITY` cannot also be the expectation.
+    const BUILT_ARITY = {
+        0: 2,
+        1: 2,
+        2: 2,
+        3: 2,
+        4: 3,
+        5: 3,
+        6: 3,
+        7: 4,
+        8: 3,
+        9: 3,
+        10: 2,
+        11: 2,
+        12: 2,
+        13: 2,
+        14: 2,
+        15: 1,
+        16: 3,
+        17: 3,
+        18: 2,
+        19: 2,
+        20: 3,
+        21: 3,
+        22: 3,
+        23: 2,
+        24: 2,
+        25: 2,
+        26: 2,
+        27: 2,
+        28: 2,
+        29: 2,
+    };
+
+    it('holds each command to what its builder emits', () => {
+        expect(Object.fromEntries(commands.COMMAND_ARITY)).toEqual(BUILT_ARITY);
+    });
+
+    // A command one element short of what its builder emits is refused, for
+    // every opcode.
+    it('refuses a command short of its arity, for every opcode', () => {
+        for (const [op, arity] of Object.entries(BUILT_ARITY)) {
+            if (arity < 2) continue;
+            const short = [Number(op), ...Array(arity - 2).fill('x')];
+            expect([op, isCommandList(short)]).toEqual([op, false]);
+        }
+    });
+
+    // Every opcode the interpreter knows has an arity, so a new command is never
+    // refused for want of one.
+    it('knows every opcode', () => {
+        const ops = Object.entries(commands)
+            .filter(([k]) => k.startsWith('JS_'))
+            .map(([, v]) => v);
+        expect(ops.length).toBeGreaterThan(0);
+        for (const op of ops) expect(commands.COMMAND_ARITY.has(op)).toBe(true);
     });
 });
