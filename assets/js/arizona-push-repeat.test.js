@@ -47,6 +47,18 @@ async function connect(html) {
         close: (code = 1006) => onmessage({ data: [2, code] }),
         reply: (ref, ops = null, effects = null) =>
             onmessage({ data: [0, ops, effects, false, null, ref] }),
+        /** The reconnect's resync, replacing the view with `body`. */
+        resync: (body) =>
+            onmessage({
+                data: [
+                    0,
+                    [[mod.OP.REPLACE, 'page', `<div id="page" az-view>${body}</div>`]],
+                    null,
+                    true,
+                    null,
+                    null,
+                ],
+            }),
         /** The event frames sent, parsed. */
         sent: () =>
             posted
@@ -347,6 +359,18 @@ describe('push_event on_repeat: drop', () => {
             q.value = v;
         };
 
+        it('resets at once when it raised no push_event', async () => {
+            await connect(
+                `<form id="f" az-submit='${cmd([1, '#m'])}' az-form-reset><input name="q" /></form><p id="m"></p>`,
+            );
+            const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+            const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+            typeIn(q, 'typed');
+            submit(form);
+            expect(document.getElementById('m')?.hidden).toBe(true);
+            expect(q.value).toBe('');
+        });
+
         it('resets when one of them was sent, though another was dropped', async () => {
             await connect(
                 `<form id="f" az-submit='${cmd([
@@ -435,6 +459,28 @@ describe('push_event on_repeat: drop', () => {
                 // `save` is a repeat of the first, dropped; `log` went out.
                 expect(mock.sent().map((f) => f[1])).toEqual(['save', 'log', 'log']);
                 expect(q.value).toBe('');
+            });
+
+            it('resets the form a reconnect put in its place', async () => {
+                vi.useFakeTimers();
+                await connect(THROTTLED());
+                const q = () =>
+                    /** @type {HTMLInputElement} */ (document.querySelector('#f input'));
+                const form = () => /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                typeIn(q(), 'first');
+                submit(form());
+                mock.reply(mock.sent()[0][3]);
+                typeIn(q(), 'second');
+                submit(form());
+                const old = form();
+                mock.close();
+                mock.open(true);
+                mock.resync(THROTTLED());
+                expect(form()).not.toBe(old);
+                expect(q().value).toBe('second');
+                vi.advanceTimersByTime(1000);
+                expect(mock.sent().map((f) => f[2].q)).toEqual(['first', 'second']);
+                expect(q().value).toBe('');
             });
 
             it('resets once its trailing send goes out, keeping what was typed since', async () => {

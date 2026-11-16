@@ -670,10 +670,12 @@ function sendPush(holder, slot, name, frame, opts) {
  * became of them, which decides its `az-form-reset` (`openSubmit`/`closeSubmit`).
  * `raised` counts them as its commands run, `judged` as each send is judged (at
  * once, or when its throttle fires) or replaced by a later raise, `sent` whether one
- * went out rather than being refused as a repeat. `shown` is what the form's
- * controls showed as its commands ran, for a reset its pacing deferred.
+ * went out rather than being refused as a repeat. `reset` is the reset its pacing
+ * deferred -- the form and what its controls showed as its commands ran -- held in
+ * `_resets` meanwhile, so a reconnect resync moves it onto the form that replaced
+ * this one (`rehome`), as it moves a fetch's.
  * @typedef {{form: Element, raised: number, judged: number, sent: boolean,
- *   ran: boolean, shown?: Map<Element, unknown>}} Submission
+ *   ran: boolean, reset?: PendingReset}} Submission
  */
 
 /**
@@ -713,9 +715,11 @@ export function closeSubmit(form, event) {
     if (sub.raised === 0) {
         maybeResetForm(form);
     } else if (sub.judged < sub.raised) {
-        sub.shown = withAllControls(form, () =>
-            formSnapshot(/** @type {HTMLFormElement} */ (form)),
-        );
+        sub.reset = {
+            form,
+            sent: withAllControls(form, () => formSnapshot(/** @type {HTMLFormElement} */ (form))),
+        };
+        _resets.add(sub.reset);
     } else {
         finishSubmit(sub);
     }
@@ -736,7 +740,8 @@ function judgeSubmit(sub, sent) {
 /** @param {Submission} sub */
 function finishSubmit(sub) {
     if (sub.judged < sub.raised) return;
-    if (sub.sent) maybeResetForm(sub.form, sub.shown);
+    if (sub.reset) _resets.delete(sub.reset);
+    if (sub.sent) maybeResetForm(sub.reset?.form ?? sub.form, sub.reset?.sent);
 }
 
 /**
