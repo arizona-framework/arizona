@@ -204,17 +204,24 @@ list_routes_listener_without_routes(_Config) ->
     ?assertMatch({reply, ~"host_http: (no routes)", _}, call(~"list_routes", #{})).
 
 %% A listener reports its adapter's own route shapes beside core's, and their
-%% second element need not be a path: each is listed as the term it is.
+%% second element need not be a path: each is listed as the term it is, on one
+%% line however long it is.
 list_routes_prints_adapter_route_shape(_Config) ->
+    Long = #{codecs => [very_long_codec_module_name_one, very_long_codec_module_name_two]},
     ok = arizona_server_registry:listener_up(arizona_fake_server, host_http, [
         {grpc, [chat_service], #{health => true}},
+        {grpc, [chat_service], handler, Long},
         {live, ~"/host", host_page, #{}}
     ]),
     {reply, Text, _} = call(~"list_routes", #{}),
-    ?assertMatch(
-        {_, _},
-        binary:match(Text, ~"\nhost_http:\n  {grpc,[chat_service],#{health => true}}\n  live /host")
-    ).
+    Expected = iolist_to_binary([
+        ~"\nhost_http:",
+        ~"\n  {grpc,[chat_service],#{health => true}}",
+        ~"\n  ",
+        io_lib:format("~0tp", [{grpc, [chat_service], handler, Long}]),
+        ~"\n  live /host"
+    ]),
+    ?assertMatch({_, _}, binary:match(Text, Expected)).
 
 list_routes_none_running(_Config) ->
     ok = arizona_server_registry:listener_down(arizona_http),
