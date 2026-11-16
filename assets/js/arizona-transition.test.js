@@ -195,6 +195,28 @@ describe('view transitions -- navigation', () => {
         expect(fn).toHaveBeenCalledOnce();
     });
 
+    it('a transition around a fragment navigate under another base waits for the page swap', () => {
+        const fn = document.startViewTransition;
+        const base = document.createElement('base');
+        base.setAttribute('href', '/sub/');
+        document.head.appendChild(base);
+        history.replaceState(null, '', '/users/1');
+        document.body.innerHTML =
+            '<div id="page" az-view><h1 az="0">a</h1><section id="sec">s</section></div>';
+        try {
+            // `#sec` names `/sub/`, another page: a frame goes out and the
+            // transition animates its OP_REPLACE, not a scroll in place.
+            executeJS(document.body, null, [JS_TRANSITION, {}, [JS_NAVIGATE, '#sec']]);
+        } finally {
+            base.remove();
+        }
+        expect(location.pathname + location.hash).toBe('/sub/#sec');
+        expect(_mock.posted.some((d) => d[0] === 1)).toBe(true);
+        expect(fn).not.toHaveBeenCalled();
+        _mock.simulateMessage([replaceOp('Other')]);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
     it('ignores a stray text/attr tick before the page swap', () => {
         const fn = document.startViewTransition;
         document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';

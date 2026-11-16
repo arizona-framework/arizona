@@ -29,6 +29,7 @@ import {
     isSamePage,
     isWebUrl,
     loadPage,
+    pageUrl,
 } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
@@ -1137,10 +1138,11 @@ function navRoute(u) {
 
 /**
  * Run a `navigate`/`patch`, from an effect or an `az-navigate`/`az-patch` click.
- * The URL resolves against the CURRENT page, as `pushState` resolves it, so the
+ * The URL resolves against the document base, as `pushState` resolves it, so the
  * frame asks the server for the page the address bar will show (`?page=2` on
- * `/users/1/` is `/users/1/?page=2`). A link to this very URL is a real
- * navigation too; only a new fragment on this page scrolls in place.
+ * `/users/1/` is `/users/1/?page=2`, and `x` under `<base href="/sub/">` is
+ * `/sub/x`). A link to this very URL is a real navigation too; only a new
+ * fragment on this page scrolls in place.
  *
  * `transition` (when given) is the view transition this navigation runs under,
  * `null` for none. It becomes `_pendingTransition` only if a frame is sent: a
@@ -1153,7 +1155,7 @@ function navRoute(u) {
  * @param {typeof _pendingTransition} [transition]
  */
 function navigateEffect(full, opts, kind, transition) {
-    const u = new URL(full, location.href);
+    const u = pageUrl(full);
     const route = navRoute(u);
     if (route === 'leave') {
         leavePage(full, opts.replace);
@@ -2027,7 +2029,7 @@ setHost({
     ready: () => _connected,
     epoch: () => _navEpoch,
     sendEvent,
-    awaitsReply: (url) => navRoute(new URL(url, location.href)) === 'server',
+    awaitsReply: (url) => navRoute(pageUrl(url)) === 'server',
     // An 'any' transition armed inside the page-swap window waits for an event
     // the window is about to drop; arming it would only displace the navigate's
     // own transition, which then dies with the dropped event.

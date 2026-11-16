@@ -9,13 +9,23 @@ export function warnOnce(msg, key = msg) {
 }
 
 /**
+ * The page a navigation URL names, resolved as the browser resolves an `<a href>`,
+ * `history.pushState` or `location.assign`: against the document base
+ * (`<base href>`, else the page itself).
+ * @param {string} url
+ */
+export function pageUrl(url) {
+    return new URL(url, document.baseURI);
+}
+
+/**
  * Whether `url` may be loaded as a page: only http(s). Any other scheme
  * (`javascript:`, `data:`) would run in this page, and the URL can come from a
  * server that echoed a request parameter -- so it is refused with a warning.
  * @param {string} url
  */
 export function isWebUrl(url) {
-    const { protocol } = new URL(url, location.href);
+    const { protocol } = pageUrl(url);
     if (protocol === 'http:' || protocol === 'https:') return true;
     console.warn('[arizona] refused non-http(s) URL:', url);
     return false;

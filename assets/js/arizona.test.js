@@ -7027,6 +7027,60 @@ describe('navigation scroll', () => {
         ]);
     });
 
+    it('a relative navigate/patch effect resolves against the document base, as history does', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<section id="sec">x</section>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const base = document.createElement('base');
+        base.setAttribute('href', '/sub/');
+        document.head.appendChild(base);
+        const len0 = history.length;
+        try {
+            // The browser resolves `<a href>` and pushState against `<base href>`,
+            // so the frame must ask for the page the address bar shows.
+            history.replaceState(null, '', '/users/1');
+            mod.applyEffects([[10, 'x?q=1']]);
+            expect(location.pathname + location.search).toBe('/sub/x?q=1');
+            expect(mock.getSentMessages().at(-1)).toEqual([
+                'navigate',
+                { path: '/sub/x', qs: 'q=1' },
+                expect.any(Number),
+            ]);
+            history.replaceState(null, '', '/users/1');
+            mod.applyEffects([[24, 'edit', { replace: true }]]);
+            expect(location.pathname).toBe('/sub/edit');
+            // A fragment-only target names the base page, not this one, so it is
+            // a navigation here...
+            history.replaceState(null, '', '/users/1');
+            mod.applyEffects([[10, '#sec']]);
+            expect(location.pathname + location.hash).toBe('/sub/#sec');
+            // ...and a scroll in place on the base page itself.
+            history.replaceState(null, '', '/sub/');
+            mod.applyEffects([[10, '#sec', { replace: true }]]);
+            expect(location.pathname + location.hash).toBe('/sub/#sec');
+            // Root-relative and absolute targets ignore the base.
+            mod.applyEffects([[10, '/abs']]);
+            expect(location.pathname).toBe('/abs');
+            mod.applyEffects([[24, `${location.origin}/full?a=1`]]);
+            expect(location.pathname + location.search).toBe('/full?a=1');
+        } finally {
+            base.remove();
+        }
+        expect(history.length).toBe(len0 + 4);
+        const frames = mock
+            .getSentMessages()
+            .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        expect(frames).toEqual([
+            ['navigate', { path: '/sub/x', qs: 'q=1' }, expect.any(Number)],
+            ['patch', { path: '/sub/edit', qs: '' }, expect.any(Number)],
+            ['navigate', { path: '/sub/', qs: '' }, expect.any(Number)],
+            ['navigate', { path: '/abs', qs: '' }, expect.any(Number)],
+            ['patch', { path: '/full', qs: 'a=1' }, expect.any(Number)],
+        ]);
+    });
+
     it('a hash-only navigate/patch effect scrolls in place, no server round trip', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
