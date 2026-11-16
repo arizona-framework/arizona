@@ -209,5 +209,24 @@ parse_caps(Bin) ->
         error:_ -> #{}
     end.
 
-encode_pair({K, true}) -> uri_string:quote(K);
-encode_pair({K, V}) -> [uri_string:quote(K), $=, uri_string:quote(V)].
+encode_pair({K, true}) -> quote(K);
+encode_pair({K, V}) -> [quote(K), $=, quote(V)].
+
+%% A parsed param is the octets its escapes encode, UTF-8 or not, and the page's
+%% query string reaches the upgrade as the client copied it, so `?x=%FF` arrives
+%% here as `<<255>>`. Escape every octet but the unreserved ones: `uri_string:quote/1`
+%% throws on one that is not UTF-8, failing the upgrade with a `500`.
+quote(Bin) ->
+    <<<<(quote_octet(C))/binary>> || <<C>> <= Bin>>.
+
+quote_octet(C) when
+    (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z) orelse
+        (C >= $0 andalso C =< $9) orelse
+        C =:= $- orelse C =:= $. orelse C =:= $_ orelse C =:= $~
+->
+    <<C>>;
+quote_octet(C) ->
+    <<$%, (hex_digit(C bsr 4)), (hex_digit(C band 15))>>.
+
+hex_digit(N) when N < 10 -> $0 + N;
+hex_digit(N) -> $A + N - 10.

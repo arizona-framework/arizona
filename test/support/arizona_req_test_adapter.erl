@@ -9,7 +9,8 @@ the raw map so tests can assert the updated raw is threaded through, and
 fails with the raw value's `body_error` when it carries one.
 
 `resolve_route/3` looks up a `routes` map on the raw value
-(`#{Path => {Handler, RouteOpts}}`); useful for exercising the optional
+(`#{Path => {Handler, RouteOpts}}`), keeping the query string it was handed
+as `resolved_qs` on the request it returns; useful for exercising the optional
 `arizona_req` callback wiring at the unit-test layer without spinning
 up a real listener.
 """.
@@ -50,10 +51,12 @@ scheme(Raw) ->
         #{} -> http
     end.
 
-resolve_route(Path, _Qs, #{routes := Routes} = Raw) ->
+resolve_route(Path, Qs, #{routes := Routes} = Raw) ->
     case Routes of
         #{Path := {Handler, RouteOpts}} ->
-            NavReq = arizona_req:new(?MODULE, Raw, #{method => ~"GET", path => Path}),
+            NavReq = arizona_req:new(?MODULE, Raw#{resolved_qs => Qs}, #{
+                method => ~"GET", path => Path
+            }),
             {ok, Handler, RouteOpts, NavReq};
         #{} ->
             error

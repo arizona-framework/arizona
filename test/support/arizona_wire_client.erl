@@ -31,8 +31,8 @@ kept for the next `ws_recv/1,2` instead of being dropped.
 -type ws_opts() :: #{
     %% Extra request headers (e.g. `Cookie`, `Origin`).
     headers => headers(),
-    %% Extra raw query-string pairs appended after `_az_path`.
-    query => [{binary(), binary()}]
+    %% Extra raw query-string pairs appended after `_az_path`; `true` is a bare key.
+    query => [{binary(), binary() | true}]
 }.
 -type frame() ::
     {text, binary()}
@@ -233,7 +233,7 @@ ws_upgrade_head(Port, Path, Opts) ->
     end.
 
 upgrade_request(Port, Path, Opts) ->
-    Query = [[~"&", K, ~"=", V] || {K, V} <- maps:get(query, Opts, [])],
+    Query = [query_pair(Pair) || Pair <- maps:get(query, Opts, [])],
     Headers = [
         {~"host", <<"localhost:", (integer_to_binary(Port))/binary>>},
         {~"upgrade", ~"websocket"},
@@ -243,6 +243,9 @@ upgrade_request(Port, Path, Opts) ->
         | maps:get(headers, Opts, [])
     ],
     [~"GET /ws?_az_path=", Path, Query, ~" HTTP/1.1\r\n", header_lines(Headers), ~"\r\n"].
+
+query_pair({K, true}) -> [~"&", K];
+query_pair({K, V}) -> [~"&", K, ~"=", V].
 
 -spec ws_send_json(gen_tcp:socket(), term()) -> ok.
 ws_send_json(Sock, Term) ->
