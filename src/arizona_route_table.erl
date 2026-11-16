@@ -13,7 +13,8 @@ every adapter routes by the same rules. A server whose router does express them
 refuses: a route kind the adapter lacks (`c:arizona_server:capabilities/0`), a
 `*name` followed by more segments, and a route the earlier ones fully shadow.
 `match/3`: declaration order, first match wins; `:name` captures one segment and
-`*name` the rest, percent-decoded; empty segments ignored; a path whose matching
+`*name` the rest, percent-decoded to octets (a malformed escape keeps the
+segment as written); empty segments ignored; a path whose matching
 routes all refuse the method answers `method_not_allowed` with the union of
 their methods.
 """.
@@ -251,8 +252,11 @@ match_pattern([{param, Name} | Pattern], [S | Segments], Bindings) ->
 match_pattern(_Pattern, _Segments, _Bindings) ->
     nomatch.
 
-%% Captures are decoded once, on the winning route; a malformed escape is kept
-%% raw rather than failing a match on client-controlled input.
+%% Captures are decoded once, on the winning route, to the octets their escapes
+%% encode, UTF-8 or not, as a query parameter is; a malformed escape keeps the
+%% segment raw rather than failing a match on client-controlled input.
+%% `uri_string:percent_decode/1` is no fit: it throws on a result that is not
+%% UTF-8, so `%FF` would crash the request.
 decode(Bindings) ->
     #{Name => decode_value(Value) || Name := Value <- Bindings}.
 
@@ -260,10 +264,29 @@ decode_value(Segments) when is_list(Segments) -> [decode_segment(S) || S <- Segm
 decode_value(Segment) -> decode_segment(Segment).
 
 decode_segment(Segment) ->
-    case uri_string:percent_decode(Segment) of
-        Decoded when is_binary(Decoded) -> Decoded;
-        {error, _Reason, _Term} -> Segment
+    case binary:match(Segment, ~"%") of
+        nomatch -> Segment;
+        _Escape -> unescape(Segment, Segment, <<>>)
     end.
+
+unescape(<<>>, _Segment, Acc) ->
+    Acc;
+unescape(<<$%, High, Low, Rest/binary>>, Segment, Acc) ->
+    case {hex(High), hex(Low)} of
+        {H, L} when is_integer(H), is_integer(L) ->
+            unescape(Rest, Segment, <<Acc/binary, (H * 16 + L)>>);
+        _NotHex ->
+            Segment
+    end;
+unescape(<<$%, _Truncated/binary>>, Segment, _Acc) ->
+    Segment;
+unescape(<<Byte, Rest/binary>>, Segment, Acc) ->
+    unescape(Rest, Segment, <<Acc/binary, Byte>>).
+
+hex(C) when C >= $0, C =< $9 -> C - $0;
+hex(C) when C >= $a, C =< $f -> C - $a + 10;
+hex(C) when C >= $A, C =< $F -> C - $A + 10;
+hex(_C) -> error.
 
 %% A route the earlier ones answer in full, on every path and method it could
 %% match, is dead: refuse the table rather than 404 at runtime.

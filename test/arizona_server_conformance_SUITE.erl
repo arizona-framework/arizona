@@ -37,6 +37,7 @@ internal state.
 -export([get_controller_answers_other_methods_with_405/1]).
 -export([match_any_answers_a_custom_method/1]).
 -export([path_params_are_percent_decoded/1]).
+-export([path_params_decode_to_octets_utf8_or_not/1]).
 -export([empty_segments_and_trailing_slash_are_ignored/1]).
 -export([first_declared_route_wins/1]).
 -export([wildcard_matches_zero_and_many_segments/1]).
@@ -81,6 +82,8 @@ internal state.
 -export([ws_upgrade_to_live_path_opens_with_names/1]).
 -export([ws_upgrade_to_unknown_path_is_404/1]).
 -export([ws_navigate_to_param_route_replaces/1]).
+-export([ws_upgrade_to_non_utf8_param_route_opens/1]).
+-export([ws_navigate_to_non_utf8_param_route_replaces/1]).
 -export([ws_navigate_to_non_live_path_is_a_full_navigate/1]).
 -export([ws_patch_same_handler_diffs_in_place/1]).
 -export([ws_patch_other_handler_replaces/1]).
@@ -153,6 +156,7 @@ groups() ->
                 get_controller_answers_other_methods_with_405,
                 match_any_answers_a_custom_method,
                 path_params_are_percent_decoded,
+                path_params_decode_to_octets_utf8_or_not,
                 empty_segments_and_trailing_slash_are_ignored,
                 first_declared_route_wins,
                 wildcard_matches_zero_and_many_segments,
@@ -207,6 +211,8 @@ groups() ->
                 ws_upgrade_to_live_path_opens_with_names,
                 ws_upgrade_to_unknown_path_is_404,
                 ws_navigate_to_param_route_replaces,
+                ws_upgrade_to_non_utf8_param_route_opens,
+                ws_navigate_to_non_utf8_param_route_replaces,
                 ws_navigate_to_non_live_path_is_a_full_navigate,
                 ws_patch_same_handler_diffs_in_place,
                 ws_patch_other_handler_replaces,
@@ -337,6 +343,8 @@ main_routes(AssetDir) ->
         {get, ~"/echo", arizona_state_echo_controller, Echo(~"ECHO_GET")},
         {match, '*', ~"/any", arizona_state_echo_controller, Echo(~"ANY_METHOD")},
         {live, ~"/items/:item_id", arizona_crashable, Extract},
+        %% A capture the page does not render: what it holds cannot fail a frame.
+        {live, ~"/octets/:raw", arizona_crashable, #{}},
         {get, ~"/first/me", arizona_state_echo_controller, Echo(~"FIRST_LITERAL")},
         {get, ~"/first/:id", arizona_state_echo_controller, Echo(~"FIRST_PARAM")},
         {get, ~"/wc/*rest", arizona_state_echo_controller, Echo(~"WILDCARD")},
@@ -517,6 +525,15 @@ match_any_answers_a_custom_method(Config) ->
 path_params_are_percent_decoded(Config) ->
     {200, _, Body} = req(Config, ~"GET", ~"/items/caf%C3%A9", []),
     ?assertEqual(~"café", rendered(~"Item", Body)).
+
+%% An escape stands for an octet (RFC 3986, section 2.1), so a capture is the
+%% bytes its escapes encode whether or not they are UTF-8, as a query parameter
+%% is. `%FF` is a well-formed path, not a bad request.
+path_params_decode_to_octets_utf8_or_not(Config) ->
+    {200, _, Item} = req(Config, ~"GET", ~"/items/%FF", []),
+    ?assertEqual(<<255>>, rendered_bytes(~"Item", Item)),
+    {200, _, Wildcard} = req(Config, ~"GET", ~"/wc/%FF/a", []),
+    ?assertEqual(~"WILDCARD", Wildcard).
 
 empty_segments_and_trailing_slash_are_ignored(Config) ->
     {200, _, Body} = req(Config, ~"GET", ~"//items//x/", []),
@@ -911,6 +928,32 @@ ws_navigate_to_param_route_replaces(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, ~"navtest")),
     ok = arizona_wire_client:ws_close(Sock).
 
+%% `_az_path` is query-decoded first, so `%25FF` reaches the matcher as the
+%% escape `%FF` and `%FF` as the raw byte 255: both name a live route, as does
+%% a malformed escape (`%G1`), which the matcher keeps as written.
+ws_upgrade_to_non_utf8_param_route_opens(Config) ->
+    [
+        begin
+            {ok, Sock} = ws_connect(Config, Path),
+            {text, Frame} = arizona_wire_client:ws_recv(Sock),
+            ?assertMatch(#{~"a" := _}, json:decode(Frame)),
+            ok = arizona_wire_client:ws_close(Sock)
+        end
+     || Path <- [~"/octets/%25FF", ~"/octets/%FF", ~"/octets/%25G1"]
+    ].
+
+ws_navigate_to_non_utf8_param_route_replaces(Config) ->
+    [
+        begin
+            Sock = live_socket(Config, ~"/"),
+            ok = navigate(Sock, ~"navigate", Path),
+            {text, Resp} = arizona_wire_client:ws_recv(Sock),
+            ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, json:decode(Resp)),
+            ok = arizona_wire_client:ws_close(Sock)
+        end
+     || Path <- [~"/octets/%FF", ~"/octets/%G1"]
+    ].
+
 ws_navigate_to_non_live_path_is_a_full_navigate(Config) ->
     Sock = live_socket(Config, ~"/"),
     ok = navigate(Sock, ~"navigate", ~"/echo"),
@@ -1195,6 +1238,12 @@ rendered(Label, Body) ->
     Pattern = <<Label/binary, ": (?:<!--[^>]*-->)?([^<]*)">>,
     {match, [Text]} = re:run(Body, Pattern, [unicode, {capture, [1], binary}]),
     Text.
+
+%% `rendered/2` for text that need not be UTF-8.
+rendered_bytes(Label, Body) ->
+    Pattern = <<Label/binary, ": (?:<!--[^>]*-->)?([^<]*)">>,
+    {match, [Bytes]} = re:run(Body, Pattern, [{capture, [1], binary}]),
+    Bytes.
 
 %% The `set-cookie` lines setting cookie `Name`.
 cookies(Name, Headers) ->
