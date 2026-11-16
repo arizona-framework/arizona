@@ -22,7 +22,14 @@ import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
-import { formControls, isForm, isFragmentOfPage, isWebUrl, loadPage } from './arizona-util.js';
+import {
+    formControls,
+    isForm,
+    isFragmentOfPage,
+    isSamePage,
+    isWebUrl,
+    loadPage,
+} from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -209,15 +216,20 @@ function announceConnected(/** @type {number} */ closes) {
     dispatchConnection('arizona:connected', { reconnect });
 }
 
-// Path + query the server last rendered. Tracked so the popstate handler can
-// tell a real cross-page back/forward (which needs a server navigate) from a
-// same-page fragment change (hash only -- scroll, no round-trip). Mirrors the
-// same-page fast path in the az-navigate click handler.
+// Path + query of the page last asked of the server, which the reconnect URL is
+// built from.
 /** @type {string} */
 let _currentPath = '';
 
 /** @type {string} */
 let _currentQs = '';
+
+// The URL of that page, an empty query included: the popstate handler tells a
+// real cross-page back/forward (which needs a server navigate) from a fragment
+// change on it (scroll, no round-trip) by `isSamePage`, the rule the az-navigate
+// click handler's `isFragmentOfPage` applies to the page on screen.
+/** @type {string} */
+let _currentHref = '';
 
 // Extra query params passed to `connect(endpoint, params)`. Unlike the page's
 // own query string they are connection-level config, constant across SPA
@@ -1086,6 +1098,8 @@ function sendNav(kind, path, qs, ref = nextRef(), own = null) {
     workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
     _currentPath = path;
     _currentQs = qs;
+    // Both callers have moved the URL to the page asked for already.
+    _currentHref = location.href;
 }
 
 /**
@@ -1509,6 +1523,7 @@ export function connect(endpoint, params = {}) {
     // cross-page navigation.
     _currentPath = location.pathname;
     _currentQs = location.search ? location.search.slice(1) : '';
+    _currentHref = location.href;
     // Resume the entry index a reload or a full-document return lands on.
     _historyIdx = typeof history.state?._azIdx === 'number' ? history.state._azIdx : 0;
 
@@ -1606,12 +1621,14 @@ export function connect(endpoint, params = {}) {
                     ? e.state._azTransitionPrev
                     : null;
             if (hasIdx) _historyIdx = idx;
-            // Fragment-only change (path + query unchanged): a same-page hash
-            // jump fires popstate in some browsers, but it needs no server
-            // round-trip -- just scroll. Mirrors the click handler's same-page
-            // fast path so in-page anchors don't trigger a full OP_REPLACE.
-            // Needs no connection either, so it runs even while disconnected.
-            if (path === _currentPath && qs === _currentQs) {
+            // Fragment-only change (`isSamePage`: origin, path and query, an
+            // empty one included, unchanged): a same-page hash jump fires
+            // popstate, but it needs no server round-trip -- just scroll. The
+            // same rule as the click handler's `isFragmentOfPage`, so an edge a
+            // click navigated is navigated again and in-page anchors don't
+            // trigger a full OP_REPLACE. Needs no connection either, so it runs
+            // even while disconnected.
+            if (isSamePage(location, new URL(_currentHref))) {
                 applyScroll({ kind: 'pop', hash, saved });
                 return;
             }

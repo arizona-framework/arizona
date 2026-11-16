@@ -420,4 +420,28 @@ describe('isFragmentOfPage', () => {
         navigate(url);
         expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
     });
+
+    // Back and Forward across that edge cross between two pages, so each asks the
+    // server again; across a fragment of the page they only scroll.
+    it.each([
+        ['/start#x', []],
+        [
+            '/start?#x',
+            [
+                { path: '/start', qs: '' },
+                { path: '/start', qs: '' },
+            ],
+        ],
+    ])('Back and Forward between /start and %s', async (url, frames) => {
+        await connected();
+        navigate(url);
+        const before = mock.sent().filter((m) => m[0] === 'navigate').length;
+        if (before > 0) replace();
+        history.replaceState(null, '', '/start');
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        history.replaceState(null, '', url);
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        const navs = mock.sent().filter((m) => m[0] === 'navigate');
+        expect(navs.slice(before).map((m) => m[1])).toEqual(frames);
+    });
 });

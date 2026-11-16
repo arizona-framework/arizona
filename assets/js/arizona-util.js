@@ -41,14 +41,23 @@ export function loadPage(url, replace) {
  */
 export function isFragmentOfPage(u) {
     const fragment = u.hash !== '' || u.href.endsWith('#');
+    return fragment && isSamePage(u, location);
+}
+
+/**
+ * Whether `u` and `page` name one page, their fragments aside: the same origin,
+ * path and query -- an empty query included, since `search` reads '' for `/?` and
+ * the browser loads `/?#x` from `/`.
+ * @param {URL|Location} u
+ * @param {URL|Location} page
+ * @returns {boolean}
+ */
+export function isSamePage(u, page) {
     return (
-        fragment &&
-        u.origin === location.origin &&
-        u.pathname === location.pathname &&
-        u.search === location.search &&
-        // An empty query is still one (`search` reads '' for `/?`), and the browser
-        // loads `/?#x` from `/`.
-        hasQuery(u.href) === hasQuery(location.href)
+        u.origin === page.origin &&
+        u.pathname === page.pathname &&
+        u.search === page.search &&
+        hasQuery(u.href) === hasQuery(page.href)
     );
 }
 
