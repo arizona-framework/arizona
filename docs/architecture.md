@@ -2121,7 +2121,11 @@ Roadrunner and Cowboy have all four.
 
 - `reply_effects/1(Effects)` -- a `200` whose body is the `{"e": [...]}` effects wire payload, the
   same shape the WebSocket sends. A fetch form auto-resets on this leg (`az-form-reset` fires only
-  on a 2xx, and leaves a control the user changed while the request was in flight)
+  on a 2xx, and leaves a control the user changed while the request was in flight). Only a
+  **full** navigate in it resolves a relative URL against the URL the response came from (after
+  redirects), as an HTTP 3xx `Location` does; every other URL (an SPA `navigate`/`patch`, a
+  nested `fetch` and that nested fetch's own `on_error`) is the page's and resolves against the
+  document base, as on the WebSocket
 - `reply_effects/2(Status, Effects)` -- the same with an explicit status. The `fetch` command
   applies response effects on **any** status, so an error leg returns a real `422`: the effects
   still run (inline validation) while the form's typed fields survive
@@ -2129,7 +2133,7 @@ Roadrunner and Cowboy have all four.
   fetch-followed HTTP 3xx cannot drive a SPA navigation (`redirect: 'manual'` yields an
   opaque-redirect whose `Location` is unreadable), so a redirect is delivered as an effect. A
   `Location` that is not a path on this origin (`arizona_req:location_kind/1`) goes out with
-  `full => true`, since `pushState` refuses another origin; a relative one loads resolved
+  `full => true`, since `pushState` refuses another origin; a relative one loads in full, resolved
   against the URL the response came from (after redirects), as over HTTP -- not against the
   page that posted or its `<base href>`. An unsafe scheme (`javascript:`, `data:`) raises
   `{unsafe_redirect, Location}` rather than reach the client

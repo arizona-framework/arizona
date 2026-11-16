@@ -66,3 +66,33 @@ for (const base of [null, '/sub/']) {
         await expect(page.locator('#page > h1')).toHaveText('Scroll Home');
     });
 }
+
+// A response's SPA navigate/patch is a command of the page, resolving against the
+// document as on the socket: only a full navigate is a `Location`.
+test('a fragment navigate in a fetch response scrolls the page, not the endpoint', async ({
+    page,
+}) => {
+    await page.goto('/patch-demo/overview');
+    await wsReady(page);
+    await addRelativeNav(page, null, [22, '/fetch-effects/hash', {}]);
+    await page.locator('#rel-nav').click();
+    await expect(page).toHaveURL(
+        (u) => u.pathname === '/patch-demo/overview' && u.hash === '#hello',
+    );
+    await expect(page.locator('#content')).toHaveText('overview');
+    await expect(page.locator('#rel-nav')).toBeAttached();
+});
+
+test('a query patch in a fetch response patches the page, not the endpoint', async ({ page }) => {
+    await page.goto('/patch-demo/overview');
+    await wsReady(page);
+    await page.locator('#bump').click();
+    await expect(page.locator('#clicks')).toHaveText('1');
+    await addRelativeNav(page, null, [22, '/fetch-effects/patch', {}]);
+    await page.locator('#rel-nav').click();
+    await expect(page).toHaveURL(
+        (u) => u.pathname === '/patch-demo/overview' && u.search === '?tab=2',
+    );
+    await expect(page.locator('#content')).toHaveText('overview');
+    await expect(page.locator('#clicks')).toHaveText('1');
+});

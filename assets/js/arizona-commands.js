@@ -581,11 +581,14 @@ function markBusy(holder) {
 }
 
 /**
- * A fetch response's commands with every navigate/patch URL made absolute against
- * `base`, the URL the response came from: a relative target names a page relative
- * to the endpoint that answered, as an HTTP 3xx `Location` resolves against its
- * request, not to the page that asked. A transition, an `on_key` and a fetch's
- * `on_error` hold commands from the same body, so theirs resolve there too. A URL
+ * A fetch response's commands with every **full** navigate's URL made absolute
+ * against `base`, the URL the response came from: that is the `Location` of a
+ * `reply_redirect/1`, which an HTTP 3xx resolves against its request, so a
+ * relative one names a page beside the endpoint. Every other URL is the page's
+ * own (an SPA navigate or patch, a fetch the response holds and that fetch's own
+ * `on_error`), resolving against the document base as anywhere else, so one
+ * response never mixes bases. A transition or an `on_key` runs its commands as
+ * part of the response, so a full navigate there resolves the same way. A URL
  * that does not parse is kept as written, for the navigate to refuse.
  * @param {*} cmds
  * @param {string} base
@@ -598,11 +601,10 @@ function responseNavs(cmds, base) {
     }
     const [op, a, b, ...rest] = cmds;
     switch (op) {
-        case JS_NAVIGATE:
-        case JS_PATCH: {
-            if (typeof a !== 'string') return cmds;
+        case JS_NAVIGATE: {
+            if (!b?.full || typeof a !== 'string') return cmds;
             try {
-                return [op, new URL(a, base).href, ...cmds.slice(2)];
+                return [op, new URL(a, base).href, b, ...rest];
             } catch {
                 return cmds;
             }
@@ -610,10 +612,6 @@ function responseNavs(cmds, base) {
         case JS_TRANSITION:
         case JS_ON_KEY:
             return [op, a, responseNavs(b, base), ...rest];
-        case JS_FETCH:
-            return b?.on_error
-                ? [op, a, { ...b, on_error: responseNavs(b.on_error, base) }, ...rest]
-                : cmds;
         default:
             return cmds;
     }

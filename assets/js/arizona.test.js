@@ -7027,93 +7027,154 @@ describe('navigation scroll', () => {
         ]);
     });
 
-    it("a fetch response's relative navigate/patch resolves against the response URL, as a 3xx Location does", async () => {
+    /**
+     * Answer the n-th fetch with `answers[n]`: `[url, body]` (`url` the response's
+     * after redirects, '' when unknown), or `null` for a network failure.
+     * @param {Array<[string, string]|null>} answers
+     */
+    const answerFetches = (answers) => {
+        let n = 0;
+        globalThis.fetch = vi.fn(() => {
+            const a = answers[n++];
+            if (!a) return Promise.reject(new TypeError('network'));
+            const [url, body] = a;
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                url,
+                text: () => Promise.resolve(body),
+            });
+        });
+    };
+    const settleFetches = async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
+    it('a full navigate in a fetch response resolves against the response URL, as a 3xx Location does', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         const originalFetch = globalThis.fetch;
-        /** Answer every fetch with `body`, from `url` (after redirects; '' when unknown). */
-        const respond = (url, body) => {
-            globalThis.fetch = vi.fn(() =>
-                Promise.resolve({ ok: true, status: 200, url, text: () => Promise.resolve(body) }),
-            );
-        };
-        const settle = async () => {
-            for (let i = 0; i < 10; i++) await Promise.resolve();
-        };
-        const lastNav = () =>
-            mock
-                .getSentMessages()
-                .filter((m) => m[0] === 'navigate' || m[0] === 'patch')
-                .at(-1);
+        const origin = location.origin;
+        history.replaceState(null, '', '/patch-demo/overview');
         const base = document.createElement('base');
+        const assign = vi.fn();
+        const replace = vi.fn();
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+            hash: '',
+        });
+        /** Run one fetch whose response is `body` from `url`, then the next answers. */
+        const run = async (target, url, body, ...more) => {
+            answerFetches([[url, body], ...more]);
+            mod.applyEffects([[22, target, {}]]);
+            await settleFetches();
+        };
         try {
             // No base: the page's directory is /patch-demo/, the endpoint's /api/.
-            history.replaceState(null, '', '/patch-demo/overview');
-            respond(`${location.origin}/api/account`, '{"e":[[10,"login?x=1"]]}');
-            mod.applyEffects([[22, '/api/account', {}]]);
-            await settle();
-            expect(location.pathname + location.search).toBe('/api/login?x=1');
-            expect(lastNav()).toEqual([
-                'navigate',
-                { path: '/api/login', qs: 'x=1' },
-                expect.any(Number),
-            ]);
-            // The URL the response came from, after a redirect, not the one asked.
-            history.replaceState(null, '', '/patch-demo/overview');
-            respond(`${location.origin}/v2/api/account`, '{"e":[[20,{},[[24,"edit"]]]]}');
-            mod.applyEffects([[22, '/api/account', {}]]);
-            await settle();
-            expect(location.pathname).toBe('/v2/api/edit');
-            expect(lastNav()).toEqual([
-                'patch',
-                { path: '/v2/api/edit', qs: '' },
-                expect.any(Number),
-            ]);
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[10,"login?x=1",{"full":true}]]}',
+            );
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/api/login?x=1`);
+            // The URL the response came from, after a redirect, not the one asked;
+            // inside a transition too.
+            await run(
+                '/api/account',
+                `${origin}/v2/api/account`,
+                '{"e":[[20,{},[[10,"login",{"full":true,"replace":true}]]]]}',
+            );
+            expect(replace).toHaveBeenLastCalledWith(`${origin}/v2/api/login`);
+            // Inside an on_key (a response has no key event: '.*' matches '').
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[16,".*",[[10,"k",{"full":true}]]]]}',
+            );
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/api/k`);
             // Under a base: still the response's URL, not the base.
             base.setAttribute('href', '/sub/');
             document.head.appendChild(base);
-            history.replaceState(null, '', '/patch-demo/overview');
-            respond(`${location.origin}/api/account`, '{"e":[[10,"login"]]}');
-            mod.applyEffects([[22, '/api/account', {}]]);
-            await settle();
-            expect(location.pathname).toBe('/api/login');
-            expect(lastNav()).toEqual([
-                'navigate',
-                { path: '/api/login', qs: '' },
-                expect.any(Number),
-            ]);
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[10,"login",{"full":true}]]}',
+            );
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/api/login`);
             // A response with no known URL resolves against what was requested,
             // itself resolved against the base as fetch() resolves it.
+            await run('api/account', '', '{"e":[[10,"login",{"full":true}]]}');
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/sub/api/login`);
+            // A fetch the response holds is a request of the page: its URL and its
+            // own on_error resolve against the document, so nothing in one
+            // response mixes bases.
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[22,"nested",{"on_error":[[10,"oops",{"full":true}]]}]]}',
+                null,
+            );
+            // Left as written: `location.assign` resolves it against the base.
+            expect(assign).toHaveBeenLastCalledWith('oops');
+            expect(/** @type {any} */ (globalThis.fetch).mock.calls[1][0]).toBe('nested');
+        } finally {
+            vi.unstubAllGlobals();
+            base.remove();
+            globalThis.fetch = originalFetch;
+        }
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('an SPA navigate or patch in a fetch response resolves against the document base', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<section id="hello">x</section>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const originalFetch = globalThis.fetch;
+        const origin = location.origin;
+        const navs = () =>
+            mock.getSentMessages().filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        const run = async (body) => {
+            answerFetches([[`${origin}/api/account`, body]]);
+            mod.applyEffects([[22, '/api/account', {}]]);
+            await settleFetches();
+        };
+        const base = document.createElement('base');
+        try {
+            // A fragment of the page scrolls in place: no frame for the endpoint.
             history.replaceState(null, '', '/patch-demo/overview');
-            respond('', '{"e":[[10,"login"]]}');
-            mod.applyEffects([[22, 'api/account', {}]]);
-            await settle();
-            expect(location.pathname).toBe('/sub/api/login');
-            // A full navigate in a response loads the page the response names.
-            const assign = vi.fn();
-            respond(`${location.origin}/api/account`, '{"e":[[10,"login",{"full":true}]]}');
-            vi.stubGlobal('location', {
-                assign,
-                replace: vi.fn(),
-                origin: window.location.origin,
-                href: window.location.href,
-                pathname: window.location.pathname,
-                search: window.location.search,
-            });
-            try {
-                mod.applyEffects([[22, '/api/account', {}]]);
-                await settle();
-            } finally {
-                vi.unstubAllGlobals();
-            }
-            expect(assign).toHaveBeenCalledWith(`${location.origin}/api/login`);
+            await run('{"e":[[10,"#hello"]]}');
+            expect(location.pathname + location.hash).toBe('/patch-demo/overview#hello');
+            expect(navs()).toEqual([]);
+            // A query patches this page, not the endpoint.
+            history.replaceState(null, '', '/patch-demo/overview');
+            await run('{"e":[[24,"?tab=2"]]}');
+            expect(location.pathname + location.search).toBe('/patch-demo/overview?tab=2');
+            // Under a base, as any client navigate does.
+            base.setAttribute('href', '/sub/');
+            document.head.appendChild(base);
+            history.replaceState(null, '', '/patch-demo/overview');
+            await run('{"e":[[10,"x"]]}');
+            expect(location.pathname).toBe('/sub/x');
         } finally {
             base.remove();
             globalThis.fetch = originalFetch;
         }
+        expect(navs()).toEqual([
+            ['patch', { path: '/patch-demo/overview', qs: 'tab=2' }, expect.any(Number)],
+            ['navigate', { path: '/sub/x', qs: '' }, expect.any(Number)],
+        ]);
     });
 
     it('a relative navigate/patch effect resolves against the document base, as history does', async () => {
