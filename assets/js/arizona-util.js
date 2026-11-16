@@ -34,13 +34,33 @@ export function isWebUrl(url) {
 /**
  * Load `url` as a real page (an http(s) one only, see `isWebUrl`), replacing the
  * current history entry when `replace` is set.
+ *
+ * The load starts in a microtask, once the running code has returned: what runs
+ * as a load starts (an app's unsaved-changes `beforeunload` guard) then sees
+ * what that code did after asking for it -- an `az-submit` resetting its form,
+ * a nested submit's included -- and the framework's loads asked for in one run
+ * start in the order asked. The URL is resolved now (`pageUrl`, as the browser
+ * would resolve it now), so an SPA navigation later in the same run, which moves
+ * the address, does not change where it goes.
  * @param {string} url
  * @param {boolean} [replace]
  */
 export function loadPage(url, replace) {
     if (!isWebUrl(url)) return;
-    if (replace) location.replace(url);
-    else location.assign(url);
+    const href = pageUrl(url).href;
+    queueMicrotask(() => {
+        if (replace) location.replace(href);
+        else location.assign(href);
+    });
+}
+
+/**
+ * Reload the page (a `reload` command), in a microtask as `loadPage` loads: it
+ * reloads the page the address bar shows when the reload starts, after the run
+ * -- the one an SPA navigation later in the same run moved to, if any.
+ */
+export function reloadPage() {
+    queueMicrotask(() => location.reload());
 }
 
 /**

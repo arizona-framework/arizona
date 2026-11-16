@@ -7290,8 +7290,10 @@ describe('navigation scroll', () => {
         // arizona_js:navigate(~"/api", #{full => true}) -- the server emits this to
         // degrade a navigate/patch whose path is not a live route.
         mod.applyEffects([[10, '/api', { full: true }]]);
+        // The load starts in a microtask (`loadPage`).
+        await Promise.resolve();
         vi.unstubAllGlobals();
-        expect(assign).toHaveBeenCalledWith('/api');
+        expect(assign).toHaveBeenCalledWith(new URL('/api', document.baseURI).href);
         // Browser handles it -- no SPA navigate frame is sent to the server.
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
@@ -7314,8 +7316,10 @@ describe('navigation scroll', () => {
         // layout change, a halt replayed over HTTP): the client already pushed the
         // entry, so a second one would make Back revisit the same navigation.
         mod.applyEffects([[10, '/gate', { full: true, replace: true }]]);
+        // The load starts in a microtask (`loadPage`).
+        await Promise.resolve();
         vi.unstubAllGlobals();
-        expect(replace).toHaveBeenCalledWith('/gate');
+        expect(replace).toHaveBeenCalledWith(new URL('/gate', document.baseURI).href);
         expect(assign).not.toHaveBeenCalled();
     });
 
@@ -7341,10 +7345,12 @@ describe('navigation scroll', () => {
         const idp = 'https://idp.example.com/authorize?x=1';
         mod.applyEffects([[10, idp]]);
         mod.applyEffects([[24, '//idp.example.com/p', { replace: true }]]);
+        // The load starts in a microtask (`loadPage`).
+        await Promise.resolve();
         vi.unstubAllGlobals();
         errSpy.mockRestore();
         expect(assign).toHaveBeenCalledWith(idp);
-        expect(replace).toHaveBeenCalledWith('//idp.example.com/p');
+        expect(replace).toHaveBeenCalledWith(new URL('//idp.example.com/p', document.baseURI).href);
         expect(pushSpy).not.toHaveBeenCalled();
         pushSpy.mockRestore();
         expect(logged).toEqual([]);
@@ -7508,8 +7514,8 @@ describe('navigation scroll', () => {
                 '{"e":[[22,"nested",{"on_error":[[10,"oops",{"full":true}]]}]]}',
                 null,
             );
-            // Left as written: `location.assign` resolves it against the base.
-            expect(assign).toHaveBeenLastCalledWith('oops');
+            // Resolved against the base, as `location.assign` would resolve it.
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/sub/oops`);
             expect(/** @type {any} */ (globalThis.fetch).mock.calls[1][0]).toBe('nested');
         } finally {
             vi.unstubAllGlobals();
@@ -8704,13 +8710,16 @@ describe('form submit', () => {
         try {
             document.getElementById('f').dispatchEvent(ev);
         } finally {
+            // The load starts in a microtask (`loadPage`).
+            await Promise.resolve();
             vi.unstubAllGlobals();
         }
         expect(ev.defaultPrevented).toBe(true);
         const url = JSON.parse(cmd)
             .flat(2)
             .find((x) => typeof x === 'string');
-        expect({ assign, replace }[how]).toHaveBeenCalledWith(url);
+        // Resolved as the submit ran (the load is held until its form reset).
+        expect({ assign, replace }[how]).toHaveBeenCalledWith(new URL(url, document.baseURI).href);
         expect(mock.getSentMessages()).toHaveLength(0);
     });
 
@@ -8908,6 +8917,221 @@ describe('form submit', () => {
             expect(document.querySelector('[name=q]').value).toBe('');
         },
     );
+
+    // The form resets before the submit's navigation starts its load, so what
+    // runs as the load starts (an app's unsaved-changes `beforeunload` guard)
+    // sees it reset, not the text it already sent.
+    it.each([
+        ['a lone navigate while the socket is down', '[10,"/next"]', 'never'],
+        ['a push_event and a full navigate', '[[0,"save"],[10,"/next",{"full":true}]]', 'open'],
+        ['a cross-origin navigate', '[10,"https://elsewhere.example/x"]', 'open'],
+        ['a replace full navigate', '[10,"/next",{"full":true,"replace":true}]', 'open'],
+        ['a push_event and a reload', '[[0,"save"],[15]]', 'open'],
+    ])('resets an az-form-reset submit before %s starts its load', async (_l, cmd, socket) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='${cmd}'><input name="q" value=""></form>`,
+        );
+        mock = setupMockWorker(mod);
+        if (socket === 'open') mock.simulateOpen();
+        const q = document.querySelector('[name=q]');
+        q.value = 'typed';
+        /** @type {string[]} */
+        const seen = [];
+        const load = vi.fn(() => seen.push(q.value));
+        vi.stubGlobal('location', {
+            assign: load,
+            replace: load,
+            reload: load,
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            // The load starts in a microtask (`loadPage`).
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+            history.replaceState(null, '', '/');
+        }
+        expect(seen).toEqual(['']);
+    });
+
+    // A load is resolved when its command runs and starts once the run has
+    // returned, after an SPA navigation later in the same submit: a load still
+    // goes where it was asked to, and a reload reloads the page the address shows
+    // when it starts -- the one that navigation moved to (a fragment one too: a
+    // reload is a reload, never a scroll).
+    it.each([
+        [
+            'a relative full navigate',
+            '/start/page',
+            '[[10,"next",{"full":true}],[10,"/other/x"]]',
+            [['assign', '/start/next']],
+        ],
+        ['a reload', '/start/page', '[[15],[10,"/b/c"]]', [['reload', '/b/c']]],
+        [
+            'a reload on a fragment',
+            '/start/page#a',
+            '[[15],[10,"#b"]]',
+            [['reload', '/start/page#b']],
+        ],
+        [
+            'a reload on a fragment, to its path',
+            '/start/page#a',
+            '[[15],[10,"/start/page"]]',
+            [['reload', '/start/page']],
+        ],
+    ])('loads what %s named before a later SPA navigate', async (_l, start, cmd, want) => {
+        history.replaceState(null, '', start);
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='${cmd}'><input name="q" value=""></form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const real = window.location;
+        /** @type {Array<[string, string]>} */
+        const loads = [];
+        const at = (/** @type {string} */ kind) => (/** @type {string} */ url) =>
+            loads.push([kind, ((u) => u.pathname + u.hash)(new URL(url, real.href))]);
+        vi.stubGlobal('location', {
+            assign: at('assign'),
+            replace: at('replace'),
+            reload: () => at('reload')(real.href),
+            get origin() {
+                return real.origin;
+            },
+            get href() {
+                return real.href;
+            },
+            get pathname() {
+                return real.pathname;
+            },
+            get search() {
+                return real.search;
+            },
+            get hash() {
+                return real.hash;
+            },
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            // The load starts in a microtask (`loadPage`).
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+            history.replaceState(null, '', '/');
+        }
+        expect(loads).toEqual(want);
+        // The SPA navigation ran: a load asked for before it does not skip it.
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(!cmd.includes('"#'));
+    });
+
+    // A submit's loads start in the order its commands asked for them, and a
+    // submit run inside another (an app listener submitting a second form) starts
+    // its loads after the outer one returns, so none starts before the outer form
+    // resets.
+    it.each([
+        [
+            'two loads in one submit',
+            `<form id="f" az-form-reset az-submit='[[10,"/a",{"full":true}],[10,"/b",{"full":true}]]'><input name="q" value=""></form>`,
+            ['/a', '/b'],
+        ],
+        [
+            'a submit nested in another',
+            `<form id="f" az-form-reset az-submit='[[10,"/outer1",{"full":true}],[9,"go",{}],[10,"/outer2",{"full":true}]]'><input name="q" value=""></form>` +
+                `<form id="g" az-submit='[[10,"/inner",{"full":true}]]'><input name="r"></form>`,
+            ['/outer1', '/inner', '/outer2'],
+        ],
+    ])('starts the loads of %s in order, after the form resets', async (_l, html, want) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', html);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const q = document.querySelector('[name=q]');
+        q.value = 'typed';
+        const go = () =>
+            document
+                .getElementById('g')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        document.addEventListener('go', go);
+        /** @type {Array<[string, string]>} */
+        const seen = [];
+        const assign = vi.fn((/** @type {string} */ url) =>
+            seen.push([new URL(url).pathname, q.value]),
+        );
+        vi.stubGlobal('location', {
+            assign,
+            replace: assign,
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            // The load starts in a microtask (`loadPage`).
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+            document.removeEventListener('go', go);
+            history.replaceState(null, '', '/');
+        }
+        expect(seen).toEqual(want.map((p) => [p, '']));
+    });
+
+    // A command that throws after a navigation does not keep that load from
+    // starting, once the form is reset.
+    it('starts a load though a later command throws', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='[[10,"/a",{"full":true}],[10,"http://["]]'><input name="q" value=""></form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const q = document.querySelector('[name=q]');
+        q.value = 'typed';
+        /** @type {Array<[string, string]>} */
+        const seen = [];
+        const assign = vi.fn((/** @type {string} */ url) => seen.push([url, q.value]));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.stubGlobal('location', {
+            assign,
+            replace: assign,
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            // The load starts in a microtask (`loadPage`).
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+            warn.mockRestore();
+            history.replaceState(null, '', '/');
+        }
+        expect(seen).toEqual([[new URL('/a', document.baseURI).href, '']]);
+    });
 
     // A command that throws partway through its list does not undo what ran
     // before it: the push_event went out, so the submit resets.

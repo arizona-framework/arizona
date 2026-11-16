@@ -5,7 +5,15 @@ import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
 import { runTransition } from './arizona-transitions.js';
-import { closestForm, formControls, isForm, pageUrl, resetForm, warnOnce } from './arizona-util.js';
+import {
+    closestForm,
+    formControls,
+    isForm,
+    pageUrl,
+    reloadPage,
+    resetForm,
+    warnOnce,
+} from './arizona-util.js';
 
 /**
  * Append an encoded query to a URL, before its fragment: everything after the first
@@ -1538,7 +1546,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             document.title = cmd[1];
             break;
         case JS_RELOAD:
-            location.reload();
+            reloadPage();
             break;
         case JS_ON_KEY: {
             const f = cmd[1];
