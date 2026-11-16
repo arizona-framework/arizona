@@ -22,7 +22,7 @@ import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
-import { formControls, isForm, isWebUrl, loadPage } from './arizona-util.js';
+import { formControls, isForm, isFragmentOfPage, isWebUrl, loadPage } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -1117,11 +1117,7 @@ function leavePage(url, replace) {
  */
 function navRoute(u) {
     if (u.origin !== location.origin) return 'leave';
-    // A bare `#` is a fragment too (an empty one, `hash` reads ''), as for the browser.
-    const fragment = u.hash !== '' || u.href.endsWith('#');
-    if (fragment && u.pathname === location.pathname && u.search === location.search) {
-        return 'hash';
-    }
+    if (isFragmentOfPage(u)) return 'hash';
     return 'server';
 }
 

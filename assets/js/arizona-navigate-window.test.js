@@ -381,3 +381,43 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([[null, 'bump', {}]]);
     });
 });
+
+describe('isFragmentOfPage', () => {
+    // On /start: only a fragment of this very URL -- origin, path and query -- is.
+    it.each([
+        ['#x', true],
+        ['#', true],
+        ['/start#x', true],
+        ['/start', false],
+        ['/other#x', false],
+        ['/start?q=1#x', false],
+        // An empty query is still a query: the browser loads `/start?` from `/start`.
+        ['/start?#x', false],
+        ['https://elsewhere.example/start#x', false],
+    ])('%s is %s', async (url, expected) => {
+        const { isFragmentOfPage } = await import('./arizona-util.js');
+        expect(isFragmentOfPage(new URL(url, window.location.href))).toBe(expected);
+    });
+
+    // On /start?a: a query of the same presence but another value is another page.
+    it.each([
+        ['/start?a#x', true],
+        ['/start?b#x', false],
+        ['/start#x', false],
+    ])('on /start?a, %s is %s', async (url, expected) => {
+        history.replaceState(null, '', '/start?a');
+        const { isFragmentOfPage } = await import('./arizona-util.js');
+        expect(isFragmentOfPage(new URL(url, window.location.href))).toBe(expected);
+    });
+
+    // A navigate to a fragment of this page only scrolls; one under an empty query
+    // is another page, which the browser would load, so it asks the server for it.
+    it.each([
+        ['/start#x', false],
+        ['/start?#x', true],
+    ])('a navigate to %s on /start sends a frame: %s', async (url, frame) => {
+        await connected();
+        navigate(url);
+        expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
+    });
+});
