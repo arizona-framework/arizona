@@ -12,12 +12,14 @@ request, over the in-memory `arizona_req_test_adapter` (no listener).
 -export([unknown_path_is_a_404_reply/1]).
 -export([halt_is_its_halt_reply/1]).
 -export([upgrade_carries_the_flushed_lines/1]).
+-export([user_query_is_rebuilt_as_escaped_ascii/1]).
 
 all() ->
     [
         unknown_path_is_a_404_reply,
         halt_is_its_halt_reply,
-        upgrade_carries_the_flushed_lines
+        upgrade_carries_the_flushed_lines,
+        user_query_is_rebuilt_as_escaped_ascii
     ].
 
 init_per_suite(Config) ->
@@ -54,6 +56,24 @@ upgrade_carries_the_flushed_lines(Config) when is_list(Config) ->
         arizona_ws:upgrade(
             [{~"_az_path", ~"/"}], arizona_req_test_adapter, raw(#{middlewares => [Stash]})
         )
+    ).
+
+%% The parsed query is rebuilt for the route without the `_az_*` keys: every
+%% octet but the unreserved ones escaped, a reserved character and a byte that
+%% is not UTF-8 alike, so it parses back to the same pairs on any server.
+user_query_is_rebuilt_as_escaped_ascii(Config) when is_list(Config) ->
+    QS = [
+        {~"_az_path", ~"/"},
+        {~"x", <<255>>},
+        {~"k&=", ~"%&=#"},
+        {~"y", ~"a b+~-._"},
+        {~"_az_reconnect", ~"1"},
+        {~"flag", true}
+    ],
+    {cont, #{req := Req}} = arizona_ws:prepare(QS, arizona_req_test_adapter, raw(#{})),
+    ?assertMatch(
+        #{resolved_qs := ~"x=%FF&k%26%3D=%25%26%3D%23&y=a%20b%2B~-._&flag"},
+        arizona_req:raw(Req)
     ).
 
 raw(RouteOpts) ->

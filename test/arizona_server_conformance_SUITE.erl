@@ -431,7 +431,15 @@ main_routes(AssetDir) ->
             middlewares => [
                 fun(Req, B) ->
                     case arizona_req:params(Req) of
-                        {[{~"x", <<255>>}, {~"y", ~"a b+"}, {~"flag", true}], Req1} ->
+                        {
+                            [
+                                {~"x", <<255>>},
+                                {~"y", ~"a b+"},
+                                {~"k&=", ~"%&=#"},
+                                {~"flag", true}
+                            ],
+                            Req1
+                        } ->
                             {cont, Req1, B};
                         {_Other, Req1} ->
                             {halt, arizona_req:put_resp_status(Req1, 422)}
@@ -1006,10 +1014,11 @@ ws_navigate_keeps_a_malformed_escape_raw(Config) ->
     ].
 
 %% The client copies the page's query string into the upgrade URL, so a param
-%% that is not UTF-8 (`%FF`) must reach the route intact, `+`, `%2B` and a bare
-%% flag beside it, or the page renders over HTTP but never goes live.
+%% that is not UTF-8 (`%FF`) must reach the route intact, `+`, `%2B`, escaped
+%% reserved characters and a bare flag beside it, or the page renders over HTTP
+%% but never goes live.
 ws_upgrade_carries_non_utf8_query_params(Config) ->
-    Query = [{~"x", ~"%FF"}, {~"y", ~"a+b%2B"}, {~"flag", true}],
+    Query = [{~"x", ~"%FF"}, {~"y", ~"a+b%2B"}, {~"k%26%3D", ~"%25%26%3D%23"}, {~"flag", true}],
     {ok, Sock} = arizona_wire_client:ws_connect(?config(port, Config), ~"/qs_probe", #{
         query => Query
     }),
