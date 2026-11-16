@@ -25,6 +25,7 @@ internal state.
 -export([end_per_suite/1]).
 -export([init_per_group/2]).
 -export([end_per_group/2]).
+-export([init_per_testcase/2]).
 
 %% Routing
 -export([live_get_is_200_html/1]).
@@ -295,7 +296,8 @@ init_per_suite(Config) ->
     AssetDir = filename:join(Priv, "assets"),
     ok = filelib:ensure_path(AssetDir),
     ok = file:write_file(filename:join(AssetDir, "app.txt"), ~"asset-bytes"),
-    ok = file:write_file(filename:join(AssetDir, <<"a.", 255, 254>>), ~"ext-bytes"),
+    %% A name that is not UTF-8, which some file systems refuse (APFS: `eilseq`).
+    NonUtf8Names = file:write_file(filename:join(AssetDir, <<"a.", 255, 254>>), ~"ext-bytes"),
     %% A file beside (not under) the asset dir: what a traversal would reach.
     ok = file:write_file(filename:join(Priv, "secret.txt"), ~"top-secret-bytes"),
     %% A link inside the asset dir pointing at it.
@@ -305,7 +307,7 @@ init_per_suite(Config) ->
     ok = filelib:ensure_path(filename:join(Priv, "assets2")),
     ok = file:write_file(filename:join([Priv, "assets2", "secret.txt"]), ~"top-secret-bytes"),
     ok = file:make_symlink("../assets2/secret.txt", filename:join(AssetDir, "sib.txt")),
-    [{asset_dir, AssetDir} | Config].
+    [{asset_dir, AssetDir}, {non_utf8_names, NonUtf8Names} | Config].
 
 end_per_suite(Config) when is_list(Config) ->
     ok = application:unset_env(arizona, secret_key),
@@ -331,6 +333,19 @@ end_per_group(Group, Config) ->
         true -> arizona_conformance_driver:stop(Group, conformance_main);
         false -> end_feature(Group, Config)
     end.
+
+%% The cases naming files that are not UTF-8 are skipped where the file system
+%% cannot hold such a name.
+init_per_testcase(Case, Config) when
+    Case =:= asset_missing_non_utf8_file_is_404;
+    Case =:= asset_extension_that_is_not_utf8_is_octet_stream
+->
+    case ?config(non_utf8_names, Config) of
+        ok -> Config;
+        {error, Reason} -> {skip, {file_system_refuses_non_utf8_names, Reason}}
+    end;
+init_per_testcase(_Case, Config) ->
+    Config.
 
 init_feature(session_store, Config) ->
     ok = application:set_env(arizona, session_store, arizona_session_store_ets),
