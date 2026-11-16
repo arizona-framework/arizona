@@ -2054,8 +2054,9 @@ is flushed (a flash has its own in-process carry instead).
 - `location_kind/1` -- reads a `Location` as a browser will (leading C0/space trimmed, tab/LF/CR
   removed): `local` for a path on this origin (one leading `/`), the only form a SPA navigation
   follows; `external` for an `http`/`https` URL, a scheme-relative `//host` or `/\host`, or a
-  relative path (resolved against the current URL, as an HTTP `Location` is), which the
-  transports send as a full load; `unsafe` for any other scheme, which never reaches the client
+  relative path (resolved against the URL of the request it answers, as an HTTP `Location`
+  is), which the transports send as a full load; `unsafe` for any other scheme, which never
+  reaches the client
 - flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
   (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a destination
@@ -2129,7 +2130,8 @@ Roadrunner and Cowboy have all four.
   opaque-redirect whose `Location` is unreadable), so a redirect is delivered as an effect. A
   `Location` that is not a path on this origin (`arizona_req:location_kind/1`) goes out with
   `full => true`, since `pushState` refuses another origin; a relative one loads resolved
-  against the current URL, as over HTTP. An unsafe scheme (`javascript:`, `data:`) raises
+  against the URL the response came from (after redirects), as over HTTP -- not against the
+  page that posted or its `<base href>`. An unsafe scheme (`javascript:`, `data:`) raises
   `{unsafe_redirect, Location}` rather than reach the client
 
 The response is deliberately **effects-only, no ops**: a stateless controller holds no diff

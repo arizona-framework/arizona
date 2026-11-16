@@ -7027,6 +7027,95 @@ describe('navigation scroll', () => {
         ]);
     });
 
+    it("a fetch response's relative navigate/patch resolves against the response URL, as a 3xx Location does", async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const originalFetch = globalThis.fetch;
+        /** Answer every fetch with `body`, from `url` (after redirects; '' when unknown). */
+        const respond = (url, body) => {
+            globalThis.fetch = vi.fn(() =>
+                Promise.resolve({ ok: true, status: 200, url, text: () => Promise.resolve(body) }),
+            );
+        };
+        const settle = async () => {
+            for (let i = 0; i < 10; i++) await Promise.resolve();
+        };
+        const lastNav = () =>
+            mock
+                .getSentMessages()
+                .filter((m) => m[0] === 'navigate' || m[0] === 'patch')
+                .at(-1);
+        const base = document.createElement('base');
+        try {
+            // No base: the page's directory is /patch-demo/, the endpoint's /api/.
+            history.replaceState(null, '', '/patch-demo/overview');
+            respond(`${location.origin}/api/account`, '{"e":[[10,"login?x=1"]]}');
+            mod.applyEffects([[22, '/api/account', {}]]);
+            await settle();
+            expect(location.pathname + location.search).toBe('/api/login?x=1');
+            expect(lastNav()).toEqual([
+                'navigate',
+                { path: '/api/login', qs: 'x=1' },
+                expect.any(Number),
+            ]);
+            // The URL the response came from, after a redirect, not the one asked.
+            history.replaceState(null, '', '/patch-demo/overview');
+            respond(`${location.origin}/v2/api/account`, '{"e":[[20,{},[[24,"edit"]]]]}');
+            mod.applyEffects([[22, '/api/account', {}]]);
+            await settle();
+            expect(location.pathname).toBe('/v2/api/edit');
+            expect(lastNav()).toEqual([
+                'patch',
+                { path: '/v2/api/edit', qs: '' },
+                expect.any(Number),
+            ]);
+            // Under a base: still the response's URL, not the base.
+            base.setAttribute('href', '/sub/');
+            document.head.appendChild(base);
+            history.replaceState(null, '', '/patch-demo/overview');
+            respond(`${location.origin}/api/account`, '{"e":[[10,"login"]]}');
+            mod.applyEffects([[22, '/api/account', {}]]);
+            await settle();
+            expect(location.pathname).toBe('/api/login');
+            expect(lastNav()).toEqual([
+                'navigate',
+                { path: '/api/login', qs: '' },
+                expect.any(Number),
+            ]);
+            // A response with no known URL resolves against what was requested,
+            // itself resolved against the base as fetch() resolves it.
+            history.replaceState(null, '', '/patch-demo/overview');
+            respond('', '{"e":[[10,"login"]]}');
+            mod.applyEffects([[22, 'api/account', {}]]);
+            await settle();
+            expect(location.pathname).toBe('/sub/api/login');
+            // A full navigate in a response loads the page the response names.
+            const assign = vi.fn();
+            respond(`${location.origin}/api/account`, '{"e":[[10,"login",{"full":true}]]}');
+            vi.stubGlobal('location', {
+                assign,
+                replace: vi.fn(),
+                origin: window.location.origin,
+                href: window.location.href,
+                pathname: window.location.pathname,
+                search: window.location.search,
+            });
+            try {
+                mod.applyEffects([[22, '/api/account', {}]]);
+                await settle();
+            } finally {
+                vi.unstubAllGlobals();
+            }
+            expect(assign).toHaveBeenCalledWith(`${location.origin}/api/login`);
+        } finally {
+            base.remove();
+            globalThis.fetch = originalFetch;
+        }
+    });
+
     it('a relative navigate/patch effect resolves against the document base, as history does', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

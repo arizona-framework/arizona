@@ -5,7 +5,7 @@ import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
 import { runTransition } from './arizona-transitions.js';
-import { closestForm, formControls, isForm, resetForm, warnOnce } from './arizona-util.js';
+import { closestForm, formControls, isForm, pageUrl, resetForm, warnOnce } from './arizona-util.js';
 
 /**
  * Append an encoded query to a URL, before its fragment: everything after the first
@@ -577,6 +577,45 @@ function markBusy(holder) {
     if (busyMarks(holder) && !holder.hasAttribute('az-busy')) {
         holder.setAttribute('az-busy', '');
         notifyUpdated(holder);
+    }
+}
+
+/**
+ * A fetch response's commands with every navigate/patch URL made absolute against
+ * `base`, the URL the response came from: a relative target names a page relative
+ * to the endpoint that answered, as an HTTP 3xx `Location` resolves against its
+ * request, not to the page that asked. A transition, an `on_key` and a fetch's
+ * `on_error` hold commands from the same body, so theirs resolve there too. A URL
+ * that does not parse is kept as written, for the navigate to refuse.
+ * @param {*} cmds
+ * @param {string} base
+ * @returns {*}
+ */
+function responseNavs(cmds, base) {
+    if (!Array.isArray(cmds)) return cmds;
+    if (cmds.length === 0 || Array.isArray(cmds[0])) {
+        return cmds.map((c) => responseNavs(c, base));
+    }
+    const [op, a, b, ...rest] = cmds;
+    switch (op) {
+        case JS_NAVIGATE:
+        case JS_PATCH: {
+            if (typeof a !== 'string') return cmds;
+            try {
+                return [op, new URL(a, base).href, ...cmds.slice(2)];
+            } catch {
+                return cmds;
+            }
+        }
+        case JS_TRANSITION:
+        case JS_ON_KEY:
+            return [op, a, responseNavs(b, base), ...rest];
+        case JS_FETCH:
+            return b?.on_error
+                ? [op, a, { ...b, on_error: responseNavs(b.on_error, base) }, ...rest]
+                : cmds;
+        default:
+            return cmds;
     }
 }
 
@@ -1298,7 +1337,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                                 if (id) trigger.setAttribute('az-target', id);
                             }
                             try {
-                                executeJS(trigger, null, effects);
+                                // The response's URL after redirects; the request's,
+                                // resolved as fetch() resolved it, when none is known.
+                                const from = resp.url || pageUrl(target).href;
+                                executeJS(trigger, null, responseNavs(effects, from));
                             } catch (err) {
                                 console.error('[arizona] fetch response effect threw', err);
                             }

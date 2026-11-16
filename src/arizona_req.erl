@@ -579,9 +579,10 @@ that must deliver it as a client navigation rather than an HTTP 3xx.
   navigation can follow.
 - `external` -- a page load is needed: an `http`/`https` URL, a scheme-relative one
   (`//host`, and `/\host`, which browsers read the same way), or a relative path,
-  which a browser resolves against the current URL, exactly as it would an HTTP
-  `Location`. It may still be same-origin, but the server cannot tell -- behind a
-  proxy it does not know its public origin -- and a page load is correct for any URL.
+  which resolves against the URL of the request it answers, exactly as an HTTP
+  `Location` does (a fetch response's effects against the response's URL). It may
+  still be same-origin, but the server cannot tell -- behind a proxy it does not know
+  its public origin -- and a page load is correct for any URL.
 - `unsafe` -- any other scheme (`javascript:`, `data:`, ...). Loading it would run
   it in the page, so no transport may hand it to the client.
 

@@ -220,10 +220,11 @@ a SPA navigation (its `Location` is unreadable), so a redirect is delivered as a
 A `Location` that is not a path on this origin (`arizona_req:location_kind/1`) -- an
 identity provider, an absolute URL -- cannot be SPA-navigated, so it is sent with the
 `full` option and the browser loads it for real. A relative one (`~"login"`) loads too,
-resolved against the current URL exactly as an HTTP `Location` would be. A scheme other
-than `http`/`https` (`javascript:`, `data:`) raises `{unsafe_redirect, Location}`: the
-client would run it in the page, so a `Location` taken from the request (a `next`
-parameter) would be script injection.
+resolved against the URL the fetch response came from (after redirects), exactly as an
+HTTP `Location` is resolved against its request: the endpoint's directory, not the page
+that posted or its `<base href>`. A scheme other than `http`/`https` (`javascript:`,
+`data:`) raises `{unsafe_redirect, Location}`: the client would run it in the page, so a
+`Location` taken from the request (a `next` parameter) would be script injection.
 
 This is a SPA navigation over the existing WebSocket, so it suits same-identity
 redirects. After an **identity change** (login/logout) use `arizona_js:reload/0`
