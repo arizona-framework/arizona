@@ -1392,6 +1392,29 @@ function rehomeHeld(marks) {
 }
 
 /**
+ * Replay the `push_event`s of a restored form's `az-change`. A value that is no
+ * command list (an app's data under a proven name) is skipped with a warning, as
+ * the live `change` listener skips it: a throw here would leave the forms after
+ * it unrestored and the resync frame unfinished (focus, `arizona:connected`).
+ * @param {HTMLFormElement} form
+ * @param {string} formId
+ * @param {string} azChange
+ */
+function replayForm(form, formId, azChange) {
+    try {
+        const events = replayEvents(JSON.parse(azChange));
+        if (events.length > 0) {
+            // Before running them: a throw part way may follow a sent event.
+            _replayedForms.add(formId);
+            executeJS(form, null, events);
+        }
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(`[arizona] az-change of form #${formId} was not replayed: ${detail}`);
+    }
+}
+
+/**
  * Restore form state after reconnection. Sets field values on matching forms
  * and replays their az-change push_events to sync server state, once: a replayed form is
  * tracked in `_replayedForms` until the server acknowledges the replay.
@@ -1466,11 +1489,7 @@ export function restoreFormState() {
         }
         // Only the push_events (see replayEvents): a fetch-only form asks for
         // no acknowledgement, so it never becomes suspect.
-        const events = replay && azChange && _connected ? replayEvents(JSON.parse(azChange)) : [];
-        if (events.length > 0) {
-            executeJS(form, null, events);
-            _replayedForms.add(formId);
-        }
+        if (replay && azChange && _connected) replayForm(formEl, formId, azChange);
     }
     _savedForms.clear();
     // The server handles a socket's frames in order, and an event synchronously,

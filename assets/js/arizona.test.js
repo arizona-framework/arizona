@@ -5832,6 +5832,67 @@ describe('crash and mount-failure recovery', () => {
         expect(field('q').value).toBe('q1');
     });
 
+    for (const bad of ['null', '[0,']) {
+        it(`a form whose az-change is ${bad} restores, and stops no other form or the frame`, async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const connected = vi.fn();
+            document.addEventListener('arizona:connected', connected);
+            try {
+                const view =
+                    '<div id="page" az-view>' +
+                    `<form id="a" az-change='${bad}'><input name="x" value=""></form>` +
+                    '<form id="b" az-change=\'[0,"changed"]\'>' +
+                    '<input id="y" name="y" value=""></form></div>';
+                const m = await start();
+                document.body.innerHTML = view;
+                m.simulateOpen();
+                m.simulateMessage(null, null);
+                expect(connected).toHaveBeenCalledTimes(1);
+                field('x').value = 'xx';
+                field('y').value = 'yy';
+                field('y').focus();
+                field('y').setSelectionRange(1, 1);
+                m.simulateClose(4500);
+                const before = m.posted.length;
+                m.simulateOpen(true);
+                m.simulateMessage([[8, 'page', view]], null, true);
+                const after = m.posted.slice(before);
+                expect(field('x').value).toBe('xx');
+                expect(field('y').value).toBe('yy');
+                expect(sends(after).map((s) => s[1])).toEqual(['changed']);
+                expect(ackRequests(m)).toBe(1);
+                expect(document.activeElement).toBe(field('y'));
+                expect(field('y').selectionStart).toBe(1);
+                expect(connected).toHaveBeenCalledTimes(2);
+                expect(warn).toHaveBeenCalledWith(
+                    expect.stringContaining('az-change of form #a was not replayed'),
+                );
+            } finally {
+                document.removeEventListener('arizona:connected', connected);
+                warn.mockRestore();
+            }
+        });
+
+        it(`a change event on an az-change of ${bad} warns and runs nothing`, async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                const m = await start();
+                document.body.innerHTML = formView(bad);
+                m.simulateOpen();
+                m.simulateMessage(null, null);
+                const before = m.posted.length;
+                field('q').value = 'typed';
+                field('q').dispatchEvent(new Event('change', { bubbles: true }));
+                expect(m.posted.slice(before)).toEqual([]);
+                expect(warn).toHaveBeenCalledWith(
+                    expect.stringContaining('az-change did not run as a command list'),
+                );
+            } finally {
+                warn.mockRestore();
+            }
+        });
+    }
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';
