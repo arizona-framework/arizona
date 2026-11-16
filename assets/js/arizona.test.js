@@ -6024,6 +6024,31 @@ describe('crash and mount-failure recovery', () => {
         }
     });
 
+    it('a replay that throws before sending anything is not withheld', async () => {
+        const view = formView('[0,"a"]');
+        await throwingReplayOn(1, async (arm) => {
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            m.simulateClose(4500);
+            const before = m.posted.length;
+            arm(true);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            arm(false);
+            const first = m.posted.slice(before);
+            expect(sends(first)).toEqual([]);
+            expect(first.filter((d) => d[0] === 4)).toEqual([]); // nothing to acknowledge
+            m.simulateClose(4500);
+            const again = m.posted.length;
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            expect(sends(m.posted.slice(again)).map((s) => s[1])).toEqual(['a']);
+        });
+    });
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';

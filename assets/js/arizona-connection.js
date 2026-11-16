@@ -257,6 +257,12 @@ const _savedForms = new Map();
 const _replayedForms = new Set();
 
 /**
+ * Event frames posted to the worker so far: a replay compares it across its run
+ * to tell whether it sent anything, whatever a command threw after.
+ */
+let _eventsSent = 0;
+
+/**
  * Keep the origin of the command running now for work it runs later: the returned
  * runner runs that work as the command would have, so one a server frame ran (a
  * handler's `transition(set_attr(...))`) still writes as the server (`_inFrame`).
@@ -542,6 +548,7 @@ function sendEvent(
         armPendingTransition(null);
     }
     workerPost(W_SEND, JSON.stringify(frame, wellFormed));
+    _eventsSent++;
     return _connected;
 }
 
@@ -1418,12 +1425,15 @@ function replayForm(form, formId, azChange) {
         );
     }
     if (events.length === 0) return;
-    // Before running them: a throw part way may follow a sent event.
-    _replayedForms.add(formId);
+    const sent = _eventsSent;
     try {
         executeJS(form, null, events);
     } catch (err) {
         console.error('[arizona] az-change replay of form #%s failed', formId, err);
+    } finally {
+        // Only a form that sent something awaits the acknowledgement, including
+        // one whose replay threw after a send: nothing sent cannot crash the view.
+        if (_eventsSent !== sent) _replayedForms.add(formId);
     }
 }
 
