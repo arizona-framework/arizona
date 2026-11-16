@@ -8713,6 +8713,209 @@ describe('form submit', () => {
         expect(mock.getSentMessages()).toHaveLength(0);
     });
 
+    // A submit with no push_event of its own resets whatever its navigation does:
+    // one the socket being down turns into a load resets as it would on a live
+    // socket, before the page goes (Back would bring the typed text back), and so
+    // does one whose URL is refused or whose load a prompt then cancels.
+    it.each([
+        ['loads its page before the first open', '[10,"/next"]', 'never'],
+        ['loads its page after a close', '[10,"/next"]', 'closed'],
+        ['is a full load', '[10,"/next",{"full":true}]', 'open'],
+        ['is refused', '[10,"javascript:alert(1)"]', 'never'],
+    ])('resets an az-form-reset submit at once whose navigation %s', async (_l, cmd, socket) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='${cmd}'><input name="q" value=""></form>`,
+        );
+        mock = setupMockWorker(mod);
+        if (socket !== 'never') mock.simulateOpen();
+        if (socket === 'closed') mock.simulateClose(1000);
+        document.querySelector('[name=q]').value = 'typed';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.stubGlobal('location', {
+            assign: vi.fn(),
+            replace: vi.fn(),
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            vi.unstubAllGlobals();
+            warn.mockRestore();
+        }
+        expect(document.querySelector('[name=q]').value).toBe('');
+    });
+
+    // A submit resets once what it sent went out, at once, whatever its navigation
+    // does: a load it starts clears nothing later, so Back finds the field empty.
+    it.each([
+        ['a full navigate', '[10,"/next",{"full":true}]'],
+        ['a push_event and a full navigate', '[[0,"save"],[10,"/next",{"full":true}]]'],
+        ['a cross-origin navigate', '[10,"https://elsewhere.example/x"]'],
+        ['an SPA navigate', '[10,"/next"]'],
+        ['a patch', '[24,"/?tab=2"]'],
+    ])('resets an az-form-reset submit for %s', async (_l, cmd) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='${cmd}'><input name="q" value=""><input name="r" value=""></form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        document.querySelector('[name=q]').value = 'typed';
+        document.querySelector('[name=r]').value = 'sent too';
+        vi.stubGlobal('location', {
+            assign: vi.fn(),
+            replace: vi.fn(),
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        const q = document.querySelector('[name=q]').value;
+        const r = document.querySelector('[name=r]').value;
+        expect([q, r]).toEqual(['', '']);
+        history.replaceState(null, '', '/');
+    });
+
+    // A navigation whose URL does not parse throws as it runs, with the socket up
+    // (inside its commands) or down (degraded to a load): it started, so the
+    // submit resets alike.
+    it.each([['open'], ['never']])(
+        'resets an az-form-reset submit whose navigation URL does not parse (%s)',
+        async (socket) => {
+            vi.resetModules();
+            const mod = await import('./arizona.js');
+            setupView(
+                'page',
+                `<form id="f" az-form-reset az-submit='[10,"http://["]'><input name="q" value=""></form>`,
+            );
+            mock = setupMockWorker(mod);
+            if (socket === 'open') mock.simulateOpen();
+            document.querySelector('[name=q]').value = 'typed';
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                document
+                    .getElementById('f')
+                    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            } finally {
+                warn.mockRestore();
+                history.replaceState(null, '', '/');
+            }
+            expect(document.querySelector('[name=q]').value).toBe('');
+        },
+    );
+
+    // A command that throws partway through its list does not undo what ran
+    // before it: the push_event went out, so the submit resets.
+    it('resets an az-form-reset submit whose sent push_event is followed by a throw', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='[[0,"save"],[10,"http://["]]'><input name="q" value=""></form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        document.querySelector('[name=q]').value = 'typed';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            warn.mockRestore();
+            history.replaceState(null, '', '/');
+        }
+        expect(mock.getSentMessages().filter((m) => m[1] === 'save')).toHaveLength(1);
+        expect(document.querySelector('[name=q]').value).toBe('');
+    });
+
+    // A submit whose push_event was refused as a repeat sent nothing, so it keeps
+    // its fields though its navigation loads the page, and nothing resets them
+    // when the page goes.
+    it('keeps the fields of a leaving submit whose push_event was refused', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-form-reset az-submit='[[0,"save",{},{"on_repeat":"drop"}],[10,"/next",{"full":true}]]'><input name="q"></form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        vi.stubGlobal('location', {
+            assign: vi.fn(),
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        const q = document.querySelector('[name=q]');
+        const submit = () =>
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        try {
+            q.value = 'first';
+            submit();
+            // The first is still awaiting its reply: this one is refused.
+            q.value = 'second';
+            submit();
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(mock.getSentMessages().filter((m) => m[1] === 'save')).toHaveLength(1);
+        window.dispatchEvent(new Event('pagehide'));
+        expect(q.value).toBe('second');
+        history.replaceState(null, '', '/');
+    });
+
+    // No submit arms anything for the unload: a listener left armed would hold the
+    // form, and the view it sits in, for good.
+    it.each([
+        ['swaps in place', '[10,"/next"]'],
+        ['loads the page', '[10,"/next",{"full":true}]'],
+    ])('arms no pagehide reset for a submit that %s', async (_l, cmd) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-form-reset az-submit='${cmd}'><input name="q"></form>`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const add = vi.spyOn(window, 'addEventListener');
+        vi.stubGlobal('location', {
+            assign: vi.fn(),
+            origin: window.location.origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(add.mock.calls.filter(([type]) => type === 'pagehide')).toEqual([]);
+        add.mockRestore();
+        history.replaceState(null, '', '/');
+    });
+
     // The full load goes through the same http(s)-only guard as every other one.
     it('refuses a disconnected navigate submit to a non-http(s) URL', async () => {
         vi.resetModules();

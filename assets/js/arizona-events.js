@@ -489,7 +489,9 @@ export function bindDocumentEvents(target, signal, abort) {
                 if (cmds) needs = socketNeeds(cmds, {}, false);
                 // While the socket is down (the worker drops pre-open sends):
                 // - an SPA navigation alone degrades to a full load of its URL, as a
-                //   disconnected az-navigate click does;
+                //   disconnected az-navigate click does, and resets as the same
+                //   submit on a live socket would (it raised no push_event), before
+                //   the page goes, so Back does not bring the typed text back;
                 // - anything else needing the socket drops the submission whole rather
                 //   than run it in part, keeping the typed fields (no reset), with a
                 //   warning and `arizona:submit-dropped` on the form for app feedback.
@@ -498,6 +500,7 @@ export function bindDocumentEvents(target, signal, abort) {
                 //   before the first open.
                 if (!host.ready() && needs.nav && !needs.event && !needs.fetch) {
                     host.leavePage(needs.nav[1], needs.nav[2]?.replace);
+                    closeSubmit(form, e);
                     return;
                 }
                 if (!host.ready() && (needs.event || needs.nav)) {

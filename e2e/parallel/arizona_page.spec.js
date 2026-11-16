@@ -1832,3 +1832,127 @@ test('about page timer restarts after reconnect', async ({ page }) => {
         { timeout: 8000 },
     );
 });
+
+// An az-form-reset submit resets once what it sent went out, at once, whatever its
+// navigation does next: Back does not bring the sent text back (a slow load the
+// socket's resync happens during included), and a prompt that cancels the load does
+// not undo the send.
+test.describe('az-form-reset with a navigation that leaves the page', () => {
+    const fullNavigateSubmit = (page) =>
+        page.evaluate(() => {
+            const form = document.getElementById('add-todo');
+            const cmds = JSON.parse(form.getAttribute('az-submit'));
+            const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+            form.setAttribute(
+                'az-submit',
+                JSON.stringify([...list, [10, '/scroll-home', { full: true }]]),
+            );
+        });
+    const field = (page) => page.locator('#add-todo input:not([type=submit])').first();
+
+    test('Back after the load shows the field empty', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await fullNavigateSubmit(page);
+        await field(page).fill('secret text');
+        const loaded = page.waitForURL((u) => u.pathname === '/scroll-home');
+        await field(page).press('Enter');
+        await loaded;
+        await wsReady(page);
+        await page.goBack();
+        await page.waitForURL((u) => u.pathname === '/');
+        await page.waitForTimeout(500);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    // An SPA navigate swaps only the view: a form outside it (a layout's) stays on
+    // screen, so its reset happens at once, not at an unload that never comes.
+    test('a form outside the view an SPA navigate replaces is reset at once', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(() => {
+            const f = document.createElement('form');
+            f.id = 'layout-form';
+            f.setAttribute('az-form-reset', '');
+            f.setAttribute('az-submit', JSON.stringify([10, '/about']));
+            f.innerHTML = '<input name="q" id="lfq">';
+            document.body.prepend(f);
+        });
+        await page.locator('#lfq').fill('search');
+        await page.locator('#lfq').press('Enter');
+        await expect(page.locator('main h1')).toHaveText('About');
+        await expect(page.locator('#lfq')).toHaveValue('');
+    });
+
+    // Firefox closes the socket as the load starts; the worker redials and the
+    // resync replaces the form while the slow page loads. A reset deferred to the
+    // unload would clear the replaced form, and Back would show the sent text.
+    test('Back after a slow load shows the field empty', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await fullNavigateSubmit(page);
+        await page.route('**/scroll-home', async (route) => {
+            if (route.request().resourceType() === 'document') {
+                await new Promise((r) => setTimeout(r, 3000));
+            }
+            await route.continue();
+        });
+        await field(page).fill('secret text');
+        const loaded = page.waitForURL((u) => u.pathname === '/scroll-home', { timeout: 20000 });
+        await field(page).press('Enter');
+        await loaded;
+        await wsReady(page);
+        await page.goBack();
+        await page.waitForURL((u) => u.pathname === '/');
+        await page.waitForTimeout(500);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    test('a load the prompt cancelled still clears what was sent', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await fullNavigateSubmit(page);
+        await page.evaluate(() =>
+            window.addEventListener('beforeunload', (e) => {
+                e.preventDefault();
+                e.returnValue = '';
+            }),
+        );
+        await page.mouse.click(5, 5);
+        let prompts = 0;
+        page.on('dialog', async (d) => {
+            prompts++;
+            await d.dismiss();
+        });
+        await field(page).fill('draft');
+        await field(page).press('Enter');
+        await expect.poll(() => prompts).toBe(1);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    // With the socket closed for good, a submit whose lone navigation loads the
+    // page resets as it does on a live socket, before the page goes.
+    test('Back after a disconnected submit loaded the page shows the field empty', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(() =>
+            document
+                .getElementById('add-todo')
+                .setAttribute('az-submit', JSON.stringify([10, '/scroll-home'])),
+        );
+        await field(page).fill('secret text');
+        await page.evaluate(() => window._ws.close(1000));
+        await page.waitForFunction(() =>
+            document.documentElement.classList.contains('az-disconnected'),
+        );
+        const loaded = page.waitForURL((u) => u.pathname === '/scroll-home');
+        await field(page).press('Enter');
+        await loaded;
+        await page.goBack();
+        await page.waitForURL((u) => u.pathname === '/');
+        await page.waitForTimeout(500);
+        await expect(field(page)).toHaveValue('');
+    });
+});
