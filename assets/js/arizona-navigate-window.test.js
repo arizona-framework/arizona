@@ -381,3 +381,95 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([[null, 'bump', {}]]);
     });
 });
+
+describe('isFragmentOfPage', () => {
+    // On /start: only a fragment of this very URL -- origin, path and query -- is.
+    it.each([
+        ['#x', true],
+        ['#', true],
+        ['/start#x', true],
+        ['/start', false],
+        ['/other#x', false],
+        ['/start?q=1#x', false],
+        // An empty query is still a query: the browser loads `/start?` from `/start`.
+        ['/start?#x', false],
+        ['https://elsewhere.example/start#x', false],
+    ])('%s is %s', async (url, expected) => {
+        const { isFragmentOfPage } = await import('./arizona-util.js');
+        expect(isFragmentOfPage(new URL(url, window.location.href))).toBe(expected);
+    });
+
+    // On /start?a: a query of the same presence but another value is another page.
+    it.each([
+        ['/start?a#x', true],
+        ['/start?b#x', false],
+        ['/start#x', false],
+    ])('on /start?a, %s is %s', async (url, expected) => {
+        history.replaceState(null, '', '/start?a');
+        const { isFragmentOfPage } = await import('./arizona-util.js');
+        expect(isFragmentOfPage(new URL(url, window.location.href))).toBe(expected);
+    });
+
+    // A navigate to a fragment of this page only scrolls; one under an empty query
+    // is another page, which the browser would load, so it asks the server for it.
+    it.each([
+        ['/start#x', false],
+        ['/start?#x', true],
+    ])('a navigate to %s on /start sends a frame: %s', async (url, frame) => {
+        await connected();
+        navigate(url);
+        expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
+    });
+
+    // The same through an az-navigate click.
+    it.each([
+        ['/start#x', false],
+        ['/start?#x', true],
+    ])('an az-navigate click to %s on /start sends a frame: %s', async (url, frame) => {
+        await connected();
+        const a = document.createElement('a');
+        a.setAttribute('href', url);
+        a.setAttribute('az-navigate', '');
+        document.body.appendChild(a);
+        a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
+    });
+
+    // The page loaded at connect is the one popstate compares with, its empty
+    // query included: on `/start?`, landing on `/start?#x` only scrolls, and
+    // landing on `/start#x` is another page.
+    it.each([
+        ['/start?#x', 0],
+        ['/start#x', 1],
+    ])('a popstate onto %s on a page loaded at /start? sends %s frames', async (url, n) => {
+        history.replaceState(null, '', '/start?');
+        await connected();
+        history.replaceState(null, '', url);
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        expect(mock.sent().filter((m) => m[0] === 'navigate')).toHaveLength(n);
+    });
+
+    // Back and Forward across that edge cross between two pages, so each asks the
+    // server again; across a fragment of the page they only scroll.
+    it.each([
+        ['/start#x', []],
+        [
+            '/start?#x',
+            [
+                { path: '/start', qs: '' },
+                { path: '/start', qs: '' },
+            ],
+        ],
+    ])('Back and Forward between /start and %s', async (url, frames) => {
+        await connected();
+        navigate(url);
+        const before = mock.sent().filter((m) => m[0] === 'navigate').length;
+        if (before > 0) replace();
+        history.replaceState(null, '', '/start');
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        history.replaceState(null, '', url);
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        const navs = mock.sent().filter((m) => m[0] === 'navigate');
+        expect(navs.slice(before).map((m) => m[1])).toEqual(frames);
+    });
+});

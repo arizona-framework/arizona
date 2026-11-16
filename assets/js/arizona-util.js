@@ -33,6 +33,44 @@ export function loadPage(url, replace) {
     else location.assign(url);
 }
 
+/**
+ * Whether `u` names a fragment of the page on screen (a bare `#` too, an empty
+ * one, as for the browser): a navigation there only scrolls.
+ * @param {URL} u
+ * @returns {boolean}
+ */
+export function isFragmentOfPage(u) {
+    const fragment = u.hash !== '' || u.href.endsWith('#');
+    return fragment && isSamePage(u, location);
+}
+
+/**
+ * Whether `u` and `page` name one page, their fragments aside: the same origin,
+ * path and query -- an empty query included, since `search` reads '' for `/?` and
+ * the browser loads `/?#x` from `/`.
+ * @param {URL|Location} u
+ * @param {URL|Location} page
+ * @returns {boolean}
+ */
+export function isSamePage(u, page) {
+    return (
+        u.origin === page.origin &&
+        u.pathname === page.pathname &&
+        u.search === page.search &&
+        hasQuery(u.href) === hasQuery(page.href)
+    );
+}
+
+/**
+ * Whether `href` carries a query, an empty one included.
+ * @param {string} href
+ * @returns {boolean}
+ */
+function hasQuery(href) {
+    const hash = href.indexOf('#');
+    return (hash < 0 ? href : href.slice(0, hash)).includes('?');
+}
+
 // HTMLFormElement is [LegacyOverrideBuiltIns]: a control named `elements` or `reset`
 // is what the form's own `elements` / `reset` return (the named property sits on the
 // form), so they are read from the prototype. (A form's id is read with

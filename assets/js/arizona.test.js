@@ -7194,7 +7194,14 @@ describe('navigation scroll', () => {
         // The browser already changed the URL on Back; returning silently would
         // desync URL and content and leave the reconnect URL stale.
         const reload = vi.fn();
-        vi.stubGlobal('location', { pathname: '/other', search: '', hash: '', reload });
+        vi.stubGlobal('location', {
+            origin: window.location.origin,
+            href: `${window.location.origin}/other`,
+            pathname: '/other',
+            search: '',
+            hash: '',
+            reload,
+        });
         window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
         vi.unstubAllGlobals();
 
@@ -7211,7 +7218,14 @@ describe('navigation scroll', () => {
         mock.simulateClose();
 
         const reload = vi.fn();
-        vi.stubGlobal('location', { pathname: '/cur', search: '', hash: '', reload });
+        vi.stubGlobal('location', {
+            origin: window.location.origin,
+            href: `${window.location.origin}/cur`,
+            pathname: '/cur',
+            search: '',
+            hash: '',
+            reload,
+        });
         window.dispatchEvent(
             new PopStateEvent('popstate', { state: { _azScroll: { x: 0, y: 70 } } }),
         );

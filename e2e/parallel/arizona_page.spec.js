@@ -1125,6 +1125,81 @@ test.describe('SPA navigation', () => {
         expect(Math.abs(top)).toBeLessThan(50);
     });
 
+    // Only a fragment of this very URL is a hash jump that keeps the view: one
+    // under an empty query is another page, which the browser would load, so it
+    // is navigated to (the view is replaced) and still lands on the anchor.
+    for (const [href, replaced] of [
+        ['/scroll-about#section', false],
+        ['/scroll-about?#section', true],
+    ]) {
+        test(`az-navigate from /scroll-about to ${href} replaces the view: ${replaced}`, async ({
+            page,
+        }) => {
+            await page.goto('/scroll-about');
+            await page.waitForSelector('#status:has-text("Connected")');
+            await page.evaluate((url) => {
+                const marker = document.createElement('i');
+                marker.id = '__marker';
+                document.querySelector('[az-view]').appendChild(marker);
+                const a = document.createElement('a');
+                a.setAttribute('href', url);
+                a.setAttribute('az-navigate', '');
+                document.body.appendChild(a);
+                a.dispatchEvent(
+                    new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+                );
+            }, href);
+            await page.waitForURL((u) => u.href.endsWith(href));
+            await page.waitForFunction(
+                () => Math.abs(document.getElementById('section').getBoundingClientRect().top) < 50,
+                null,
+                { timeout: 2000 },
+            );
+            await expect(page.locator('#__marker')).toHaveCount(replaced ? 0 : 1);
+        });
+    }
+
+    // Back and Forward across that edge cross between two pages, so each replaces
+    // the view again; across a fragment of the page they keep it.
+    for (const [href, replaced] of [
+        ['/scroll-about#section', false],
+        ['/scroll-about?#section', true],
+    ]) {
+        test(`Back and Forward between /scroll-about and ${href} replace the view: ${replaced}`, async ({
+            page,
+        }) => {
+            await page.goto('/scroll-about');
+            await page.waitForSelector('#status:has-text("Connected")');
+            const mark = () =>
+                page.evaluate(() => {
+                    const marker = document.createElement('i');
+                    marker.id = '__marker';
+                    document.querySelector('[az-view]').appendChild(marker);
+                });
+            await page.evaluate((url) => {
+                const a = document.createElement('a');
+                a.setAttribute('href', url);
+                a.setAttribute('az-navigate', '');
+                document.body.appendChild(a);
+                a.dispatchEvent(
+                    new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+                );
+            }, href);
+            await page.waitForURL((u) => u.href.endsWith(href));
+            await mark();
+            await page.goBack();
+            await page.waitForURL((u) => u.href.endsWith('/scroll-about'));
+            await expect(page.locator('#__marker')).toHaveCount(replaced ? 0 : 1);
+            await page.locator('#__marker').evaluateAll((els) => {
+                for (const el of els) el.remove();
+            });
+            await mark();
+            await page.goForward();
+            await page.waitForURL((u) => u.href.endsWith(href));
+            await expect(page.locator('#__marker')).toHaveCount(replaced ? 0 : 1);
+        });
+    }
+
     test('direct load of URL with #hash scrolls to the anchor', async ({ page }) => {
         // Not an SPA nav -- a full page load. The browser's native anchor
         // jump is suppressed by scrollRestoration='manual', so connect() must
