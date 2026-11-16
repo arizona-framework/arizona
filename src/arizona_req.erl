@@ -293,7 +293,9 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %%   page, and an HTTP/2 WebSocket upgrade arrives as `CONNECT`.
 %% - Match exactly as an HTTP request to `Path` would: same routes (those of the
 %%   listener that accepted the raw request), same order, same percent-decoded
-%%   bindings.
+%%   bindings. The exception is a path with a malformed escape (`%G1`), which a
+%%   server's own router may refuse over HTTP (standalone Cowboy answers `400`)
+%%   while this still matches it, the segment kept raw.
 %% - `RouteOpts` is what that route renders with: `bindings`, `on_mount`,
 %%   `layouts` (the socket compares them to decide whether a navigate can swap
 %%   the page in place), and `middlewares` with the `check_origin` step the

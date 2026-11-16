@@ -563,8 +563,8 @@ path_params_are_percent_decoded(Config) ->
     ].
 
 %% An escape stands for an octet (RFC 3986, section 2.1), so a capture is the
-%% bytes its escapes encode whether or not they are UTF-8, as a query parameter
-%% is. `%FF` is a well-formed path, not a bad request.
+%% bytes its escapes encode whether or not they are UTF-8. `%FF` is a
+%% well-formed path, not a bad request.
 path_params_decode_to_octets_utf8_or_not(Config) ->
     [
         begin

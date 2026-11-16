@@ -253,8 +253,8 @@ match_pattern(_Pattern, _Segments, _Bindings) ->
     nomatch.
 
 %% Captures are decoded once, on the winning route, to the octets their escapes
-%% encode, UTF-8 or not, as a query parameter is; a malformed escape keeps the
-%% segment raw rather than failing a match on client-controlled input.
+%% encode, UTF-8 or not, with `+` kept (no form encoding); a malformed escape
+%% keeps the segment raw rather than failing a match on client-controlled input.
 %% `uri_string:percent_decode/1` is no fit: it throws on a result that is not
 %% UTF-8, so `%FF` would crash the request.
 decode(Bindings) ->

@@ -2014,7 +2014,7 @@ adapter's behaviour callbacks on first access and cached in the returned request
 
 **Accessors** (lazy, return `{Value, Req1}`):
 
-- `bindings/1` -- route-pattern path bindings (map of atoms)
+- `bindings/1` -- route-pattern path bindings (a map keyed by binary names)
 - `params/1` -- parsed query string as a proplist (a malformed escape such as `%G1` is kept as
   written on roadrunner and answered `400` on Cowboy, where a navigate to it closes the socket
   `4500`)
