@@ -86,6 +86,7 @@ internal state.
 -export([ws_upgrade_to_non_utf8_param_route_opens/1]).
 -export([ws_navigate_to_non_utf8_param_route_replaces/1]).
 -export([ws_navigate_keeps_a_malformed_escape_raw/1]).
+-export([ws_upgrade_carries_non_utf8_query_params/1]).
 -export([ws_navigate_to_non_live_path_is_a_full_navigate/1]).
 -export([ws_patch_same_handler_diffs_in_place/1]).
 -export([ws_patch_other_handler_replaces/1]).
@@ -217,6 +218,7 @@ groups() ->
                 ws_upgrade_to_non_utf8_param_route_opens,
                 ws_navigate_to_non_utf8_param_route_replaces,
                 ws_navigate_keeps_a_malformed_escape_raw,
+                ws_upgrade_carries_non_utf8_query_params,
                 ws_navigate_to_non_live_path_is_a_full_navigate,
                 ws_patch_same_handler_diffs_in_place,
                 ws_patch_other_handler_replaces,
@@ -424,6 +426,19 @@ main_routes(AssetDir) ->
         }},
         %% WebSocket
         {live, ~"/pv/home", arizona_patch_view, #{bindings => #{section => ~"home"}}},
+        %% Opens only when the upgrade's query params reach the route as sent.
+        {live, ~"/qs_probe", arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    case arizona_req:params(Req) of
+                        {[{~"x", <<255>>}, {~"y", ~"a b+"}, {~"flag", true}], Req1} ->
+                            {cont, Req1, B};
+                        {_Other, Req1} ->
+                            {halt, arizona_req:put_resp_status(Req1, 422)}
+                    end
+                end
+            ]
+        }},
         {live, ~"/pv/about", arizona_patch_view, #{bindings => #{section => ~"about"}}},
         {live, ~"/pv/other", arizona_root_counter, #{}},
         %% Transforms
@@ -986,6 +1001,16 @@ ws_navigate_keeps_a_malformed_escape_raw(Config) ->
         end
      || Raw <- [~"a%41%G1", ~"%41%F"]
     ].
+
+%% The client copies the page's query string into the upgrade URL, so a param
+%% that is not UTF-8 (`%FF`) must reach the route intact, `+`, `%2B` and a bare
+%% flag beside it, or the page renders over HTTP but never goes live.
+ws_upgrade_carries_non_utf8_query_params(Config) ->
+    Query = [{~"x", ~"%FF"}, {~"y", ~"a+b%2B"}, {~"flag", true}],
+    {ok, Sock} = arizona_wire_client:ws_connect(?config(port, Config), ~"/qs_probe", #{
+        query => Query
+    }),
+    ok = arizona_wire_client:ws_close(Sock).
 
 ws_navigate_to_non_live_path_is_a_full_navigate(Config) ->
     Sock = live_socket(Config, ~"/"),
