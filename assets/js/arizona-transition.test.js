@@ -318,6 +318,56 @@ describe('view transitions -- push_event', () => {
         expect(fn).toHaveBeenCalledOnce();
     });
 
+    // A transition displaced while its reply was owed is not put back once that
+    // reply landed (or the socket went): bound to a ref never answered again, it
+    // would keep the pending slot from the dropped event's own transition, which
+    // the event beside the dropped one still binds.
+    it.each([
+        ['its reply landed', (r1) => _mock.simulateMessage([[OP.TEXT, 'page:0', 'r1']], null, r1)],
+        [
+            'the socket closed',
+            () => {
+                _mock.simulateClose();
+                _mock.simulateOpen();
+            },
+        ],
+    ])('a displaced transition is not put back once %s', (label, settle) => {
+        vi.useFakeTimers();
+        try {
+            const fn = document.startViewTransition;
+            const x = JSON.stringify([
+                JS_TRANSITION,
+                {},
+                [
+                    [JS_PUSH_EVENT, 'save', {}, DROP],
+                    [JS_PUSH_EVENT, 'other'],
+                ],
+            ]);
+            document.body.innerHTML =
+                '<div id="page" az-view><p az="0">old</p><button id="a">a</button>' +
+                `<button id="b" az-debounce="100" az-click='${x}'>b</button></div>`;
+            const a = document.getElementById('a');
+            const b = document.getElementById('b');
+            executeJS(b, null, [JS_PUSH_EVENT, 'save', {}, DROP]);
+            executeJS(a, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'x']]);
+            const r1 = _mock.lastRef();
+            // b's click arms its transition, displacing a's, its events debounced.
+            b.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            settle(r1);
+            // After a reconnect b's save is in flight again, so it is still a repeat.
+            if (label === 'the socket closed')
+                executeJS(b, null, [JS_PUSH_EVENT, 'save', {}, DROP]);
+            vi.advanceTimersByTime(100);
+            expect(sentFrames().at(-1)[1]).toBe('other');
+            const ref = _mock.lastRef();
+            expect(ref).toEqual(expect.any(Number));
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'other']], null, ref);
+            expect(fn).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     // Only the frame a transition waits for is tagged: an event sent outside one
     // goes out as it always did.
     it('tags only the event the transition wraps', () => {

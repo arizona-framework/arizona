@@ -564,9 +564,10 @@ function unsent(transition, ctls) {
 }
 
 // The pending transition, and the ref of the frame it was bound to, that the last
-// one armed (`by`) displaced, for `unsent` to put back. Nothing clears it when that
-// reply lands: put back after it, the transition waits for a ref that never comes
-// again (refs are never reused), so it animates nothing and the next arm replaces it.
+// one armed (`by`) displaced, for `unsent` to put back. Cleared when that ref's reply
+// lands or the socket goes: put back after that, the transition would be bound to a
+// ref never answered again, and keep the pending slot from the one it displaced --
+// whose events beside the dropped one could no longer bind it.
 /** @type {{by: {types?: string[], kind: 'replace'|'any'}, transition: {types?: string[], kind: 'replace'|'any'}, ref: number|null}|null} */
 let _displaced = null;
 
@@ -583,6 +584,7 @@ const _replyWaiters = new Map();
  */
 function settleEventReplies(ref) {
     if (ref === null) return;
+    if (_displaced?.ref === ref) _displaced = null;
     const waiter = _replyWaiters.get(ref);
     if (!waiter) return;
     _replyWaiters.delete(ref);
@@ -591,6 +593,7 @@ function settleEventReplies(ref) {
 
 /** Run every reply waiter: the socket they wait on went away. */
 function dropReplyWaiters() {
+    _displaced = null;
     const waiters = [..._replyWaiters.values()];
     _replyWaiters.clear();
     for (const w of waiters) w();
