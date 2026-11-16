@@ -25,12 +25,14 @@ internal state.
 -export([end_per_suite/1]).
 -export([init_per_group/2]).
 -export([end_per_group/2]).
+-export([init_per_testcase/2]).
 
 %% Routing
 -export([live_get_is_200_html/1]).
 -export([live_head_has_the_get_status_and_no_body/1]).
 -export([live_path_answers_other_methods_with_405/1]).
 -export([unknown_path_is_404/1]).
+-export([unknown_path_with_a_malformed_escape_is_404/1]).
 -export([same_path_verbs_reach_their_own_controllers/1]).
 -export([allow_is_the_union_across_overlapping_patterns/1]).
 -export([get_controller_answers_head/1]).
@@ -38,6 +40,8 @@ internal state.
 -export([match_any_answers_a_custom_method/1]).
 -export([path_params_are_percent_decoded/1]).
 -export([path_params_decode_to_octets_utf8_or_not/1]).
+-export([path_with_a_malformed_escape_keeps_its_segment_raw/1]).
+-export([query_params_keep_a_malformed_escape_raw/1]).
 -export([wildcard_captures_are_percent_decoded/1]).
 -export([empty_segments_and_trailing_slash_are_ignored/1]).
 -export([first_declared_route_wins/1]).
@@ -50,8 +54,11 @@ internal state.
 -export([asset_head_has_no_body/1]).
 -export([asset_answers_post_with_405/1]).
 -export([asset_missing_file_is_404/1]).
+-export([asset_missing_non_utf8_file_is_404/1]).
+-export([asset_extension_that_is_not_utf8_is_octet_stream/1]).
 -export([asset_traversal_is_not_served/1]).
 -export([asset_symlink_escape_is_not_served/1]).
+-export([asset_symlink_into_a_prefix_sibling_is_not_served/1]).
 -export([asset_cache_control_rides_a_200/1]).
 %% CSRF
 -export([cross_origin_post_is_403/1]).
@@ -87,6 +94,8 @@ internal state.
 -export([ws_navigate_to_non_utf8_param_route_replaces/1]).
 -export([ws_navigate_keeps_a_malformed_escape_raw/1]).
 -export([ws_upgrade_carries_non_utf8_query_params/1]).
+-export([ws_upgrade_keeps_a_malformed_query_escape_raw/1]).
+-export([ws_navigate_keeps_a_malformed_query_escape_raw/1]).
 -export([ws_navigate_to_non_live_path_is_a_full_navigate/1]).
 -export([ws_patch_same_handler_diffs_in_place/1]).
 -export([ws_patch_other_handler_replaces/1]).
@@ -120,6 +129,21 @@ internal state.
 -define(EVIL, ~"https://evil.example").
 -define(TRUSTED, ~"https://trusted.example").
 -define(CACHE_CONTROL, ~"public, max-age=60").
+%% A query string holding every malformed-escape shape, and the params it parses
+%% to: a component whose escapes do not all decode is kept as written (its `+`
+%% still a space), a well-formed one decodes, empty pairs are skipped.
+-define(RAW_QS, ~"x=%4&locale=%G1&y=a+%G1&z=%&flag&k%G1=v%41&w=%41%42&=e&&p=+").
+-define(RAW_QS_PARAMS, [
+    {~"x", ~"%4"},
+    {~"locale", ~"%G1"},
+    {~"y", ~"a %G1"},
+    {~"z", ~"%"},
+    {~"flag", true},
+    {~"k%G1", ~"vA"},
+    {~"w", ~"AB"},
+    {<<>>, ~"e"},
+    {~"p", ~" "}
+]).
 %% The registered name a held loop reports what it receives to.
 -define(LOOP_WATCHER, arizona_conformance_loop_watcher).
 
@@ -153,6 +177,7 @@ groups() ->
                 live_head_has_the_get_status_and_no_body,
                 live_path_answers_other_methods_with_405,
                 unknown_path_is_404,
+                unknown_path_with_a_malformed_escape_is_404,
                 same_path_verbs_reach_their_own_controllers,
                 allow_is_the_union_across_overlapping_patterns,
                 get_controller_answers_head,
@@ -160,6 +185,8 @@ groups() ->
                 match_any_answers_a_custom_method,
                 path_params_are_percent_decoded,
                 path_params_decode_to_octets_utf8_or_not,
+                path_with_a_malformed_escape_keeps_its_segment_raw,
+                query_params_keep_a_malformed_escape_raw,
                 wildcard_captures_are_percent_decoded,
                 empty_segments_and_trailing_slash_are_ignored,
                 first_declared_route_wins,
@@ -173,8 +200,11 @@ groups() ->
                 asset_head_has_no_body,
                 asset_answers_post_with_405,
                 asset_missing_file_is_404,
+                asset_missing_non_utf8_file_is_404,
+                asset_extension_that_is_not_utf8_is_octet_stream,
                 asset_traversal_is_not_served,
                 asset_symlink_escape_is_not_served,
+                asset_symlink_into_a_prefix_sibling_is_not_served,
                 asset_cache_control_rides_a_200
             ]},
             {csrf, [], [
@@ -219,6 +249,8 @@ groups() ->
                 ws_navigate_to_non_utf8_param_route_replaces,
                 ws_navigate_keeps_a_malformed_escape_raw,
                 ws_upgrade_carries_non_utf8_query_params,
+                ws_upgrade_keeps_a_malformed_query_escape_raw,
+                ws_navigate_keeps_a_malformed_query_escape_raw,
                 ws_navigate_to_non_live_path_is_a_full_navigate,
                 ws_patch_same_handler_diffs_in_place,
                 ws_patch_other_handler_replaces,
@@ -264,11 +296,18 @@ init_per_suite(Config) ->
     AssetDir = filename:join(Priv, "assets"),
     ok = filelib:ensure_path(AssetDir),
     ok = file:write_file(filename:join(AssetDir, "app.txt"), ~"asset-bytes"),
+    %% A name that is not UTF-8, which some file systems refuse (APFS: `eilseq`).
+    NonUtf8Names = file:write_file(filename:join(AssetDir, <<"a.", 255, 254>>), ~"ext-bytes"),
     %% A file beside (not under) the asset dir: what a traversal would reach.
     ok = file:write_file(filename:join(Priv, "secret.txt"), ~"top-secret-bytes"),
     %% A link inside the asset dir pointing at it.
     ok = file:make_symlink("../secret.txt", filename:join(AssetDir, "leak.txt")),
-    [{asset_dir, AssetDir} | Config].
+    %% A sibling whose name starts with the asset dir's (`assets2` beside
+    %% `assets`), and a link inside the asset dir pointing into it.
+    ok = filelib:ensure_path(filename:join(Priv, "assets2")),
+    ok = file:write_file(filename:join([Priv, "assets2", "secret.txt"]), ~"top-secret-bytes"),
+    ok = file:make_symlink("../assets2/secret.txt", filename:join(AssetDir, "sib.txt")),
+    [{asset_dir, AssetDir}, {non_utf8_names, NonUtf8Names} | Config].
 
 end_per_suite(Config) when is_list(Config) ->
     ok = application:unset_env(arizona, secret_key),
@@ -294,6 +333,16 @@ end_per_group(Group, Config) ->
         true -> arizona_conformance_driver:stop(Group, conformance_main);
         false -> end_feature(Group, Config)
     end.
+
+%% The case serving the non-UTF-8 fixture is skipped where the file system
+%% refused to write it.
+init_per_testcase(asset_extension_that_is_not_utf8_is_octet_stream, Config) ->
+    case ?config(non_utf8_names, Config) of
+        ok -> Config;
+        {error, Reason} -> {skip, {file_system_refuses_non_utf8_names, Reason}}
+    end;
+init_per_testcase(_Case, Config) ->
+    Config.
 
 init_feature(session_store, Config) ->
     ok = application:set_env(arizona, session_store, arizona_session_store_ets),
@@ -447,6 +496,21 @@ main_routes(AssetDir) ->
                 end
             ]
         }},
+        %% Renders its `locale` param.
+        {live, ~"/q", arizona_crashable, #{middlewares => [arizona_middleware:extract([params])]}},
+        %% Renders `Status: raw-kept` only when ?RAW_QS parses to ?RAW_QS_PARAMS.
+        {live, ~"/qs_raw", arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    case arizona_req:params(Req) of
+                        {?RAW_QS_PARAMS, Req1} ->
+                            {cont, Req1, B#{status => ~"raw-kept"}};
+                        {_Other, Req1} ->
+                            {halt, arizona_req:put_resp_status(Req1, 422)}
+                    end
+                end
+            ]
+        }},
         {live, ~"/pv/about", arizona_patch_view, #{bindings => #{section => ~"about"}}},
         {live, ~"/pv/other", arizona_root_counter, #{}},
         %% Transforms
@@ -521,6 +585,14 @@ live_path_answers_other_methods_with_405(Config) ->
 unknown_path_is_404(Config) ->
     ?assertMatch({404, _, _}, req(Config, ~"GET", ~"/no/such/route", [])).
 
+%% A malformed escape is part of a path like any other byte: one no route
+%% matches is a miss, not a bad request.
+unknown_path_with_a_malformed_escape_is_404(Config) ->
+    [
+        ?assertMatch({404, _, _}, req(Config, ~"GET", Path, []))
+     || Path <- [~"/nowhere/%G1", ~"/nowhere/a%4", ~"/no%ZZ/such/route"]
+    ].
+
 same_path_verbs_reach_their_own_controllers(Config) ->
     ?assertMatch({200, _, ~"users#create"}, req(Config, ~"POST", ~"/verbs", [])),
     ?assertMatch({200, _, ~"VERBS_DELETE"}, req(Config, ~"DELETE", ~"/verbs", [])),
@@ -575,6 +647,38 @@ path_params_decode_to_octets_utf8_or_not(Config) ->
     ],
     {200, _, Wildcard} = req(Config, ~"GET", ~"/wc/%FF/a", []),
     ?assertEqual(~"WILDCARD", Wildcard).
+
+%% A segment holding a malformed escape is kept whole, as written, none of its
+%% escapes decoded: browsers send such a URL as typed (WHATWG URL), so it is a
+%% path to match, not a bad request.
+path_with_a_malformed_escape_keeps_its_segment_raw(Config) ->
+    [
+        begin
+            {200, _, Body} = req(Config, ~"GET", <<"/items/", Raw/binary>>, []),
+            ?assertEqual(Raw, rendered(~"Item", Body))
+        end
+     || Raw <- [~"%G1", ~"a%41%G1", ~"%41%F", ~"%4", ~"a%"]
+    ].
+
+%% A query component whose escapes do not all decode is kept as written, `+`
+%% still a space; a well-formed escape decodes to its octet, UTF-8 or not.
+query_params_keep_a_malformed_escape_raw(Config) ->
+    [
+        begin
+            {200, _, Body} = req(Config, ~"GET", <<"/q?locale=", Qs/binary>>, []),
+            ?assertEqual(Expected, rendered_bytes(~"Locale", Body))
+        end
+     || {Qs, Expected} <- [
+            {~"%G1", ~"%G1"},
+            {~"%4", ~"%4"},
+            {~"%", ~"%"},
+            {~"a+%G1", ~"a %G1"},
+            {~"a%41%G1", ~"a%41%G1"},
+            {~"%FF", <<255>>}
+        ]
+    ],
+    {200, _, Probe} = req(Config, ~"GET", <<"/qs_raw?", ?RAW_QS/binary>>, []),
+    ?assertEqual(~"raw-kept", rendered(~"Status", Probe)).
 
 %% Every segment a `*name` captures is decoded on its own, after the split, so an
 %% escaped `/` stays inside its segment.
@@ -758,9 +862,23 @@ asset_answers_post_with_405(Config) ->
 asset_missing_file_is_404(Config) ->
     ?assertMatch({404, _, _}, req(Config, ~"GET", ~"/files/missing.txt", [])).
 
+%% A segment that is not UTF-8 names no file here: a missing file, not an error.
+asset_missing_non_utf8_file_is_404(Config) ->
+    [
+        ?assertMatch({404, _, _}, req(Config, ~"GET", Path, []))
+     || Path <- [~"/files/%FF", ~"/files/a%FFb.txt", ~"/files/caf%C3%A9"]
+    ].
+
+%% A file whose extension is not UTF-8 is served, with no type of its own.
+asset_extension_that_is_not_utf8_is_octet_stream(Config) ->
+    {200, Headers, Body} = req(Config, ~"GET", ~"/files/a.%FF%FE", []),
+    ?assertEqual(~"ext-bytes", Body),
+    ?assertEqual(~"application/octet-stream", header(~"content-type", Headers)).
+
 %% `secret.txt` sits one level above the asset dir; no spelling of `..` may
-%% reach it.
+%% reach it, nor its absolute path in one segment, nor a NUL ending a name early.
 asset_traversal_is_not_served(Config) ->
+    Secret = filename:join(filename:dirname(?config(asset_dir, Config)), "secret.txt"),
     [
         ?assertMatch(
             {Status, _, Body} when
@@ -771,7 +889,13 @@ asset_traversal_is_not_served(Config) ->
             ~"/files/../secret.txt",
             ~"/files/%2e%2e/secret.txt",
             ~"/files/%2E%2E%2Fsecret.txt",
-            ~"/files/..%2fsecret.txt"
+            ~"/files/..%2fsecret.txt",
+            ~"/files/..%5Csecret.txt",
+            <<"/files/", (escape_segment(Secret))/binary>>,
+            ~"/files/app.txt%00.png",
+            ~"/files/..%2Fsecret.txt%00",
+            ~"/files/%2e%2e%2fsecret.txt%FF",
+            ~"/files/%2e%2e%2fsecret.txt%G1"
         ]
     ],
     ok.
@@ -782,6 +906,14 @@ asset_symlink_escape_is_not_served(Config) ->
         {Status, _, Body} when
             Status >= 400 andalso Status < 500 andalso Body =/= ~"top-secret-bytes",
         req(Config, ~"GET", ~"/files/leak.txt", [])
+    ).
+
+%% `assets2` shares the asset dir's name as a prefix but is not inside it.
+asset_symlink_into_a_prefix_sibling_is_not_served(Config) ->
+    ?assertMatch(
+        {Status, _, Body} when
+            Status >= 400 andalso Status < 500 andalso Body =/= ~"top-secret-bytes",
+        req(Config, ~"GET", ~"/files/sib.txt", [])
     ).
 
 asset_cache_control_rides_a_200(Config) ->
@@ -1003,8 +1135,7 @@ ws_navigate_to_non_utf8_param_route_replaces(Config) ->
 
 %% A malformed escape anywhere in a segment keeps the whole segment as written:
 %% no escape before it is decoded and none after it, and a truncated one is not
-%% decoded partially. Over a navigate, since the standalone Cowboy listener's
-%% own router answers such an HTTP path `400` before Arizona sees it.
+%% decoded partially. A navigate matches it exactly as an HTTP request does.
 ws_navigate_keeps_a_malformed_escape_raw(Config) ->
     [
         begin
@@ -1028,6 +1159,42 @@ ws_upgrade_carries_non_utf8_query_params(Config) ->
         query => Query
     }),
     ok = arizona_wire_client:ws_close(Sock).
+
+%% The page's query string reaches the upgrade as typed, so a malformed escape in
+%% it must not fail the upgrade.
+ws_upgrade_keeps_a_malformed_query_escape_raw(Config) ->
+    Query = [
+        case binary:split(Pair, ~"=") of
+            [Key] -> {Key, true};
+            [Key, Value] -> {Key, Value}
+        end
+     || Pair <- binary:split(?RAW_QS, ~"&", [global]), Pair =/= <<>>
+    ],
+    {ok, Sock} = arizona_wire_client:ws_connect(?config(port, Config), ~"/qs_raw", #{
+        query => Query
+    }),
+    {text, Frame} = arizona_wire_client:ws_recv(Sock),
+    ?assertMatch(#{~"a" := _}, json:decode(Frame)),
+    ok = arizona_wire_client:ws_close(Sock).
+
+%% A navigate's query string reaches `arizona_req:params/1` as typed: a malformed
+%% escape renders raw rather than crashing the socket.
+ws_navigate_keeps_a_malformed_query_escape_raw(Config) ->
+    [
+        begin
+            Sock = live_socket(Config, ~"/"),
+            ok = navigate(Sock, ~"navigate", Path, Qs),
+            {text, Resp} = arizona_wire_client:ws_recv(Sock),
+            #{~"o" := [[?OP_REPLACE, _, View]]} = json:decode(Resp),
+            ?assertEqual(Expected, rendered(Label, flat_html(View))),
+            ok = arizona_wire_client:ws_close(Sock)
+        end
+     || {Path, Qs, Label, Expected} <- [
+            {~"/q", ~"locale=%G1", ~"Locale", ~"%G1"},
+            {~"/q", ~"locale=%4", ~"Locale", ~"%4"},
+            {~"/qs_raw", ?RAW_QS, ~"Status", ~"raw-kept"}
+        ]
+    ].
 
 ws_navigate_to_non_live_path_is_a_full_navigate(Config) ->
     Sock = live_socket(Config, ~"/"),
@@ -1305,6 +1472,21 @@ drain_listener(Config) ->
 req(Config, Method, Path, Headers) ->
     arizona_wire_client:request(?config(port, Config), Method, Path, Headers, <<>>).
 
+%% `Path` as one path segment: every byte but an unreserved one escaped, `/`
+%% included.
+escape_segment(Path) ->
+    <<
+        <<(escape_byte(B))/binary>>
+     || <<B>> <= unicode:characters_to_binary(Path)
+    >>.
+
+escape_byte(B) when
+    B >= $a, B =< $z; B >= $A, B =< $Z; B >= $0, B =< $9; B =:= $.; B =:= $-; B =:= $_; B =:= $~
+->
+    <<B>>;
+escape_byte(B) ->
+    <<$%, (integer_to_binary(B div 16, 16))/binary, (integer_to_binary(B rem 16, 16))/binary>>.
+
 header(Name, Headers) ->
     arizona_wire_client:header(Name, Headers).
 
@@ -1359,4 +1541,7 @@ live_socket(Config, Path) ->
     Sock.
 
 navigate(Sock, Kind, Path) ->
-    arizona_wire_client:ws_send_json(Sock, [Kind, #{~"path" => Path, ~"qs" => ~""}]).
+    navigate(Sock, Kind, Path, ~"").
+
+navigate(Sock, Kind, Path, Qs) ->
+    arizona_wire_client:ws_send_json(Sock, [Kind, #{~"path" => Path, ~"qs" => Qs}]).
