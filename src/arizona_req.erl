@@ -441,6 +441,12 @@ bindings(#{adapter := Adapter, raw := Raw} = Req) ->
 Returns parsed query-string params as a proplist. Lazy-loaded and cached.
 
 Preserves repeat keys (`?tag=a&tag=b` returns two entries).
+
+A value is decoded as form encoding is: `+` is a space and each escape the
+octet it encodes, UTF-8 or not, and a bare key (`?debug`) is `true`. A malformed
+escape (`%G1`, a trailing `%4`) depends on the server: roadrunner keeps the text
+as written, while Cowboy fails the request with `400` once the query is parsed
+(always on a WebSocket upgrade, which reads it).
 """.
 -spec params(request()) -> {params(), request()}.
 params(#{params := Params} = Req) ->

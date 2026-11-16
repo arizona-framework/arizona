@@ -2015,7 +2015,8 @@ adapter's behaviour callbacks on first access and cached in the returned request
 **Accessors** (lazy, return `{Value, Req1}`):
 
 - `bindings/1` -- route-pattern path bindings (map of atoms)
-- `params/1` -- parsed query string as a proplist
+- `params/1` -- parsed query string as a proplist (a malformed escape such as `%G1` is kept as
+  written on roadrunner and answered `400` on Cowboy)
 - `cookies/1` -- parsed cookies as a proplist
 - `headers/1` -- request headers as a map
 - `user_agent/1` -- the `User-Agent` header (pairs with `arizona_user_agent:browser/1` etc.)
