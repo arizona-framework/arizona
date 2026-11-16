@@ -86,6 +86,17 @@ function installWebSocketStub() {
             this.sent.push(data);
         }
         close(code = 1000) {
+            // A dead peer never answers the close handshake: the browser keeps the
+            // socket CLOSING and fires `close` only once it gives up (20-60s).
+            if (MockWS.deadPeer) {
+                this.readyState = 2;
+                return;
+            }
+            this.readyState = 3;
+            if (this.onclose) this.onclose({ code });
+        }
+        /** The browser gives up on a dead peer's close handshake. */
+        giveUp(code = 1006) {
             this.readyState = 3;
             if (this.onclose) this.onclose({ code });
         }
@@ -97,12 +108,17 @@ function installWebSocketStub() {
             if (this.onmessage) this.onmessage({ data });
         }
     }
+    MockWS.deadPeer = false;
     const orig = globalThis.WebSocket;
     globalThis.WebSocket = MockWS;
     return {
         instances,
         latest() {
             return instances[instances.length - 1];
+        },
+        /** @param {boolean} dead */
+        deadPeer(dead) {
+            MockWS.deadPeer = dead;
         },
         restore() {
             globalThis.WebSocket = orig;
@@ -522,6 +538,47 @@ describe('arizona-worker', () => {
         slf.posted.length = 0;
         ws.latest().simulateMessage('1'); // a pong on the new socket
         expect(slf.posted).toEqual([]);
+    });
+
+    // The heartbeat gives up on a peer that stopped answering: the close it starts
+    // is never answered either, and the browser fires `close` only when it gives up
+    // on the handshake. The main thread hears the socket is down when the worker
+    // closes it, and reconnects; the late `close` reports and schedules nothing.
+    it('reports a socket it closes on a dead peer at once, and once', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        const dead = ws.latest();
+        dead.simulateOpen();
+        ws.deadPeer(true);
+        slf.posted.length = 0;
+        vi.advanceTimersByTime(60000);
+        expect(dead.readyState).toBe(2);
+        expect(slf.posted).toEqual([[2, 1006]]);
+        ws.deadPeer(false);
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(2);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        dead.giveUp();
+        vi.advanceTimersByTime(30000);
+        expect(slf.posted.filter((m) => m[0] === 2)).toEqual([]);
+        expect(ws.instances).toHaveLength(2);
+        // A frame from the abandoned socket is no frame of this connection.
+        dead.simulateMessage(JSON.stringify({ o: [] }));
+        expect(slf.posted.filter((m) => m[0] === 0)).toEqual([]);
+    });
+
+    it('reports a close the main thread asks for at once, on a dead peer too', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        const dead = ws.latest();
+        dead.simulateOpen();
+        ws.deadPeer(true);
+        slf.posted.length = 0;
+        slf.send([2, 1000]);
+        expect(slf.posted).toEqual([[2, 1000]]);
+        dead.giveUp(1000);
+        vi.advanceTimersByTime(60000);
+        expect(slf.posted).toEqual([[2, 1000]]);
+        expect(ws.instances).toHaveLength(1);
     });
 
     it('heartbeat sends ping after 30s, closes if pong not received before next tick', () => {
