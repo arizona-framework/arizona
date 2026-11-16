@@ -8354,6 +8354,28 @@ describe('fetch in flight', () => {
         }
     });
 
+    // A settled request holds its form no more, on either leg: no flight and no
+    // pending reset for a reconnect resync to carry over.
+    it.each([
+        ['a response', (p) => p.resolve(response(200, '{"e":[]}'))],
+        ['a network failure', (p) => p.reject(new TypeError('Failed to fetch'))],
+    ])('lets go of its form once it settles after %s', async (_label, settle) => {
+        await page(`<form id="f" method="post" az-submit='[22,"/save",{}]' az-form-reset></form>`);
+        const { heldNodes } = await import('./arizona-commands.js');
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const failed = vi.fn();
+        document.addEventListener('arizona:fetch-error', failed);
+        try {
+            submit('f');
+            expect(heldNodes().has(document.getElementById('f'))).toBe(true);
+            settle(pending[0]);
+            await flush();
+            expect(heldNodes().size).toBe(0);
+        } finally {
+            document.removeEventListener('arizona:fetch-error', failed);
+        }
+    });
+
     it('releases a request before its effects run', async () => {
         await page(`<form id="f" method="post" az-submit='${cmd([22, '/save', DROP])}'></form>`);
         const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));

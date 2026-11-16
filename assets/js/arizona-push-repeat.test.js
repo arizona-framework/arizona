@@ -10,6 +10,8 @@ import { embedAttrs } from './test-proofs.js';
 let mock = null;
 /** @type {any} */
 let mod = null;
+/** The command interpreter of `mod`'s module graph, for what it holds. @type {any} */
+let cmds = null;
 
 afterEach(() => {
     if (mock) mock.restore();
@@ -22,6 +24,7 @@ afterEach(() => {
 async function connect(html) {
     vi.resetModules();
     mod = await import('./arizona.js');
+    cmds = await import('./arizona-commands.js');
     document.body.innerHTML = `<div id="page" az-view>${html}</div>`;
     const posted = [];
     let onmessage = null;
@@ -438,6 +441,9 @@ describe('push_event on_repeat: drop', () => {
                 expect(dropped).toHaveLength(1);
                 expect(mock.sent()).toHaveLength(1);
                 expect(q.value).toBe('second');
+                // Decided, the deferred reset holds the form no more.
+                mock.reply(mock.sent()[0][3]);
+                expect(cmds.heldNodes().size).toBe(0);
             });
 
             it('waits for every one of its paced events, resetting when one went out', async () => {
@@ -459,6 +465,8 @@ describe('push_event on_repeat: drop', () => {
                 // `save` is a repeat of the first, dropped; `log` went out.
                 expect(mock.sent().map((f) => f[1])).toEqual(['save', 'log', 'log']);
                 expect(q.value).toBe('');
+                mock.reply(mock.sent()[0][3]);
+                expect(cmds.heldNodes().size).toBe(0);
             });
 
             it('resets the form a reconnect put in its place', async () => {
