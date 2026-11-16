@@ -21,7 +21,7 @@ import { destroyAllHooks, mountHooks, notifyUpdated } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
-import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
+import { parseTransitionAttr, runTransition, withTransitionAttr } from './arizona-transitions.js';
 import {
     formControls,
     isForm,
@@ -1415,7 +1415,8 @@ function replayForm(form, formId, azChange) {
     const events = [];
     try {
         // Fills `events` in order, so what it collected before a bad item stays.
-        replayEvents(JSON.parse(azChange), events);
+        // Wrapped in the form's `az-transition` as the live listener wraps it.
+        replayEvents(withTransitionAttr(form, JSON.parse(azChange)), events);
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         // Once per form: the value stays bad, and every reconnect would repeat it.

@@ -883,9 +883,34 @@ export function replayEvents(cmds, out = []) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
     for (const c of list) {
         if (c[0] === JS_PUSH_EVENT) out.push(c);
-        else if (c[0] === JS_TRANSITION) replayEvents(c[2], out);
+        else if (c[0] === JS_TRANSITION) {
+            // Read as `execOne` reads it before running any of its commands, so a
+            // wrapper whose scan cannot read an item replays none, as it runs none.
+            transitionKind(c[2]);
+            replayEvents(c[2], out);
+        }
     }
     return out;
+}
+
+/**
+ * What a transition wrapping `inner` (one command or a list) waits for: `'replace'`
+ * for a navigate that asks the server, `'any'` for a push_event or a patch that
+ * does, else `null` (it wraps in place). Throws on an item it cannot read, before
+ * any of the commands run.
+ * @param {Array<*>} inner
+ * @returns {'replace'|'any'|null}
+ */
+function transitionKind(inner) {
+    const innerCmds = /** @type {Array<Array<*>>} */ (Array.isArray(inner[0]) ? inner : [inner]);
+    // A navigate/patch that sends no frame (a hash jump, a page load)
+    // has no reply to wait for; a hash jump then wraps in place.
+    const toServer = (/** @type {Array<*>} */ c) => !c[2]?.full && host.awaitsReply(c[1]);
+    return innerCmds.some((c) => c[0] === JS_NAVIGATE && toServer(c))
+        ? 'replace'
+        : innerCmds.some((c) => c[0] === JS_PUSH_EVENT || (c[0] === JS_PATCH && toServer(c)))
+          ? 'any'
+          : null;
 }
 
 /**
@@ -1010,19 +1035,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             // worker message handler wrap the matching batch.
             const opts = cmd[1] || {};
             const inner = cmd[2];
-            const innerCmds = /** @type {Array<Array<*>>} */ (
-                Array.isArray(inner[0]) ? inner : [inner]
-            );
-            // A navigate/patch that sends no frame (a hash jump, a page load)
-            // has no reply to wait for; a hash jump then wraps in place.
-            const toServer = (/** @type {Array<*>} */ c) => !c[2]?.full && host.awaitsReply(c[1]);
-            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE && toServer(c))
-                ? 'replace'
-                : innerCmds.some(
-                        (c) => c[0] === JS_PUSH_EVENT || (c[0] === JS_PATCH && toServer(c)),
-                    )
-                  ? 'any'
-                  : null;
+            const kind = transitionKind(inner);
             if (kind) {
                 /** @type {{types?: string[], kind: 'any'|'replace'}} */
                 const t = { types: opts.types, kind };

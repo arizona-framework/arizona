@@ -6075,6 +6075,39 @@ describe('crash and mount-failure recovery', () => {
         });
     });
 
+    for (const [shape, change, extra] of [
+        ['a transition holding an unreadable item', '[[20,{},[[0,"a"],null]]]', ''],
+        ['an unreadable item under az-transition', '[[0,"a"],null]', ' az-transition'],
+        ['an unreadable item', '[[0,"a"],null,[0,"b"]]', ''],
+        ['a number item', '[[0,"a"],5,[0,"b"]]', ''],
+        ['a string item', '[[0,"a"],"x",[0,"b"]]', ''],
+        ['a nested list item', '[[[0,"a"]],[0,"b"]]', ''],
+        ['a transition of null', '[[0,"a"],[20,{},null],[0,"b"]]', ''],
+        ['a transition holding a number', '[[20,{},[[0,"a"],5]]]', ''],
+    ]) {
+        it(`replays what a change sends for ${shape}`, async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                const view = formView(change, extra);
+                const m = await start();
+                document.body.innerHTML = view;
+                m.simulateOpen();
+                m.simulateMessage(null, null);
+                const live = m.posted.length;
+                field('q').value = 'typed';
+                field('q').dispatchEvent(new Event('change', { bubbles: true }));
+                const liveSends = sends(m.posted.slice(live)).map((s) => s[1]);
+                m.simulateClose(4500);
+                const before = m.posted.length;
+                m.simulateOpen(true);
+                m.simulateMessage([[8, 'page', view]], null, true);
+                expect(sends(m.posted.slice(before)).map((s) => s[1])).toEqual(liveSends);
+            } finally {
+                warn.mockRestore();
+            }
+        });
+    }
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';
@@ -6085,6 +6118,27 @@ describe('crash and mount-failure recovery', () => {
         m.simulateClose(1006);
         remount(m); // replay 2
         expect(changeSends(m)).toBe(2);
+    });
+});
+
+describe('replayEvents', () => {
+    it("reads a transition's items as far as a change does: past a server navigate, not at all", async () => {
+        vi.resetModules();
+        const m = setupMockWorker(await import('./arizona.js'));
+        try {
+            const { replayEvents } = await import('./arizona-commands.js');
+            // A server navigate ends the transition's kind scan, so the item after
+            // it is reached only when the commands run, after the push_event before.
+            const events = [];
+            expect(() => replayEvents([20, {}, [[0, 'a'], [10, '/p'], null]], events)).toThrow();
+            expect(events).toEqual([[0, 'a']]);
+            // With none, the scan reads every item first, and runs none of them.
+            const none = [];
+            expect(() => replayEvents([20, {}, [[0, 'a'], [24, '/p'], null]], none)).toThrow();
+            expect(none).toEqual([]);
+        } finally {
+            m.restore();
+        }
     });
 });
 
