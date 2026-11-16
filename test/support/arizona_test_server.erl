@@ -255,6 +255,19 @@ routes() ->
             layouts => Layouts
         }},
         {post, <<"/fetch-reset/submit">>, arizona_fetch_reset_controller, #{}},
+        %% reply_redirect/1 to a relative Location: the client resolves it against the
+        %% endpoint's URL (`/scroll-home`), not the page that posted or its <base>.
+        {post, <<"/fetch-redirect">>, arizona_fetch_redirect_controller, #{
+            state => {redirect, <<"scroll-home">>}
+        }},
+        %% A response's SPA navigate/patch stays the page's: a fragment scrolls it, a
+        %% query patches it -- neither names the endpoint.
+        {post, <<"/fetch-effects/hash">>, arizona_fetch_redirect_controller, #{
+            state => {effects, [arizona_js:navigate(<<"#hello">>)]}
+        }},
+        {post, <<"/fetch-effects/patch">>, arizona_fetch_redirect_controller, #{
+            state => {effects, [arizona_js:patch(<<"?tab=2">>)]}
+        }},
         %% Form-aware payload -- one az_submit push_event on a two-submit-button form; the
         %% payload carries the form's fields plus which named submit button fired.
         {live, <<"/form-submitter">>, arizona_form_submitter, #{

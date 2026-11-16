@@ -7027,6 +7027,210 @@ describe('navigation scroll', () => {
         ]);
     });
 
+    /**
+     * Answer the n-th fetch with `answers[n]`: `[url, body]` (`url` the response's
+     * after redirects, '' when unknown), or `null` for a network failure.
+     * @param {Array<[string, string]|null>} answers
+     */
+    const answerFetches = (answers) => {
+        let n = 0;
+        globalThis.fetch = vi.fn(() => {
+            const a = answers[n++];
+            if (!a) return Promise.reject(new TypeError('network'));
+            const [url, body] = a;
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                url,
+                text: () => Promise.resolve(body),
+            });
+        });
+    };
+    const settleFetches = async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
+    it('a full navigate in a fetch response resolves against the response URL, as a 3xx Location does', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const originalFetch = globalThis.fetch;
+        const origin = location.origin;
+        history.replaceState(null, '', '/patch-demo/overview');
+        const base = document.createElement('base');
+        const assign = vi.fn();
+        const replace = vi.fn();
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin,
+            href: window.location.href,
+            pathname: window.location.pathname,
+            search: window.location.search,
+            hash: '',
+        });
+        /** Run one fetch whose response is `body` from `url`, then the next answers. */
+        const run = async (target, url, body, ...more) => {
+            answerFetches([[url, body], ...more]);
+            mod.applyEffects([[22, target, {}]]);
+            await settleFetches();
+        };
+        try {
+            // No base: the page's directory is /patch-demo/, the endpoint's /api/.
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[10,"login?x=1",{"full":true}]]}',
+            );
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/api/login?x=1`);
+            // The URL the response came from, after a redirect, not the one asked;
+            // inside a transition too.
+            await run(
+                '/api/account',
+                `${origin}/v2/api/account`,
+                '{"e":[[20,{},[[10,"login",{"full":true,"replace":true}]]]]}',
+            );
+            expect(replace).toHaveBeenLastCalledWith(`${origin}/v2/api/login`);
+            // Inside an on_key (a response has no key event: '.*' matches '').
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[16,".*",[[10,"k",{"full":true}]]]]}',
+            );
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/api/k`);
+            // Under a base: still the response's URL, not the base.
+            base.setAttribute('href', '/sub/');
+            document.head.appendChild(base);
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[10,"login",{"full":true}]]}',
+            );
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/api/login`);
+            // A response with no known URL resolves against what was requested,
+            // itself resolved against the base as fetch() resolves it.
+            await run('api/account', '', '{"e":[[10,"login",{"full":true}]]}');
+            expect(assign).toHaveBeenLastCalledWith(`${origin}/sub/api/login`);
+            // A fetch the response holds is a request of the page: its URL and its
+            // own on_error resolve against the document, so nothing in one
+            // response mixes bases.
+            await run(
+                '/api/account',
+                `${origin}/api/account`,
+                '{"e":[[22,"nested",{"on_error":[[10,"oops",{"full":true}]]}]]}',
+                null,
+            );
+            // Left as written: `location.assign` resolves it against the base.
+            expect(assign).toHaveBeenLastCalledWith('oops');
+            expect(/** @type {any} */ (globalThis.fetch).mock.calls[1][0]).toBe('nested');
+        } finally {
+            vi.unstubAllGlobals();
+            base.remove();
+            globalThis.fetch = originalFetch;
+        }
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('an SPA navigate or patch in a fetch response resolves against the document base', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<section id="hello">x</section>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const originalFetch = globalThis.fetch;
+        const origin = location.origin;
+        const navs = () =>
+            mock.getSentMessages().filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        const run = async (body) => {
+            answerFetches([[`${origin}/api/account`, body]]);
+            mod.applyEffects([[22, '/api/account', {}]]);
+            await settleFetches();
+        };
+        const base = document.createElement('base');
+        try {
+            // A fragment of the page scrolls in place: no frame for the endpoint.
+            history.replaceState(null, '', '/patch-demo/overview');
+            await run('{"e":[[10,"#hello"]]}');
+            expect(location.pathname + location.hash).toBe('/patch-demo/overview#hello');
+            expect(navs()).toEqual([]);
+            // A query patches this page, not the endpoint.
+            history.replaceState(null, '', '/patch-demo/overview');
+            await run('{"e":[[24,"?tab=2"]]}');
+            expect(location.pathname + location.search).toBe('/patch-demo/overview?tab=2');
+            // Under a base, as any client navigate does.
+            base.setAttribute('href', '/sub/');
+            document.head.appendChild(base);
+            history.replaceState(null, '', '/patch-demo/overview');
+            await run('{"e":[[10,"x"]]}');
+            expect(location.pathname).toBe('/sub/x');
+        } finally {
+            base.remove();
+            globalThis.fetch = originalFetch;
+        }
+        expect(navs()).toEqual([
+            ['patch', { path: '/patch-demo/overview', qs: 'tab=2' }, expect.any(Number)],
+            ['navigate', { path: '/sub/x', qs: '' }, expect.any(Number)],
+        ]);
+    });
+
+    it('a relative navigate/patch effect resolves against the document base, as history does', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<section id="sec">x</section>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const base = document.createElement('base');
+        base.setAttribute('href', '/sub/');
+        document.head.appendChild(base);
+        const len0 = history.length;
+        try {
+            // The browser resolves `<a href>` and pushState against `<base href>`,
+            // so the frame must ask for the page the address bar shows.
+            history.replaceState(null, '', '/users/1');
+            mod.applyEffects([[10, 'x?q=1']]);
+            expect(location.pathname + location.search).toBe('/sub/x?q=1');
+            expect(mock.getSentMessages().at(-1)).toEqual([
+                'navigate',
+                { path: '/sub/x', qs: 'q=1' },
+                expect.any(Number),
+            ]);
+            history.replaceState(null, '', '/users/1');
+            mod.applyEffects([[24, 'edit', { replace: true }]]);
+            expect(location.pathname).toBe('/sub/edit');
+            // A fragment-only target names the base page, not this one, so it is
+            // a navigation here...
+            history.replaceState(null, '', '/users/1');
+            mod.applyEffects([[10, '#sec']]);
+            expect(location.pathname + location.hash).toBe('/sub/#sec');
+            // ...and a scroll in place on the base page itself.
+            history.replaceState(null, '', '/sub/');
+            mod.applyEffects([[10, '#sec', { replace: true }]]);
+            expect(location.pathname + location.hash).toBe('/sub/#sec');
+            // Root-relative and absolute targets ignore the base.
+            mod.applyEffects([[10, '/abs']]);
+            expect(location.pathname).toBe('/abs');
+            mod.applyEffects([[24, `${location.origin}/full?a=1`]]);
+            expect(location.pathname + location.search).toBe('/full?a=1');
+        } finally {
+            base.remove();
+        }
+        expect(history.length).toBe(len0 + 4);
+        const frames = mock
+            .getSentMessages()
+            .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        expect(frames).toEqual([
+            ['navigate', { path: '/sub/x', qs: 'q=1' }, expect.any(Number)],
+            ['patch', { path: '/sub/edit', qs: '' }, expect.any(Number)],
+            ['navigate', { path: '/sub/', qs: '' }, expect.any(Number)],
+            ['navigate', { path: '/abs', qs: '' }, expect.any(Number)],
+            ['patch', { path: '/full', qs: 'a=1' }, expect.any(Number)],
+        ]);
+    });
+
     it('a hash-only navigate/patch effect scrolls in place, no server round trip', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

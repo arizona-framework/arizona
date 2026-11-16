@@ -179,6 +179,13 @@ payload the `arizona_js:fetch/2` command applies on the page (the same effects
 `handle_event/3` returns). 200 is the **success** leg -- a fetch form with `az-form-reset`
 clears only on a 2xx. For an error leg that keeps the typed fields, use `reply_effects/2`
 with a non-2xx status (the effects still apply).
+
+Only a **full** navigate (`#{full => true}`, as `reply_redirect/1` sends one) resolves a
+relative URL against the URL the response came from (after redirects), as an HTTP 3xx
+`Location` does. Every other URL in the effects is the page's and resolves against the
+document base, as on the WebSocket: an SPA `navigate`/`patch` (`~"#hello"` scrolls the
+page, `~"?tab=2"` patches it), a nested `arizona_js:fetch/2` and that nested fetch's own
+`on_error` commands.
 """.
 -spec reply_effects(Effects) -> reply() when
     Effects :: arizona_effect:cmds().
@@ -219,11 +226,17 @@ a SPA navigation (its `Location` is unreadable), so a redirect is delivered as a
 
 A `Location` that is not a path on this origin (`arizona_req:location_kind/1`) -- an
 identity provider, an absolute URL -- cannot be SPA-navigated, so it is sent with the
-`full` option and the browser loads it for real. A relative one (`~"login"`) loads too,
-resolved against the current URL exactly as an HTTP `Location` would be. A scheme other
-than `http`/`https` (`javascript:`, `data:`) raises `{unsafe_redirect, Location}`: the
-client would run it in the page, so a `Location` taken from the request (a `next`
-parameter) would be script injection.
+`full` option and the browser loads it for real. A relative one (`~"login"`) loads in
+full too, resolved against the URL the fetch response came from (after redirects),
+exactly as an HTTP `Location` is resolved against its request: the endpoint's directory,
+not the page that posted or its `<base href>`. Only a full navigate resolves there (see
+`reply_effects/1`). A path on this origin (`~"/login"`) goes out as a SPA navigate, which
+resolves against the document base like any client navigate: that path on the page's
+origin (or on a `<base href>`'s, when it names another), never on the endpoint's -- they
+differ only for a cross-origin (CORS) endpoint. A scheme other than `http`/`https`
+(`javascript:`, `data:`) raises `{unsafe_redirect, Location}`: the client would run it in
+the page, so a `Location` taken from the request (a `next` parameter) would be script
+injection.
 
 This is a SPA navigation over the existing WebSocket, so it suits same-identity
 redirects. After an **identity change** (login/logout) use `arizona_js:reload/0`
