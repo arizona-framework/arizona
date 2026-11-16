@@ -12,6 +12,12 @@ Commands are per platform on purpose: a `?json` view reaches for `arizona_androi
 (not the browser's `arizona_js`), and this module is the home for Android-specific
 commands as they're added. `push_event`/`navigate` mirror their web counterparts.
 
+There is no `push_event/3`: its one option, `on_repeat`, needs a client that tracks
+an event's reply, and the native clients track none, so a `drop` would silently
+act as `allow`. A handler effect built with `arizona_js:push_event/3` still reaches a
+native client (handler effects are not target-checked), which runs it with the
+option ignored.
+
 ```erlang
 {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]}
 ```

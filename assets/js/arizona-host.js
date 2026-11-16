@@ -11,16 +11,24 @@
  * @property {() => boolean} ready whether delegated commands run now: on a live
  *   page while its socket is open, on a page with no server always
  * @property {() => number} epoch the navigation epoch a deferred event captures
- * @property {(name: string, frame: Array<*>, epoch?: number,
+ * @property {(name: string, frame: Array<*>, opts?: {epoch?: number,
  *   transition?: {types?: string[], kind: 'any'|'replace'}|null,
- *   ctls?: Array<[Element, string|boolean]>|null) => void} sendEvent send
- *   the view event `frame` (`[target, event, payload]`) raised in `epoch` (default:
- *   the current one), under the view transition that waits for its reply, if any,
- *   carrying the state of the server-owned controls `ctls` as it was raised
+ *   ctls?: Array<[Element, string|boolean]>|null,
+ *   onReply?: (() => void)|null}) => boolean} sendEvent send the view event `frame`
+ *   (`[target, event, payload]`) raised in `epoch` (default: the current one), under
+ *   the view transition that waits for its reply, if any, carrying the state of the
+ *   server-owned controls `ctls` as it was raised; `onReply` runs once its reply lands
+ *   or no longer can. Returns whether a reply will come: when not, `onReply` is never
+ *   run
  * @property {(el: Element, event: Event|null) => Array<[Element, string|boolean]>|null} carry
  *   the server-owned controls an event raised on `el` sends the state of, with that state
  * @property {(ctls: Array<[Element, string|boolean]>) => void} release a raised event
  *   carrying `ctls` will not be sent (a later raise replaced it)
+ * @property {(transition: {types?: string[], kind: 'any'|'replace'}|null,
+ *   ctls: Array<[Element, string|boolean]>|null) => void} unsent a raised event will
+ *   never be sent (a repeat `on_repeat: 'drop'` refused): let go of the controls it
+ *   carries, and give the pending view transition back to the one its transition
+ *   displaced, or, with none displaced, leave its own armed for a command beside it
  * @property {(el: Element, name: string, val: string|null) => boolean|'defer'} holds
  *   whether a server write of `name` to `el` (a control, or an option of one) must leave
  *   its live state alone, or (`'defer'`) not happen yet

@@ -1,4 +1,4 @@
-import { executeJS, flushTimer, maybeResetForm, socketNeeds } from './arizona-commands.js';
+import { closeSubmit, executeJS, flushTimer, openSubmit, socketNeeds } from './arizona-commands.js';
 import { mountHooks } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { withTransitionAttr } from './arizona-transitions.js';
@@ -483,6 +483,7 @@ export function bindDocumentEvents(target, signal, abort) {
             const raw = form.getAttribute('az-submit');
             /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
             let needs = {};
+            openSubmit(form, e);
             try {
                 const cmds = raw ? JSON.parse(raw) : null;
                 if (cmds) needs = socketNeeds(cmds, {}, false);
@@ -527,8 +528,9 @@ export function bindDocumentEvents(target, signal, abort) {
                 );
             }
             // A fetch command resets on its own 2xx response (so a validation error
-            // keeps the typed fields); everything else resets synchronously here.
-            if (!needs.fetch) maybeResetForm(form);
+            // keeps the typed fields); everything else resets here, by what became of
+            // the push_events it raised (`closeSubmit`).
+            if (!needs.fetch) closeSubmit(form, e);
         },
         { signal },
     );

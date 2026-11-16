@@ -159,6 +159,8 @@ let _attempt = 0;
 /** Close codes (must match `arizona_socket.erl`): crash after mount, mount failed. */
 const WS_CLOSE_CRASH = 4500;
 const WS_CLOSE_MOUNT_FAILED = 4501;
+/** What a socket this worker gave up on reports: closed with no close frame. */
+const WS_CLOSE_ABNORMAL = 1006;
 
 /**
  * When the open socket's view last mounted, as Date.now(), or null before it
@@ -313,6 +315,44 @@ function resolveOps(ops) {
 import { backoff } from './arizona-core.js';
 
 /**
+ * `ws` is no longer this worker's socket: tell the main thread (`[2, code]`) and,
+ * unless the close was a deliberate end (1000), schedule the reconnect. Runs when
+ * the socket closes, and at once when this worker closes it itself: a close the
+ * worker starts on a peer that stopped answering (the heartbeat's) is never
+ * answered either, so the browser fires `close` only once it gives up on the
+ * handshake, tens of seconds later -- all that time the main thread would take the
+ * socket for open while every frame is dropped. Detached here, the socket's late
+ * `close` (and any frame it still delivers) finds it is not `_ws` and does nothing.
+ * @param {WebSocket} ws
+ * @param {number} code
+ */
+function socketGone(ws, code) {
+    if (_ws !== ws) return;
+    if (_heartbeatInterval) clearInterval(_heartbeatInterval);
+    _heartbeatInterval = null;
+    _heartbeatPending = false;
+    _ws = null;
+
+    postMessage([2, code]);
+
+    if (code === 1000) return;
+    // Reset the backoff only after a working session: one that mounted its
+    // view, did not fail to mount (a navigate), and did not crash right after
+    // its last mount. A server that accepts the socket but never mounts (a
+    // dead backend, a failing mount) thus keeps backing off instead of being
+    // hammered at backoff[0].
+    if (
+        _mountedAt !== null &&
+        code !== WS_CLOSE_MOUNT_FAILED &&
+        (code !== WS_CLOSE_CRASH || Date.now() - _mountedAt >= CRASH_STABLE_MS)
+    ) {
+        _attempt = 0;
+    }
+    _reconnecting = true;
+    _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
+}
+
+/**
  * Open (or reopen) the WebSocket connection.
  */
 function openSocket() {
@@ -349,6 +389,7 @@ function openSocket() {
         _heartbeatInterval = setInterval(() => {
             if (_heartbeatPending) {
                 ws.close();
+                socketGone(ws, WS_CLOSE_ABNORMAL);
                 return;
             }
             _heartbeatPending = true;
@@ -399,31 +440,7 @@ function openSocket() {
         postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null, msg.r ?? null]);
     };
 
-    ws.onclose = (e) => {
-        if (_ws !== ws && _ws !== null) return;
-        if (_heartbeatInterval) clearInterval(_heartbeatInterval);
-        _heartbeatInterval = null;
-        _heartbeatPending = false;
-        _ws = null;
-
-        postMessage([2, e.code]);
-
-        if (e.code === 1000) return;
-        // Reset the backoff only after a working session: one that mounted its
-        // view, did not fail to mount (a navigate), and did not crash right after
-        // its last mount. A server that accepts the socket but never mounts (a
-        // dead backend, a failing mount) thus keeps backing off instead of being
-        // hammered at backoff[0].
-        if (
-            _mountedAt !== null &&
-            e.code !== WS_CLOSE_MOUNT_FAILED &&
-            (e.code !== WS_CLOSE_CRASH || Date.now() - _mountedAt >= CRASH_STABLE_MS)
-        ) {
-            _attempt = 0;
-        }
-        _reconnecting = true;
-        _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
-    };
+    ws.onclose = (e) => socketGone(ws, e.code);
 
     // Deliberately silent: a WebSocket error is always followed by `onclose`,
     // which reports the code to the main thread and drives the reconnect, and the
@@ -485,8 +502,14 @@ self.onmessage = (e) => {
             break;
         }
         case 2:
-            // [2, code] -- close WS
-            if (_ws) _ws.close(msg[1]);
+            // [2, code] -- close WS. Reported at once, as the heartbeat's close is:
+            // on a dead peer the socket's own `close` comes only when the browser
+            // gives up on the handshake.
+            if (_ws) {
+                const ws = _ws;
+                ws.close(msg[1]);
+                socketGone(ws, msg[1]);
+            }
             break;
         case 3: {
             // [3, {path, qs}] -- an SPA navigation changed both the path and the

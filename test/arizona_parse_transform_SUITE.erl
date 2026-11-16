@@ -9709,7 +9709,8 @@ reserved_az_ctl_attr_raises(Config) when is_list(Config) ->
         ]
     ).
 
-%% `az-busy` is the client's in-flight marker on a fetch holder; an authored one
+%% `az-busy` is the client's in-flight marker on a holder (a fetch, or a push_event
+%% under `on_repeat => drop` awaiting its reply); an authored one
 %% would show a form busy with nothing in flight, and the client's removal on
 %% settle would strip it.
 reserved_az_busy_attr_raises(Config) when is_list(Config) ->

@@ -67,6 +67,7 @@ engine, which is authoritative for what a view shows.
 -export([target/0]).
 -export([push_event/1]).
 -export([push_event/2]).
+-export([push_event/3]).
 -export([toggle/1]).
 -export([show/1]).
 -export([hide/1]).
@@ -113,6 +114,7 @@ engine, which is authoritative for what a view shows.
     format_error/2,
     push_event/1,
     push_event/2,
+    push_event/3,
     toggle/1,
     show/1,
     hide/1,
@@ -155,6 +157,10 @@ engine, which is authoritative for what a view shows.
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
+%% A flat builder facade, one thin function per effect command, so it legitimately
+%% exceeds the god-module function count.
+-elvis([{elvis_style, no_god_modules, disable}]).
+
 -ifdef(TEST).
 %% Inline EUnit tests intentionally repeat command tuples to verify
 %% structural equality at different nesting levels.
@@ -184,6 +190,38 @@ auto-collected form data.
     Event :: binary(),
     Payload :: map().
 push_event(Event, Payload) -> arizona_effect:push_event(Event, Payload).
+
+-doc """
+Pushes a named event with an explicit payload (as `push_event/2`) and options:
+
+- `on_repeat` -- what a repeat does while this event's previous send awaits its
+  reply. A repeat is the same event name to the same view from the same **holder**:
+  the trigger element (for `az_submit` the form), or the whole page for a handler
+  effect. `allow` (default) sends it, so a double click runs the handler twice.
+  `drop` does not send it and dispatches a bubbling `arizona:event-dropped`
+  `CustomEvent` (`detail` `event`, `reason => in_flight`) on the holder, or on
+  `document` when the holder is the document root (`<html>`) or detached; only the
+  event is dropped, the commands beside it run. A repeat is judged when the event
+  is sent, after `az-debounce`/`az-throttle`: a raise a debounce replaced was never
+  sent and is no repeat. The guard ends when the reply lands, before the reply's
+  effects run (so one may push the event again), or when the socket closes. While a
+  `drop` event awaits its reply its holder carries `az-busy`, as it does for a
+  `fetch` in flight (never `<html>` or a detached element); an `allow` event marks
+  nothing. Use `drop` for submit-like actions a duplicate would repeat (save,
+  delete, place an order), never for state sync or search, where the newer event is
+  the one that matters. It is a UI guard, not exactly-once delivery: another tab, a
+  reconnect or a crafted frame still sends a repeat, so the handler must stay
+  idempotent where a duplicate would hurt.
+
+A handler effect built here runs on any client, but only the web client reads
+`on_repeat`: in a `?json` view (whose clients track no replies) it is ignored,
+which is why `arizona_android` has no `push_event/3`.
+""".
+-spec push_event(Event, Payload, Opts) -> arizona_effect:cmd() when
+    Event :: binary(),
+    Payload :: map(),
+    Opts :: #{on_repeat => allow | drop}.
+push_event(Event, Payload, Opts) -> arizona_effect:push_event(Event, Payload, Opts).
 
 -doc "Toggles the visibility of all elements matching the CSS selector.".
 -spec toggle(Selector) -> arizona_effect:cmd() when
@@ -468,8 +506,9 @@ cookie for the *same* identity (e.g. password change) needs no reload.
   newer request matters. Only the fetch is dropped: the commands beside it run.
   There is no client timeout: a hung request keeps its slot until the browser
   fails it or the holder is re-rendered. Under either value the holder carries
-  an `az-busy` attribute while a request it holds is in flight (never the
-  document root `<html>` or a detached element).
+  an `az-busy` attribute while a request it holds is in flight, or a
+  `push_event/3` under `drop` it holds awaits its reply (never the document
+  root `<html>` or a detached element).
 
 To send the user elsewhere, return an `arizona_js:navigate/1` effect from the
 controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP

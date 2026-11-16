@@ -431,11 +431,13 @@ export function withAllControls(form, fn) {
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
- * Shared by the submit listener (synchronous, for push_event-style commands) and the
- * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
- * A deferred reset passes `sent`, what the controls showed when the request went out:
- * one the user changed since, or added since and filled, keeps what it shows -- the
- * next chat message typed while the last one was in flight -- with its whole radio
+ * Shared by `az-submit` (`closeSubmit`/`finishSubmit`: as its
+ * commands run, or deferred until a throttled send is judged) and the `fetch`
+ * command (deferred to a 2xx response, so the fields survive a validation error).
+ * A deferred reset passes `sent`, what the controls showed as the request went out
+ * or, for a throttled submit, as its commands ran: one the user changed since, or
+ * added since and filled, keeps what it shows -- the next chat message typed while
+ * the last one was in flight -- with its whole radio
  * group. The rest get the browser's own `form.reset()` (its trusted `reset` event,
  * defaults, dirty and user-validity flags): the kept controls sit outside the form
  * for that call, a `form` attribute naming no element taking them out with their
@@ -521,8 +523,9 @@ export function socketNeeds(cmds, acc, conditional) {
 }
 
 /**
- * A holder's fetch requests in flight (see `JS_FETCH`): the count of each slot,
- * `METHOD url`, and the node holding them now.
+ * A holder's requests in flight: the count of each slot -- `METHOD url` for a fetch
+ * (see `JS_FETCH`), `event [view, name]` for a push_event under `on_repeat: 'drop'`
+ * awaiting its reply (see `sendPush`) -- and the node holding them now.
  * @typedef {{holder: Element, slots: Map<string, number>}} Flight
  */
 
@@ -535,25 +538,31 @@ export function socketNeeds(cmds, acc, conditional) {
 const _inFlight = new WeakMap();
 
 /**
- * Every flight until its last request settles, for `heldNodes`.
+ * Every flight until its last request settles, for `heldNodes`. A push_event's slot
+ * never outlives a close (the connection releases every reply it waited for), so
+ * only a fetch's is ever rehomed.
  * @type {Set<Flight>}
  */
 const _flights = new Set();
 
 /**
- * A `fetch` form's reset waiting for its response: the form it resets now, and
- * what its controls showed as the request went out.
+ * A form reset waiting on what a submit sent: a `fetch` form's, for its response,
+ * or a throttled az-submit's, for its paced push_events to be judged
+ * (`closeSubmit`). The form it resets now, and what its controls showed as the
+ * request went out or the commands ran.
  * @typedef {{form: Element, sent: Map<Element, unknown>|undefined}} PendingReset
  */
 
 /**
- * Every pending reset until its request settles, for `heldNodes`.
+ * Every pending reset until it is decided -- its request settles, or its submit's
+ * last push_event is judged (`finishSubmit`) -- for `heldNodes`.
  * @type {Set<PendingReset>}
  */
 const _resets = new Set();
 
 /**
- * Whether `holder` carries `az-busy` while a request it holds is in flight: a
+ * Whether `holder` carries `az-busy` while a request it holds is in flight (a fetch,
+ * or a push_event under `drop` awaiting its reply): a
  * page element, never the page root (a server effect's holder) or a detached one
  * (a response's stand-in), which no app styles.
  * @param {Element} holder
@@ -624,6 +633,123 @@ function enterSlot(holder, slot) {
             notifyUpdated(now);
         }
     };
+}
+
+/**
+ * Send a push_event raised on `holder`. With a `slot` (`on_repeat: 'drop'`) it is
+ * judged here, as it goes out -- after any pacing, so a raise a debounce replaced is
+ * no repeat: while a send in the slot awaits its reply it is not sent, and
+ * `arizona:event-dropped` is reported where a dropped fetch is; otherwise it takes
+ * the slot until its reply lands, which the connection runs before the reply's
+ * effects, or until the socket closes. One the host does not send (a stale or
+ * disconnected page, a page with no server) awaits no reply, so it lets go at once.
+ * Returns whether the frame went out on a live socket, as `host.sendEvent` reports
+ * it: a frame posted while the socket is down is dropped by the worker, so for an
+ * az-submit's reset (`judgeSubmit`) it was never sent.
+ * @param {Element} holder
+ * @param {string|null} slot
+ * @param {string} name
+ * @param {Array<*>} frame
+ * @param {{epoch?: number, transition: *, ctls: Array<[Element, string|boolean]>|null}} opts
+ * @returns {boolean}
+ */
+function sendPush(holder, slot, name, frame, opts) {
+    if (slot === null) return host.sendEvent(name, frame, opts);
+    if (_inFlight.get(holder)?.slots.has(slot)) {
+        host.unsent(opts.transition, opts.ctls);
+        (busyMarks(holder) ? holder : document).dispatchEvent(
+            new CustomEvent('arizona:event-dropped', {
+                bubbles: true,
+                detail: { event: name, reason: 'in_flight' },
+            }),
+        );
+        return false;
+    }
+    const release = enterSlot(holder, slot);
+    const sent = host.sendEvent(name, frame, { ...opts, onReply: release });
+    if (!sent) release();
+    return sent;
+}
+
+/**
+ * An az-submit's push_events -- those it raised with its form as holder -- and what
+ * became of them, which decides its `az-form-reset` (`openSubmit`/`closeSubmit`).
+ * `raised` counts them as its commands run, `judged` as each send is judged (at
+ * once, or when its throttle fires) or replaced by a later raise, `sent` whether one
+ * went out on a live socket -- not refused as a repeat, nor posted while the socket
+ * was down, stale or with no server. `reset` is the reset its pacing
+ * deferred -- the form and what its controls showed as its commands ran -- held in
+ * `_resets` meanwhile, so a reconnect resync moves it onto the form that replaced
+ * this one (`rehome`), as it moves a fetch's.
+ * @typedef {{form: Element, raised: number, judged: number, sent: boolean,
+ *   ran: boolean, reset?: PendingReset}} Submission
+ */
+
+/**
+ * The submissions under way, by their submit event.
+ * @type {WeakMap<Event, Submission>}
+ */
+const _submissions = new WeakMap();
+
+/**
+ * Start tracking the push_events `form`'s submit `event` raises, ahead of its
+ * commands. A submit whose fetch resets the form itself is never closed.
+ * @param {Element} form
+ * @param {Event} event
+ */
+export function openSubmit(form, event) {
+    _submissions.set(event, {
+        form,
+        raised: 0,
+        judged: 0,
+        sent: false,
+        ran: false,
+    });
+}
+
+/**
+ * The submit's commands have run: reset its `az-form-reset` form now when it raised
+ * no push_event of its own or every one was judged, else once the last is -- as long
+ * as one of them was sent. A submit that sent nothing -- its events refused as
+ * repeats, or posted while the socket was down -- keeps its fields, as a dropped
+ * fetch does. A reset waiting on a paced send keeps a
+ * control the user changed meanwhile, as a fetch's reset does.
+ * @param {Element} form
+ * @param {Event} event
+ */
+export function closeSubmit(form, event) {
+    const sub = /** @type {Submission} */ (_submissions.get(event));
+    sub.ran = true;
+    if (sub.raised === 0) {
+        maybeResetForm(form);
+    } else if (sub.judged < sub.raised) {
+        sub.reset = {
+            form,
+            sent: withAllControls(form, () => formSnapshot(/** @type {HTMLFormElement} */ (form))),
+        };
+        _resets.add(sub.reset);
+    } else {
+        finishSubmit(sub);
+    }
+}
+
+/**
+ * One of a submission's push_events was judged: `sent`, or refused or replaced.
+ * @param {Submission|null} sub
+ * @param {boolean} sent
+ */
+function judgeSubmit(sub, sent) {
+    if (!sub) return;
+    sub.judged++;
+    if (sent) sub.sent = true;
+    if (sub.ran) finishSubmit(sub);
+}
+
+/** @param {Submission} sub */
+function finishSubmit(sub) {
+    if (sub.judged < sub.raised) return;
+    if (sub.reset) _resets.delete(sub.reset);
+    if (sub.sent) maybeResetForm(sub.reset?.form ?? sub.form, sub.reset?.sent);
 }
 
 /**
@@ -900,9 +1026,19 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const frame = [resolveTarget(el), evt, payload];
             const transition = _transitionScope;
             const ctls = host.carry(el, event);
+            // Under `drop`, what a repeat is: the same event to the same view from the
+            // same holder, the trigger (the form for az-submit, the page root for a
+            // server effect). Lower-case, so no fetch slot (`METHOD href`) is one.
+            const slot =
+                cmd[3]?.on_repeat === 'drop' ? `event ${JSON.stringify([frame[0], evt])}` : null;
             if (event) {
                 const epoch = host.epoch();
-                const send = () => host.sendEvent(evt, frame, epoch, transition, ctls);
+                // An az-submit's own event: what becomes of it decides its form reset.
+                const sub = _submissions.get(event);
+                const own = sub?.form === el ? sub : null;
+                if (own) own.raised++;
+                const send = () =>
+                    judgeSubmit(own, sendPush(el, slot, evt, frame, { epoch, transition, ctls }));
                 // A later raise replacing it in its slot means it is never sent.
                 scheduleSend(
                     el,
@@ -910,11 +1046,14 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                     prefix,
                     index,
                     Object.assign(send, {
-                        drop: () => ctls && host.release(ctls),
+                        drop: () => {
+                            if (ctls) host.release(ctls);
+                            judgeSubmit(own, false);
+                        },
                     }),
                 );
             } else {
-                host.sendEvent(evt, frame, undefined, transition, ctls);
+                sendPush(el, slot, evt, frame, { transition, ctls });
             }
             break;
         }

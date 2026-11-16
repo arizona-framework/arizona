@@ -44,6 +44,19 @@ describe('JSON client effect dispatch', () => {
         expect(JSON.parse(sent[0])).toEqual(['json_counter', 'inc', {}]);
     });
 
+    // A handler effect built with arizona_js:push_event/3 reaches a native client too
+    // (handler effects are not target-checked): its options ride last, and a client
+    // that tracks no replies runs it as it runs any push_event.
+    it('runs a push_event carrying options as one without', () => {
+        const { client, sent } = clientWithRecorder();
+        client._runEffect(
+            [EFFECT_PUSH_EVENT, 'save', { id: '42' }, { on_repeat: 'drop' }],
+            true,
+            'json_counter',
+        );
+        expect(JSON.parse(sent[0])).toEqual(['json_counter', 'save', { id: '42' }]);
+    });
+
     it('routes a tap to the enclosing view of the tapped node, payload intact', () => {
         const { client, sent } = clientWithRecorder('root_view');
         const node = { __view: 'child_view', on_tap: [EFFECT_PUSH_EVENT, 'save', { id: '7' }] };

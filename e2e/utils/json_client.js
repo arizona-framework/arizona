@@ -35,7 +35,7 @@ const EFFECT_NAVIGATE = 10;
 // web client's executeJS does.
 const commands = (cmds) => (Array.isArray(cmds) && Array.isArray(cmds[0]) ? cmds : [cmds]);
 
-// Heartbeat (mirror assets/js/arizona-worker.js): the client pings '0' every 30s
+// Heartbeat (the protocol of assets/js/arizona-worker.js): the client pings '0' every 30s
 // and the server pongs '1'; a missed pong before the next tick means the socket
 // is silently dead, so we close it and let the reconnect path re-open.
 const SYS_PING = '0';

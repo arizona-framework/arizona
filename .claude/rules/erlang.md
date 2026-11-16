@@ -170,8 +170,9 @@ bare binary literal child, which is spliced as raw markup. Inside raw-text eleme
 Four names are reserved because the framework writes them itself: `az` (the element's diff
 address) and `az-local` (the `?local` descriptor), where a duplicate would misroute a patch,
 `az-ctl`, where an authored one would mark a control the server does not render, and
-`az-busy`, the client's marker on a `fetch` holder while a request it holds is in flight,
-where an authored one would show a form busy with nothing in flight. Any of them in a
+`az-busy`, the client's marker on a holder while a request its policy tracks is in flight
+(a `fetch`, or a `push_event` under `on_repeat => drop` awaiting its reply), where an
+authored one would show a form busy with nothing in flight. Any of them in a
 template is a compile error (`reserved_attr`), in any form (`{az, V}`, bare `az`,
 `<<"az">>`, `az_local`, `az_ctl`, `az_busy`).
 

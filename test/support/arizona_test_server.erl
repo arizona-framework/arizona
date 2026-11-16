@@ -235,6 +235,12 @@ routes() ->
             state => #{delay_ms => 300}
         }},
         {get, <<"/fetch-repeat/count">>, arizona_fetch_repeat_controller, #{action => count}},
+        %% arizona_js:push_event on_repeat -- a slow handler, so a repeat is raised while
+        %% the first event awaits its reply (drop vs the default allow).
+        {live, <<"/push-repeat">>, arizona_push_repeat, #{
+            bindings => #{title => <<"Push repeat">>, delay_ms => 300},
+            layouts => Layouts
+        }},
         %% arizona_js:fetch + push_event -- the controller's response push_event re-renders
         %% the submitting view via handle_event (no pubsub); for refreshing only that view.
         {live, <<"/fetch-push">>, arizona_fetch_push, #{

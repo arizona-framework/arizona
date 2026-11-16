@@ -27,9 +27,10 @@ The Android and iOS clients live in their own repos (`arizona_android`,
 -export([canonical_effects_extraction_sane/1]).
 -export([web_js_effects_match_canonical/1]).
 -export([json_client_effects_match_canonical/1]).
+-export([push_event_layout_is_positional/1]).
 
 all() ->
-    [{group, ops}, {group, effects}].
+    [{group, ops}, {group, effects}, {group, layout}].
 
 groups() ->
     [
@@ -43,6 +44,9 @@ groups() ->
             canonical_effects_extraction_sane,
             web_js_effects_match_canonical,
             json_client_effects_match_canonical
+        ]},
+        {layout, [parallel], [
+            push_event_layout_is_positional
         ]}
     ].
 
@@ -96,6 +100,34 @@ json_client_effects_match_canonical(Config) when is_list(Config) ->
     assert_agrees_with_canonical(effects, json_client, json_client(effects)).
 
 %% --------------------------------------------------------------------
+%% Command layout test cases
+%% --------------------------------------------------------------------
+
+%% A push_event is `[PUSH_EVENT, Event]`, `[PUSH_EVENT, Event, Payload]`, or with
+%% options `[PUSH_EVENT, Event, Payload, Opts]`, `Opts` present only when one differs
+%% from its default. Every client reads the event at 1 and the payload at 2, so the
+%% options go last: a client that reads none (the native ones, which pin this layout
+%% against `json_client.js`) runs a `drop` push_event as it ran one before.
+push_event_layout_is_positional(Config) when is_list(Config) ->
+    Push = canonical_code(effects, ~"PUSH_EVENT"),
+    ?assertEqual([Push, ~"e"], arizona_effect:json_value(arizona_effect:push_event(~"e"))),
+    ?assertEqual(
+        [Push, ~"e", #{k => 1}],
+        arizona_effect:json_value(arizona_effect:push_event(~"e", #{k => 1}))
+    ),
+    ?assertEqual(
+        [Push, ~"e", #{k => 1}],
+        arizona_effect:json_value(arizona_effect:push_event(~"e", #{k => 1}, #{on_repeat => allow}))
+    ),
+    ?assertEqual(
+        [Push, ~"e", #{k => 1}, #{on_repeat => drop}],
+        arizona_effect:json_value(arizona_effect:push_event(~"e", #{k => 1}, #{on_repeat => drop}))
+    ),
+    ?assertMatch(
+        {match, _}, re:run(read(json_client_path()), ~"pushEvent\\(arg\\(1\\), cmd\\[2\\]")
+    ).
+
+%% --------------------------------------------------------------------
 %% Source extraction
 %% --------------------------------------------------------------------
 
@@ -104,6 +136,10 @@ canonical(ops) ->
     extract(read(["include", "arizona_wire.hrl"]), ~"OP_([A-Z0-9_]+),\\s*([0-9]+)");
 canonical(effects) ->
     extract(read(["include", "arizona_effect.hrl"]), ~"EFFECT_([A-Z0-9_]+),\\s*([0-9]+)").
+
+canonical_code(Kind, Name) ->
+    #{Name := Code} = canonical(Kind),
+    Code.
 
 %% The ops the JSON backend can emit: the header minus the capability-gated ones.
 json_backend_ops() ->
