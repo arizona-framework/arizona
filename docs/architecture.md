@@ -1384,9 +1384,9 @@ build-opts variant supports hot-reload-safe rebuilds.
   controller `loop` reply by any adapter that supports the `reload` capability)
 
 These are the shapes core defines (`arizona_route:route()`). An adapter may serve route shapes of
-its own beside them, for a feature its server has and Arizona does not define: `arizona_roadrunner`
-serves gRPC services from `{grpc, Services, Opts}`. Core and every other adapter refuse such a
-shape as `unknown_route` at boot (see [adapters.md](adapters.md#routing)).
+its own beside them, for a feature its server has and Arizona does not define; its own
+documentation describes them. Core and every other adapter refuse such a shape as `unknown_route`
+at boot (see [adapters.md](adapters.md#routing)).
 
 ## API -- `arizona_stream.erl`
 

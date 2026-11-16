@@ -56,7 +56,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 
 Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in [docs/architecture.md](docs/architecture.md).
 
-Server adapters: an adapter may serve route shapes of its own beside core's `arizona_route:route()` (`arizona_roadrunner`'s `{grpc, Services, Opts}` serves gRPC services); core and the other adapters refuse them as `unknown_route`. The contract an HTTP/WebSocket server adapter meets (the `arizona_server`,
+Server adapters: an adapter may serve route shapes of its own beside core's `arizona_route:route()`, documented in its own repo; core and the other adapters refuse them as `unknown_route`. The contract an HTTP/WebSocket server adapter meets (the `arizona_server`,
 `arizona_req`, `arizona_route` and `arizona_controller` seams, the routing rules, and the
 conformance suite every adapter runs) is in [docs/adapters.md](docs/adapters.md).
 
