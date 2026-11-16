@@ -431,7 +431,7 @@ export function withAllControls(form, fn) {
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
- * Shared by the submit's own push_events (`closeSubmit`/`finishSubmit`: as its
+ * Shared by `az-submit` (`closeSubmit`/`finishSubmit`: as its
  * commands run, or deferred until a throttled send is judged) and the `fetch`
  * command (deferred to a 2xx response, so the fields survive a validation error).
  * A deferred reset passes `sent`, what the controls showed as the request went out
