@@ -334,12 +334,9 @@ end_per_group(Group, Config) ->
         false -> end_feature(Group, Config)
     end.
 
-%% The cases naming files that are not UTF-8 are skipped where the file system
-%% cannot hold such a name.
-init_per_testcase(Case, Config) when
-    Case =:= asset_missing_non_utf8_file_is_404;
-    Case =:= asset_extension_that_is_not_utf8_is_octet_stream
-->
+%% The case serving the non-UTF-8 fixture is skipped where the file system
+%% refused to write it.
+init_per_testcase(asset_extension_that_is_not_utf8_is_octet_stream, Config) ->
     case ?config(non_utf8_names, Config) of
         ok -> Config;
         {error, Reason} -> {skip, {file_system_refuses_non_utf8_names, Reason}}
