@@ -554,8 +554,13 @@ path_params_are_percent_decoded(Config) ->
     {200, _, Body} = req(Config, ~"GET", ~"/items/caf%C3%A9", []),
     ?assertEqual(~"café", rendered(~"Item", Body)),
     %% `+` is a space only in form encoding, never in a path.
-    {200, _, Plus} = req(Config, ~"GET", ~"/items/a+b", []),
-    ?assertEqual(~"a+b", rendered(~"Item", Plus)).
+    [
+        begin
+            {200, _, Plus} = req(Config, ~"GET", Path, []),
+            ?assertEqual(Expected, rendered(~"Item", Plus))
+        end
+     || {Path, Expected} <- [{~"/items/a+b", ~"a+b"}, {~"/items/a+b%41", ~"a+bA"}]
+    ].
 
 %% An escape stands for an octet (RFC 3986, section 2.1), so a capture is the
 %% bytes its escapes encode whether or not they are UTF-8, as a query parameter
