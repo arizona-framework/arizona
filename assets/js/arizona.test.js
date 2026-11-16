@@ -5893,6 +5893,57 @@ describe('crash and mount-failure recovery', () => {
         });
     }
 
+    /**
+     * Run `body` with the `n`th `[az-view]` lookup from form `f` throwing, once
+     * armed: a replayed push_event resolves its target that way before it is sent.
+     */
+    async function throwingReplayOn(n, body) {
+        const closest = Element.prototype.closest;
+        let count = 0;
+        let armed = false;
+        Element.prototype.closest = function (sel) {
+            if (armed && sel === '[az-view]' && this.id === 'f' && ++count === n)
+                throw new Error('replay boom');
+            return closest.call(this, sel);
+        };
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            await body((on) => {
+                armed = on;
+                count = 0;
+            }, error);
+        } finally {
+            Element.prototype.closest = closest;
+            error.mockRestore();
+        }
+    }
+
+    it('a replay that throws after sending an event is withheld after a crash', async () => {
+        const view = formView('[[0,"a"],[0,"b"]]');
+        await throwingReplayOn(2, async (arm) => {
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            m.simulateClose(4500);
+            const before = m.posted.length;
+            arm(true);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            arm(false);
+            const first = m.posted.slice(before);
+            expect(sends(first).map((s) => s[1])).toEqual(['a']);
+            expect(first.at(-1)).toEqual([4]);
+            m.simulateClose(4500); // before the acknowledgement: "a" is suspect
+            const again = m.posted.length;
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            expect(field('q').value).toBe('typed');
+            expect(sends(m.posted.slice(again))).toEqual([]);
+        });
+    });
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';
