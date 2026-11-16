@@ -431,11 +431,13 @@ export function withAllControls(form, fn) {
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
- * Shared by the submit listener (synchronous, for push_event-style commands) and the
- * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
- * A deferred reset passes `sent`, what the controls showed when the request went out:
- * one the user changed since, or added since and filled, keeps what it shows -- the
- * next chat message typed while the last one was in flight -- with its whole radio
+ * Shared by the submit's own push_events (`closeSubmit`/`finishSubmit`: as its
+ * commands run, or deferred until a throttled send is judged) and the `fetch`
+ * command (deferred to a 2xx response, so the fields survive a validation error).
+ * A deferred reset passes `sent`, what the controls showed as the request went out
+ * or, for a throttled submit, as its commands ran: one the user changed since, or
+ * added since and filled, keeps what it shows -- the next chat message typed while
+ * the last one was in flight -- with its whole radio
  * group. The rest get the browser's own `form.reset()` (its trusted `reset` event,
  * defaults, dirty and user-validity flags): the kept controls sit outside the form
  * for that call, a `form` attribute naming no element taking them out with their
