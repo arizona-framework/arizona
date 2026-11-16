@@ -641,18 +641,18 @@ function enterSlot(holder, slot) {
  * the slot until its reply lands, which the connection runs before the reply's
  * effects, or until the socket closes. One the host does not send (a stale or
  * disconnected page, a page with no server) awaits no reply, so it lets go at once.
+ * Returns whether the frame went out on a live socket, as `host.sendEvent` reports
+ * it: a frame posted while the socket is down is dropped by the worker, so for an
+ * az-submit's reset (`judgeSubmit`) it was never sent.
  * @param {Element} holder
  * @param {string|null} slot
  * @param {string} name
  * @param {Array<*>} frame
  * @param {{epoch?: number, transition: *, ctls: Array<[Element, string|boolean]>|null}} opts
- * @returns {boolean} false when it was refused as a repeat
+ * @returns {boolean}
  */
 function sendPush(holder, slot, name, frame, opts) {
-    if (slot === null) {
-        host.sendEvent(name, frame, opts);
-        return true;
-    }
+    if (slot === null) return host.sendEvent(name, frame, opts);
     if (_inFlight.get(holder)?.slots.has(slot)) {
         host.unsent(opts.transition, opts.ctls);
         (busyMarks(holder) ? holder : document).dispatchEvent(
@@ -664,8 +664,9 @@ function sendPush(holder, slot, name, frame, opts) {
         return false;
     }
     const release = enterSlot(holder, slot);
-    if (!host.sendEvent(name, frame, { ...opts, onReply: release })) release();
-    return true;
+    const sent = host.sendEvent(name, frame, { ...opts, onReply: release });
+    if (!sent) release();
+    return sent;
 }
 
 /**
@@ -673,7 +674,8 @@ function sendPush(holder, slot, name, frame, opts) {
  * became of them, which decides its `az-form-reset` (`openSubmit`/`closeSubmit`).
  * `raised` counts them as its commands run, `judged` as each send is judged (at
  * once, or when its throttle fires) or replaced by a later raise, `sent` whether one
- * went out rather than being refused as a repeat. `reset` is the reset its pacing
+ * went out on a live socket -- not refused as a repeat, nor posted while the socket
+ * was down, stale or with no server. `reset` is the reset its pacing
  * deferred -- the form and what its controls showed as its commands ran -- held in
  * `_resets` meanwhile, so a reconnect resync moves it onto the form that replaced
  * this one (`rehome`), as it moves a fetch's.
@@ -706,8 +708,9 @@ export function openSubmit(form, event) {
 /**
  * The submit's commands have run: reset its `az-form-reset` form now when it raised
  * no push_event of its own or every one was judged, else once the last is -- as long
- * as one of them was sent. A submit whose only event was refused as a repeat keeps
- * its fields, as a dropped fetch does. A reset waiting on a paced send keeps a
+ * as one of them was sent. A submit that sent nothing -- its events refused as
+ * repeats, or posted while the socket was down -- keeps its fields, as a dropped
+ * fetch does. A reset waiting on a paced send keeps a
  * control the user changed meanwhile, as a fetch's reset does.
  * @param {Element} form
  * @param {Event} event

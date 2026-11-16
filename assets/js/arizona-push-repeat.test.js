@@ -469,6 +469,27 @@ describe('push_event on_repeat: drop', () => {
                 expect(cmds.heldNodes().size).toBe(0);
             });
 
+            // The socket closed before the trailing send fired: the worker drops a
+            // frame posted while it is down, so nothing went out and the form keeps
+            // what was typed for the user to submit again.
+            it('keeps what was typed when its trailing send finds the socket closed', async () => {
+                vi.useFakeTimers();
+                await connect(
+                    `<form id="f" az-throttle="1000" az-submit='${cmd([0, 'save', {}])}' az-form-reset><input name="q" /></form>`,
+                );
+                const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+                const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+                typeIn(q, 'first');
+                submit(form);
+                expect(q.value).toBe('');
+                typeIn(q, 'second');
+                submit(form);
+                mock.close(1000);
+                vi.advanceTimersByTime(1000);
+                expect(q.value).toBe('second');
+                expect(cmds.heldNodes().size).toBe(0);
+            });
+
             it('resets the form a reconnect put in its place', async () => {
                 vi.useFakeTimers();
                 await connect(THROTTLED());
@@ -559,6 +580,27 @@ describe('push_event on_repeat: allow', () => {
             ['page', 'save', {}],
         ]);
         expect(btn.hasAttribute('az-busy')).toBe(false);
+    });
+});
+
+describe('az-form-reset on a page with no server', () => {
+    it('keeps the fields of a submit whose event went nowhere', async () => {
+        vi.resetModules();
+        const { start } = await import('./arizona-static.js');
+        document.body.innerHTML =
+            `<form id="f" az-submit='${cmd([0, 'save', {}])}' az-form-reset><input name="q" /></form>` +
+            `<script type="application/json" id="arizona-attrs">["az-submit"]</script>`;
+        const stop = start();
+        try {
+            vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+            const q = /** @type {HTMLInputElement} */ (form.querySelector('input'));
+            q.value = 'typed';
+            submit(form);
+            expect(q.value).toBe('typed');
+        } finally {
+            stop();
+        }
     });
 });
 
