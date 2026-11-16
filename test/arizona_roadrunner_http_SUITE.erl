@@ -123,8 +123,8 @@ end_per_suite(Config) ->
 %% --------------------------------------------------------------------
 
 %% A middleware that consumes the body advances the raw request's body_reader.
-%% `handle/1` must hand roadrunner back THAT request, not the one it was called
-%% with -- roadrunner's finishing phase drains the reader off the returned req.
+%% `handle/1` hands roadrunner back THAT request, not the one it was called
+%% with, as roadrunner's handler contract asks.
 handle_returns_the_threaded_raw_request(Config) when is_list(Config) ->
     Body = ~"body-bytes",
     Req = manual_body_req(Body, arizona_about, #{}),
@@ -135,8 +135,8 @@ handle_returns_the_threaded_raw_request(Config) when is_list(Config) ->
         ReqOut
     ).
 
-%% Same threading on the error arm: a render crash still has to return the
-%% advanced request, or the 500 leaves the connection's reader stale.
+%% Same threading on the error arm: a render crash still returns the advanced
+%% request.
 handle_returns_the_threaded_raw_request_on_a_render_crash(Config) when is_list(Config) ->
     Body = ~"body-bytes",
     Req = manual_body_req(Body, arizona_crashable, #{crash_on_mount => true}),
@@ -193,10 +193,11 @@ body_read_across_recvs_is_a_binary(Config) when is_list(Config) ->
 %% Keep-alive framing
 %% --------------------------------------------------------------------
 
-%% End-to-end consequence of dropping the threaded request: the stale
-%% body_reader still believes the body is unread, so roadrunner's drain pulls
-%% `content-length` bytes off the wire -- which are the *next* pipelined
-%% request's bytes. The follow-up request then fails to parse (400 + close).
+%% A guard, not a test of the threading above: a manual-mode body read on a
+%% keep-alive connection leaves the pipelined next request intact. Roadrunner
+%% drains from the latest reader it remembers, so even a handler returning an
+%% older request passes; a server that drained a stale reader would pull the
+%% next request's bytes and answer it 400.
 manual_body_read_keeps_pipelining_intact(Config) ->
     Port = ?config(port, Config),
     {ok, Sock} = gen_tcp:connect(
@@ -270,7 +271,8 @@ status_lines(Data) ->
     ].
 
 %% Read until the peer goes quiet for 500 ms (or closes). Both responses are on
-%% the wire well before that; a stale-reader server sends one 200 then a 400.
+%% the wire well before that; a server that drained a stale reader sends one
+%% 200 then a 400.
 recv_until_quiet(Sock, Acc) ->
     case gen_tcp:recv(Sock, 0, 500) of
         {ok, Data} -> recv_until_quiet(Sock, <<Acc/binary, Data/binary>>);
