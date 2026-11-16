@@ -11,6 +11,7 @@
 -export([websocket_opens_over_http2/1]).
 -export([tls_config_contradictions_are_refused/1]).
 -export([max_content_length_caps_a_body/1]).
+-export([route_shape_of_another_adapter_is_refused/1]).
 
 all() ->
     [
@@ -18,7 +19,8 @@ all() ->
         tls_alone_means_https,
         websocket_opens_over_http2,
         tls_config_contradictions_are_refused,
-        max_content_length_caps_a_body
+        max_content_length_caps_a_body,
+        route_shape_of_another_adapter_is_refused
     ].
 
 init_per_suite(Config) ->
@@ -107,6 +109,16 @@ tls_config_contradictions_are_refused(Config) ->
      || {Reason, Opts} <- Cases
     ],
     ok.
+
+%% A route shape another adapter defines (the roadrunner adapter's gRPC route)
+%% is no route here: the start fails naming it, before the listener exists.
+route_shape_of_another_adapter_is_refused(Config) when is_list(Config) ->
+    Grpc = {grpc, [chat_service], #{}},
+    ?assertError(
+        {unknown_route, Grpc},
+        arizona_cowboy_server:start(cowboy_grpc_test, #{routes => [Grpc | routes()]})
+    ),
+    ?assertEqual({error, not_found}, arizona_cowboy_server:stop(cowboy_grpc_test)).
 
 %% A body past `max_content_length` reads as `too_large`, which the MCP
 %% endpoint answers `413`; one at the cap is read.

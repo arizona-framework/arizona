@@ -298,14 +298,14 @@ format_listener(Name, []) ->
 format_listener(Name, Routes) ->
     [fmt("~p:", [Name]) | [[$\n, "  ", format_route(R)] || R <- Routes]].
 
-%% Route shapes: 4-tuple `{live|controller|mcp, Path, Handler, Opts}` and 3-tuple
-%% `{ws|asset|reload, Path, _}`; a catch-all keeps an unknown shape from crashing.
-format_route({Type, Path, Handler, _Opts}) when is_atom(Handler) ->
+%% A path is printed as text only when it is one: a listener also reports the
+%% route shapes its adapter defines, whose second element may be anything.
+format_route({Type, Path, Handler, _Opts}) when is_binary(Path), is_atom(Handler) ->
     fmt("~p ~ts -> ~p", [Type, Path, Handler]);
-format_route({Type, Path, _}) ->
+format_route({Type, Path, _}) when is_binary(Path) ->
     fmt("~p ~ts", [Type, Path]);
 format_route(Other) ->
-    fmt("~p", [Other]).
+    fmt("~0tp", [Other]).
 
 describe_component(Module) ->
     Exports = lists:join(~", ", [fmt("~p/~p", [F, A]) || {F, A} <- module_exports(Module)]),

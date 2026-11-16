@@ -58,7 +58,9 @@ unregistered; one with no listener left recompiles nothing.
 -doc """
 Reports that `Adapter` started the listener `Name` serving `Routes`: registers
 the adapter and turns on the dev-mode signals the routes carry. Called once the
-listener is up, so a failed start leaves nothing behind.
+listener is up, so a failed start leaves nothing behind. `Routes` is the list as
+the adapter took it, so it may hold route shapes the adapter defines itself
+beside `t:arizona_route:route/0`.
 """.
 -spec listener_up(Adapter, Name, Routes) -> ok when
     Adapter :: module(),

@@ -53,7 +53,7 @@ their methods.
 -nominal segment() :: {literal, binary()} | {param, binary()} | {wildcard, binary()}.
 
 -nominal entry() :: #{
-    route := term(),
+    route := arizona_route:route(),
     kind := arizona_route:kind(),
     pattern := [segment()],
     methods := arizona_route:methods(),
@@ -80,7 +80,7 @@ for a `*name` followed by more segments, and `{unreachable_route, Pos, Path, By}
 for a route the earlier ones fully shadow.
 """.
 -spec compile(Routes, BuildOpts, Adapter) -> table() when
-    Routes :: [term()],
+    Routes :: [arizona_route:route()],
     BuildOpts :: arizona_route:build_opts(),
     Adapter :: module().
 compile(Routes, BuildOpts, Adapter) ->

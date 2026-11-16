@@ -60,7 +60,10 @@ kind_refuses_a_term_that_is_no_route(Config) when is_list(Config) ->
         ]
     ],
     Message = format(arizona_route, kind, [{lvie, ~"/", page, #{}}]),
-    ?assertNotEqual(nomatch, binary:match(Message, ~"is not a route")).
+    ?assertNotEqual(nomatch, binary:match(Message, ~"is not a route")),
+    %% An adapter may define route shapes of its own, so the message names that
+    %% possibility for a shape core does not know.
+    ?assertNotEqual(nomatch, binary:match(Message, ~"a route your server adapter defines")).
 
 unsupported_names_kind_and_adapter(Config) when is_list(Config) ->
     ?assertError(

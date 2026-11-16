@@ -21,6 +21,10 @@ way `arizona_controller:dispatch/3` refuses a reply kind the adapter cannot send
 and every adapter serves them. `mcp` (the Model Context Protocol endpoint) and
 `reload` (the dev hot-reload event stream) are capabilities.
 
+`t:route/0` is the type of these shapes. An adapter may serve route shapes of
+its own beside them; it matches them before calling `kind/1`, which refuses
+them as `unknown_route`.
+
 ## Route rules
 
 What a route means does not depend on the server, so the rules live here and
@@ -65,6 +69,13 @@ every adapter's router compiles from them rather than restating them:
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([route/0]).
+-export_type([path/0]).
+-export_type([asset_source/0]).
+-export_type([asset_opts/0]).
+-export_type([verb/0]).
+-export_type([method_spec/0]).
+-export_type([controller_opts/0]).
 -export_type([kind/0]).
 -export_type([methods/0]).
 -export_type([build_opts/0]).
@@ -72,6 +83,64 @@ every adapter's router compiles from them rather than restating them:
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
+
+%% A route of an Arizona route list. An adapter may serve shapes of its own
+%% beside these; it matches them before calling `kind/1`, which refuses them.
+-nominal route() ::
+    {live, path(), module(), arizona_live:route_opts()}
+    | {ws, path(), map()}
+    | {asset, path(), asset_source()}
+    | {asset, path(), asset_source(), asset_opts()}
+    | {verb(), path(), module(), controller_opts()}
+    | {match, method_spec(), path(), module(), controller_opts()}
+    | {mcp, path(), module(), arizona_mcp_handler:route_opts()}
+    | {reload, path(), map()}.
+
+%% A path pattern: literal segments, `:name` binding one segment, and a last
+%% `*name` binding the rest.
+-nominal path() :: binary().
+
+%% Where an `{asset, ...}` route's files live: a directory path, or a
+%% sub-path under an application's `priv` directory.
+-nominal asset_source() ::
+    {dir, file:filename_all()}
+    | {priv_dir, atom(), file:filename_all()}.
+
+%% Options for an `{asset, ...}` route. `cache_control` sets a `Cache-Control`
+%% header (verbatim) on every cacheable static response; off by default. Use it
+%% only for content-hashed assets (e.g. `~"public, max-age=31536000, immutable"`)
+%% -- arizona's own bundle filenames are stable, not hashed, so an `immutable`
+%% directive on them would pin a stale build past a deploy.
+-nominal asset_opts() :: #{
+    cache_control => binary(),
+    %% HTTP response transforms only (`arizona_middleware:cors/1`, ...): an
+    %% asset route runs no Arizona pipeline, so a request-to-bindings step
+    %% here has nothing to run it and route compilation fails loudly.
+    middlewares => [arizona_middleware:http_transform()]
+}.
+
+%% The verb tag a controller route may start with, sugar for a single-method
+%% allowlist. Custom or multi-method routes go through `{match, Spec, ...}`.
+-nominal verb() :: get | post | put | patch | delete | head | options.
+
+%% The method argument of a `{match, ...}` route: a single verb, a list of
+%% verbs, or the atom `'*'` for any method. A verb is an atom, uppercased (any
+%% atom works, e.g. `move` -> `~"MOVE"`), or a custom uppercase method binary
+%% (`~"PROPFIND"`).
+-nominal method_spec() :: atom() | binary() | [atom() | binary()].
+
+-nominal controller_opts() :: #{
+    %% State handed to the controller action, as its context's `state`.
+    state => term(),
+    %% Controller action function: dispatched as Handler:Action/2 (default `handle`).
+    action => atom(),
+    %% Arizona pipeline steps and HTTP response transforms, split by `steps/1`
+    %% and `transforms/2`.
+    middlewares => [arizona_middleware:middleware()],
+    %% CSRF Origin check is on by default; set false to opt this route out.
+    check_origin => boolean(),
+    _ => term()
+}.
 
 -nominal kind() :: live | ws | asset | controller | mcp | reload.
 
@@ -123,7 +192,7 @@ kind(Route) ->
 
 -doc "The path pattern of `Route`.".
 -spec path(Route) -> binary() when
-    Route :: term().
+    Route :: route().
 path(Route) ->
     case kind(Route) of
         controller when element(1, Route) =:= match -> element(3, Route);
@@ -139,7 +208,7 @@ route is an event stream, `GET` and `HEAD`.
 match no real method.
 """.
 -spec methods(Route) -> methods() when
-    Route :: term().
+    Route :: route().
 methods(Route) ->
     case kind(Route) of
         Kind when Kind =:= live; Kind =:= asset; Kind =:= reload -> [~"GET", ~"HEAD"];
@@ -154,7 +223,7 @@ steps, in order, behind the CSRF `check_origin` step unless the route sets
 (`transforms/2`).
 """.
 -spec steps(Route) -> [arizona_middleware:middleware()] when
-    Route :: term().
+    Route :: route().
 steps(Route) ->
     Opts = opts(Route),
     Steps = [M || M <- maps:get(middlewares, Opts, []), not is_transform(M)],
@@ -175,7 +244,7 @@ An `asset` route runs no pipeline, so a step among its `middlewares` would
 never run: it raises `{asset_middleware_not_transform, Steps}`.
 """.
 -spec transforms(Route, BuildOpts) -> [arizona_middleware:http_transform()] when
-    Route :: term(),
+    Route :: route(),
     BuildOpts :: build_opts().
 transforms(Route, BuildOpts) ->
     Kind = kind(Route),
@@ -200,7 +269,7 @@ adapter's `c:arizona_req:resolve_route/3` returns these, minus `handler`, as
 the route options.
 """.
 -spec live(Route, BuildOpts) -> Live when
-    Route :: term(),
+    Route :: route(),
     BuildOpts :: build_opts(),
     Live :: #{
         handler := module(),
@@ -232,7 +301,7 @@ handler module folded into its state; `arizona_reload_controller` is a dev
 endpoint the page it serves opens itself.
 """.
 -spec controller(Route) -> arizona_controller:route() when
-    Route :: term().
+    Route :: route().
 controller({mcp, _Path, Handler, Opts}) ->
     #{
         handler => arizona_mcp_handler,
@@ -254,7 +323,7 @@ controller(Route) ->
 
 -doc "The directory an `asset` route serves, a `priv_dir` source resolved.".
 -spec asset_dir(Route) -> file:filename_all() when
-    Route :: term().
+    Route :: route().
 asset_dir(Route) ->
     asset = kind(Route),
     case element(3, Route) of
@@ -290,7 +359,8 @@ format_error({unknown_route, Route}, [{_M, _F, _Args, _Info} | _]) ->
             "{ws, Path, Opts}, {asset, Path, Source[, Opts]}, "
             "{Verb, Path, Handler, Opts} (get, post, put, patch, delete, head, "
             "options), {match, Spec, Path, Handler, Opts}, {mcp, Path, Handler, "
-            "Opts}, or {reload, Path, Opts}, with Path a binary.",
+            "Opts}, or {reload, Path, Opts}, with Path a binary -- or a route "
+            "your server adapter defines.",
             [Route]
         )
     };
