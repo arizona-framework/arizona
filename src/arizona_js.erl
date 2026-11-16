@@ -157,6 +157,10 @@ engine, which is authoritative for what a view shows.
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
+%% A flat builder facade, one thin function per effect command, so it legitimately
+%% exceeds the god-module function count.
+-elvis([{elvis_style, no_god_modules, disable}]).
+
 -ifdef(TEST).
 %% Inline EUnit tests intentionally repeat command tuples to verify
 %% structural equality at different nesting levels.
