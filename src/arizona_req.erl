@@ -294,6 +294,9 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% - Match exactly as an HTTP request to `Path` would: same routes (those of the
 %%   listener that accepted the raw request), same order, same percent-decoded
 %%   bindings, a segment holding a malformed escape (`%G1`) kept as written.
+%% - Return `error` for a URL an HTTP request would refuse (a query past the
+%%   adapter's key cap): the caller then does a full page load, which gets the
+%%   same answer.
 %% - `RouteOpts` is what that route renders with: `bindings`, `on_mount`,
 %%   `layouts` (the socket compares them to decide whether a navigate can swap
 %%   the page in place), and `middlewares` with the `check_origin` step the
@@ -447,9 +450,8 @@ Preserves repeat keys (`?tag=a&tag=b` returns two entries).
 A value is decoded as form encoding is: `+` is a space and each escape the octet
 it encodes, UTF-8 or not, and a bare key (`?debug`) is `true`. A key or value
 holding a malformed escape (`%G1`, a trailing `%4`) is kept as written, its `+`
-still a space, on every adapter. An adapter may cap the number of keys a query
-holds and answer `400` past it before this runs (Cowboy's `max_query_keys`);
-roadrunner has no cap.
+still a space, on every adapter. An adapter may cap the number of query keys
+and answer `400` past it.
 """.
 -spec params(request()) -> {params(), request()}.
 params(#{params := Params} = Req) ->

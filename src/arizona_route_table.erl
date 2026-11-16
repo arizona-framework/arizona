@@ -3,12 +3,10 @@
 A compiled Arizona route list and its matcher: the routing contract in
 `docs/adapters.md`, for an adapter whose server's router cannot express it.
 
-Cowboy's router, for one, has no method dimension, so it can neither dispatch a
-path to several routes by verb nor build a `405`'s `Allow` set, and it refuses
-a malformed escape itself. Such an adapter matches here ahead of its server's
-router (Cowboy from a middleware heading the listener's chain), so every
-adapter routes by the same rules. A server whose router does express them
-(roadrunner) keeps its own.
+A router with no method dimension can neither dispatch a path to several
+routes by verb nor build a `405`'s `Allow` set. An adapter whose router cannot
+express the contract matches here, so every adapter routes by the same rules.
+A server whose router does express them (roadrunner) keeps its own.
 
 `compile/3` turns a route list into an ordered table, refusing what the contract
 refuses: a route kind the adapter lacks (`c:arizona_server:capabilities/0`), a

@@ -78,15 +78,15 @@ the listener keeps accepting and the reconnects land on it.
 `parse_bindings/1` (binary keys, percent-decoded values), `parse_params/1` (form decoding: `+` is a
 space, each escape the octet it encodes, a bare key `true`; a key or value holding a malformed
 escape such as `%G1` is kept as written, its `+` still a space, never a `400`; an adapter may cap
-the number of keys, as Cowboy's `max_query_keys` does (`400` past it, the navigate to such a URL a
-full page load that gets it), while roadrunner has no cap), `parse_cookies/1`,
+the number of query keys and answer `400` past it), `parse_cookies/1`,
 `parse_headers/1` (lowercase names; a repeated field combined in order, `Cookie` lines joined by a semicolon),
 `read_body/1` (`{ok, Body, Raw1}`, or `{error, too_large | trailers_too_large | timeout |
 invalid}`), and `scheme/1` (the connection's own, `https` only on TLS). `resolve_route/3` resolves a
 navigate target: its full contract is on the callback in `arizona_req`. In short, never crash or
 reply on an unknown path (it is client-supplied), match as a `GET` (an HTTP/2 WebSocket upgrade
 arrives as `CONNECT`), and match exactly as an HTTP request to that path would, a malformed
-escape included. The optional
+escape included. A navigate to a URL an HTTP request would refuse (a query past the adapter's key
+cap) returns `error`, so core does a full page load, which gets the same answer. The optional
 `peer/1` is the connection's `{IP, Port}`: without it, `arizona_req:peer/1` is `undefined` and an
 `mcp` route's localhost gate refuses every request.
 
@@ -118,10 +118,8 @@ Compile from `arizona_route` rather than restating its rules:
 The router must behave as follows. Most servers' routers do not (no method dimension, no `Allow`
 union), and for those core has the whole matcher: `arizona_route_table:compile(Routes, BuildOpts,
 Adapter)` builds the table (refusing unsupported kinds and shadowed routes) and `match/3` and
-`allow/2` answer requests, so the adapter calls them ahead of its server's router, as Cowboy's
-does from a middleware heading the listener's chain, and hands that router only the paths no
-Arizona route matches. A server whose router already expresses the rules (roadrunner) may compile
-to it natively:
+`allow/2` answer requests, so an adapter whose router cannot express the contract matches here.
+A server whose router already expresses the rules (roadrunner) may compile to it natively:
 
 - Routes are tried in declaration order; the first match wins. A route the earlier ones fully
   shadow is a configuration error, refused at start.
