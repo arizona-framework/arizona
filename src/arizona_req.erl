@@ -424,8 +424,10 @@ first access, cached in the returned request for subsequent calls.
 
 A value is the octets its percent-escapes encode, not necessarily UTF-8 (as with
 `params/1`), so validate it before rendering it: a non-UTF-8 one fails a
-dev-mode render and any `?json` render (`500`), closes the socket of a navigate
-to its page (`4501`), and only a production `?html` page carries its raw bytes.
+dev-mode render and any `?json` render (`500`), and any live frame that renders
+it: a navigate to its page or a reconnect resync (socket closed `4501`), or a
+later diff. Only the HTTP render of a production `?html` page carries its raw
+bytes, so such a page loads and then dies on its first reconnect.
 `unicode:characters_to_binary/1` returns a binary unchanged only when it is
 UTF-8; a `*name` binding is a list of segments, so apply it to each (the call
 would join them into one).
