@@ -6108,6 +6108,17 @@ describe('crash and mount-failure recovery', () => {
         });
     }
 
+    it('skips an item the interpreter skips without a warning', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const { after } = await crashAndRemount(formView('[[0,"a"],5,"x",[[0,"z"]],[0,"b"]]'));
+            expect(sends(after).map((s) => s[1])).toEqual(['a', 'b']);
+            expect(warn).not.toHaveBeenCalled();
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';

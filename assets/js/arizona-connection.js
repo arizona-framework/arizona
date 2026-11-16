@@ -1400,12 +1400,14 @@ function rehomeHeld(marks) {
 }
 
 /**
- * Replay the `push_event`s of a restored form's `az-change`. A value that is no
- * command list (an app's data under a proven name) is replayed as far as the live
- * `change` listener would run it: nothing when it does not parse, else the
- * push_events before its first item that is no command. Either way it warns, once
- * per form, rather than throw: a throw here would leave the forms after it
- * unrestored and the resync frame unfinished (focus, `arizona:connected`).
+ * Replay the `push_event`s of a restored form's `az-change`, as far as the live
+ * `change` listener would run them. A value that does not parse replays nothing;
+ * one that parses is read item by item as the interpreter reads it, so an item it
+ * skips (a number, a string, a nested list) is skipped here too, and the replay
+ * stops at the first item it cannot read (a `null`, a transition of `null`, or a
+ * `null` a transition's scan meets) with the push_events before it. Only those two cases warn, once per
+ * form, rather than throw: a throw here would leave the forms after it unrestored
+ * and the resync frame unfinished (focus, `arizona:connected`).
  * @param {HTMLFormElement} form
  * @param {string} formId
  * @param {string} azChange
