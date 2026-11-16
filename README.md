@@ -44,7 +44,8 @@ minor versions. Pin an exact version in your deps if you need stability across u
   recompiles changed `.erl` files and pushes reload events
 - **Server adapters** -- Roadrunner (HTTP/1.1, HTTP/2, HTTP/3) or Cowboy (HTTP/1.1, HTTP/2), each
   in its own package and held to one conformance suite; Arizona can also share a listener another
-  framework owns, as `arizona_nova` does for Nova
+  framework owns, as `arizona_nova` does for Nova. On Roadrunner a route can also serve
+  [gRPC services](https://github.com/arizona-framework/arizona_roadrunner#grpc) on the app's port
 - **JSON render target** -- the same templates and diff engine also emit a JSON widget tree
   via `?json` for non-browser clients. [Android](https://github.com/arizona-framework/arizona_android)
   (Compose), [iOS](https://github.com/arizona-framework/arizona_ios) (SwiftUI), and JS reference
