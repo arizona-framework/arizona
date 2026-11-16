@@ -124,7 +124,10 @@ does. A server whose router already expresses the rules (roadrunner) may compile
   captured segment is percent-decoded on its own, after the split, each escape to the octet it
   encodes, UTF-8 or not, so such a capture never fails the match: `/p/%FF` matches `/p/:id` with
   `<<255>>`, and `/w/a%2Fb` matches `/w/*rest` with `[<<"a/b">>]`. Unlike a query param, a `+`
-  stays a `+`. Literals match the raw bytes, case-sensitively. Empty segments and a trailing
+  stays a `+`. A segment holding a malformed escape (`%G1`, a trailing `%4`) is kept whole, as
+  written, none of its escapes decoded (`a%41%G1` stays `a%41%G1`). The standalone Cowboy
+  listener's own router answers such a path `400` over HTTP before Arizona matches it; a navigate,
+  a WebSocket upgrade's `_az_path` and a mounted Cowboy listener still match it raw. Literals match the raw bytes, case-sensitively. Empty segments and a trailing
   slash are ignored.
 - Several routes may share a path with different methods. A path that matches but whose method
   no matching route allows gets `405` with an `Allow` header listing the methods of **every**
