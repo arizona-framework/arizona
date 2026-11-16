@@ -854,8 +854,9 @@ asset_extension_that_is_not_utf8_is_octet_stream(Config) ->
     ?assertEqual(~"application/octet-stream", header(~"content-type", Headers)).
 
 %% `secret.txt` sits one level above the asset dir; no spelling of `..` may
-%% reach it.
+%% reach it, nor its absolute path in one segment, nor a NUL ending a name early.
 asset_traversal_is_not_served(Config) ->
+    Secret = filename:join(filename:dirname(?config(asset_dir, Config)), "secret.txt"),
     [
         ?assertMatch(
             {Status, _, Body} when
@@ -868,8 +869,9 @@ asset_traversal_is_not_served(Config) ->
             ~"/files/%2E%2E%2Fsecret.txt",
             ~"/files/..%2fsecret.txt",
             ~"/files/..%5Csecret.txt",
-            ~"/files/%2Fsecret.txt",
-            ~"/files/secret.txt%00",
+            <<"/files/", (escape_segment(Secret))/binary>>,
+            ~"/files/app.txt%00.png",
+            ~"/files/..%2Fsecret.txt%00",
             ~"/files/%2e%2e%2fsecret.txt%FF",
             ~"/files/%2e%2e%2fsecret.txt%G1"
         ]
@@ -1449,6 +1451,21 @@ drain_listener(Config) ->
 
 req(Config, Method, Path, Headers) ->
     arizona_wire_client:request(?config(port, Config), Method, Path, Headers, <<>>).
+
+%% `Path` as one path segment: every byte but an unreserved one escaped, `/`
+%% included.
+escape_segment(Path) ->
+    <<
+        <<(escape_byte(B))/binary>>
+     || <<B>> <= unicode:characters_to_binary(Path)
+    >>.
+
+escape_byte(B) when
+    B >= $a, B =< $z; B >= $A, B =< $Z; B >= $0, B =< $9; B =:= $.; B =:= $-; B =:= $_; B =:= $~
+->
+    <<B>>;
+escape_byte(B) ->
+    <<$%, (integer_to_binary(B div 16, 16))/binary, (integer_to_binary(B rem 16, 16))/binary>>.
 
 header(Name, Headers) ->
     arizona_wire_client:header(Name, Headers).
