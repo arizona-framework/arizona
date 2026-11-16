@@ -5865,7 +5865,9 @@ describe('crash and mount-failure recovery', () => {
                 expect(field('y').selectionStart).toBe(1);
                 expect(connected).toHaveBeenCalledTimes(2);
                 expect(warn).toHaveBeenCalledWith(
-                    expect.stringContaining('az-change of form #a was not replayed'),
+                    expect.stringContaining(
+                        'az-change of form #a did not replay as a command list',
+                    ),
                 );
             } finally {
                 document.removeEventListener('arizona:connected', connected);
@@ -5986,10 +5988,37 @@ describe('crash and mount-failure recovery', () => {
             }
             const replayWarns = warn.mock.calls
                 .map((c) => String(c[0]))
-                .filter((w) => w.includes('was not replayed'));
+                .filter((w) => w.includes('did not replay as a command list'));
             expect(replayWarns).toHaveLength(2);
             expect(replayWarns[0]).toContain('form #a');
             expect(replayWarns[1]).toContain('form #b');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('replays the push_events before the first item that is no command, as a change runs them', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const view = formView('[[0,"a"],null,[0,"b"]]');
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            const live = m.posted.length;
+            field('q').value = 'typed';
+            field('q').dispatchEvent(new Event('change', { bubbles: true }));
+            expect(sends(m.posted.slice(live)).map((s) => s[1])).toEqual(['a']);
+            m.simulateClose(4500);
+            const before = m.posted.length;
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            const after = m.posted.slice(before);
+            expect(sends(after).map((s) => s[1])).toEqual(['a']);
+            expect(after.at(-1)).toEqual([4]);
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('az-change of form #f did not replay as a command list'),
+            );
         } finally {
             warn.mockRestore();
         }

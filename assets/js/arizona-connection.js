@@ -1394,26 +1394,28 @@ function rehomeHeld(marks) {
 
 /**
  * Replay the `push_event`s of a restored form's `az-change`. A value that is no
- * command list (an app's data under a proven name) is skipped with a warning,
- * once per form, as the live `change` listener skips it: a throw here would leave
- * the forms after it unrestored and the resync frame unfinished (focus,
- * `arizona:connected`).
+ * command list (an app's data under a proven name) is replayed as far as the live
+ * `change` listener would run it: nothing when it does not parse, else the
+ * push_events before its first item that is no command. Either way it warns, once
+ * per form, rather than throw: a throw here would leave the forms after it
+ * unrestored and the resync frame unfinished (focus, `arizona:connected`).
  * @param {HTMLFormElement} form
  * @param {string} formId
  * @param {string} azChange
  */
 function replayForm(form, formId, azChange) {
-    let events;
+    /** @type {Array<Array<*>>} */
+    const events = [];
     try {
-        events = replayEvents(JSON.parse(azChange));
+        // Fills `events` in order, so what it collected before a bad item stays.
+        replayEvents(JSON.parse(azChange), events);
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         // Once per form: the value stays bad, and every reconnect would repeat it.
         warnOnce(
-            `[arizona] az-change of form #${formId} was not replayed: ${detail}`,
+            `[arizona] az-change of form #${formId} did not replay as a command list: ${detail}`,
             `az-change-replay:${formId}`,
         );
-        return;
     }
     if (events.length === 0) return;
     // Before running them: a throw part way may follow a sent event.
