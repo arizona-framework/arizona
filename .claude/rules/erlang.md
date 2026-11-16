@@ -366,6 +366,10 @@ it on the render path (measured too costly; see docs/performance.md). A list is 
 and is converted (and validated) by `to_bin/1`. The usual non-UTF-8 source is a bare
 `<<"café">>`: one byte per character, Latin-1. Write `~"café"` or `<<"café"/utf8>>`, or
 convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
+Path bindings and query params are the octets the client sent, not necessarily UTF-8:
+validate one (e.g. `unicode:characters_to_binary/1`) before rendering it, since a
+non-UTF-8 value fails a live frame and a dev-mode render and reaches the page as raw
+bytes in production.
 
 - A non-ASCII `<<"...">>` that is a **template static** (content or attribute value) is
   folded as UTF-8 by the parse transform and renders correctly.

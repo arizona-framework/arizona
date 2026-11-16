@@ -232,6 +232,11 @@ Each key targets a binding:
 - `params` / `headers` / `cookies` / `body` / `method` / `user_agent` --
   stored under the same-named key
 
+Path bindings and query params are the octets the client sent, not necessarily
+UTF-8: validate one (e.g. `unicode:characters_to_binary/1`) before rendering it,
+since a non-UTF-8 value fails a live frame and a dev-mode render and reaches the
+page as raw bytes in production.
+
 `body` is the one key that can fail: when the transport cannot deliver the body
 (only possible when the server reads it on demand, e.g. roadrunner's
 `body_buffering => manual`), the step halts with `413` (over the body cap),
