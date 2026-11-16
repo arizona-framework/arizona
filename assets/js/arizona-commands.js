@@ -544,13 +544,16 @@ const _inFlight = new WeakMap();
 const _flights = new Set();
 
 /**
- * A `fetch` form's reset waiting for its response: the form it resets now, and
- * what its controls showed as the request went out.
+ * A form reset waiting on what a submit sent: a `fetch` form's, for its response,
+ * or a throttled az-submit's, for its paced push_events to be judged
+ * (`closeSubmit`). The form it resets now, and what its controls showed as the
+ * request went out or the commands ran.
  * @typedef {{form: Element, sent: Map<Element, unknown>|undefined}} PendingReset
  */
 
 /**
- * Every pending reset until its request settles, for `heldNodes`.
+ * Every pending reset until it is decided -- its request settles, or its submit's
+ * last push_event is judged (`finishSubmit`) -- for `heldNodes`.
  * @type {Set<PendingReset>}
  */
 const _resets = new Set();
