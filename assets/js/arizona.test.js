@@ -3763,6 +3763,44 @@ describe('?local -- set/get content', () => {
         }
     });
 
+    for (const bad of [
+        '{"a":{"data-t":"title"},"ap":{"data-t":5}}',
+        '{"a":{"data-t":"title"},"ap":{"data-t":[null,null]}}',
+        '{"a":{"data-t":"title"},"ap":{"data-t":["x"]}}',
+        '{"a":{"data-t":"title"},"ap":{"data-t":["x",[1]]}}',
+        '{"a":{"data-t":"title"},"ap":5}',
+        '{"c":{"0":"title"},"a":"title"}',
+        '{"c":["title"]}',
+        '{"c":{"0":5}}',
+        '[null,null]',
+        '5',
+    ]) {
+        it(`skips an az-local of the wrong shape (${bad}), warning once, and serves the rest`, async () => {
+            vi.resetModules();
+            const fresh = await import('./arizona.js');
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                setupView(
+                    'v',
+                    `<span az="0" az-local='${bad}'><!--az:0-->x<!--/az--></span>` +
+                        `<span az="1" az-local='{"c":{"0":"title"}}'><!--az:1-->old<!--/az--></span>`,
+                );
+                fresh.set('v', 'title', 'one');
+                expect(document.querySelector('[az="1"]').textContent).toBe('one');
+                fresh.setAll('title', 'two');
+                expect(document.querySelector('[az="1"]').textContent).toBe('two');
+                expect(fresh.get('v', 'title')).toBe('two');
+                expect(fresh.get('title')).toBe('two');
+                expect(document.querySelector('[az="0"]').textContent).toBe('x');
+                expect(document.querySelector('[az="0"]').hasAttribute('data-t')).toBe(false);
+                const warns = warn.mock.calls.filter((c) => String(c[0]).includes('az-local'));
+                expect(warns).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+            }
+        });
+    }
+
     it('get returns the SSR initial before any set', () => {
         contentView('v', 'title', 'hello');
         expect(get('v', 'title')).toBe('hello');

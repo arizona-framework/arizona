@@ -193,8 +193,8 @@ const _localDescs = new WeakMap();
 
 /**
  * The `az-local` descriptor of `el`, parsed once per value; `null` when it has
- * none, or one that is not JSON -- skipped with a warning, so the locals after it
- * are still served.
+ * none, or one that is not JSON or not of the descriptor's shape -- skipped with
+ * a warning, so the locals after it are still served.
  * @param {Element} el
  * @returns {LocalDesc|null}
  */
@@ -205,15 +205,48 @@ function localDesc(el) {
     if (cached?.raw === raw) return cached.desc;
     /** @type {LocalDesc|null} */
     let desc = null;
+    let fault = null;
     try {
-        desc = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (isLocalDesc(parsed)) desc = parsed;
+        else fault = 'not a ?local descriptor';
     } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        // Once per page load, and not the value: it can be long, and app data.
-        warnOnce(`[arizona] an az-local that is not JSON was skipped: ${detail}`, 'az-local');
+        fault = err instanceof Error ? err.message : String(err);
     }
+    // Once per page load, and not the value: it can be long, and app data.
+    if (fault !== null) warnOnce(`[arizona] an az-local was skipped: ${fault}`, 'az-local');
     _localDescs.set(el, { raw, desc });
     return desc;
+}
+
+/** @param {*} v @returns {boolean} a JSON object, not an array or null */
+const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** @param {*} v @returns {boolean} an object of keys, as `c` and `a` hold */
+const isKeyMap = (v) => isObject(v) && Object.values(v).every((k) => typeof k === 'string');
+
+/** @param {*} v @returns {boolean} an affix: text, or a select value's static parts */
+const isAffix = (v) =>
+    typeof v === 'string' || (Array.isArray(v) && v.every((p) => typeof p === 'string'));
+
+/**
+ * Whether `v` has the shape the server writes (`LocalDesc`): a value of any other
+ * shape (a `set_attr` effect or `?raw` markup can write one) would throw partway
+ * through a scan, leaving the locals after it unserved.
+ * @param {*} v
+ * @returns {v is LocalDesc}
+ */
+function isLocalDesc(v) {
+    return (
+        isObject(v) &&
+        (v.c === undefined || isKeyMap(v.c)) &&
+        (v.a === undefined || isKeyMap(v.a)) &&
+        (v.ap === undefined ||
+            (isObject(v.ap) &&
+                Object.values(v.ap).every(
+                    (p) => Array.isArray(p) && p.length === 2 && isAffix(p[0]) && isAffix(p[1]),
+                )))
+    );
 }
 
 /**
