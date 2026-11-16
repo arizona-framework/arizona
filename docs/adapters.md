@@ -76,16 +76,17 @@ the listener keeps accepting and the reconnects land on it.
 ### Request access -- `arizona_req`
 
 `parse_bindings/1` (binary keys, percent-decoded values), `parse_params/1` (form decoding: `+` is a
-space, each escape the octet it encodes, a bare key `true`; a malformed escape such as `%G1` is not
-portable yet -- roadrunner keeps it as written, Cowboy answers `400` and a navigate to a route
-reading it closes the socket `4500`), `parse_cookies/1`,
+space, each escape the octet it encodes, a bare key `true`; a key or value holding a malformed
+escape such as `%G1` is kept as written, its `+` still a space, never a `400`; an adapter may cap
+the number of keys, as Cowboy's `max_query_keys` does (`400` past it, the navigate to such a URL a
+full page load that gets it), while roadrunner has no cap), `parse_cookies/1`,
 `parse_headers/1` (lowercase names; a repeated field combined in order, `Cookie` lines joined by a semicolon),
 `read_body/1` (`{ok, Body, Raw1}`, or `{error, too_large | trailers_too_large | timeout |
 invalid}`), and `scheme/1` (the connection's own, `https` only on TLS). `resolve_route/3` resolves a
 navigate target: its full contract is on the callback in `arizona_req`. In short, never crash or
 reply on an unknown path (it is client-supplied), match as a `GET` (an HTTP/2 WebSocket upgrade
-arrives as `CONNECT`), and match exactly as an HTTP request to that path would (save a malformed
-escape, which it keeps raw where standalone Cowboy's router answers HTTP `400`). The optional
+arrives as `CONNECT`), and match exactly as an HTTP request to that path would, a malformed
+escape included. The optional
 `peer/1` is the connection's `{IP, Port}`: without it, `arizona_req:peer/1` is `undefined` and an
 `mcp` route's localhost gate refuses every request.
 
@@ -117,8 +118,10 @@ Compile from `arizona_route` rather than restating its rules:
 The router must behave as follows. Most servers' routers do not (no method dimension, no `Allow`
 union), and for those core has the whole matcher: `arizona_route_table:compile(Routes, BuildOpts,
 Adapter)` builds the table (refusing unsupported kinds and shadowed routes) and `match/3` and
-`allow/2` answer requests, so the adapter mounts one catch-all route and calls it, as Cowboy's
-does. A server whose router already expresses the rules (roadrunner) may compile to it natively:
+`allow/2` answer requests, so the adapter calls them ahead of its server's router, as Cowboy's
+does from a middleware heading the listener's chain, and hands that router only the paths no
+Arizona route matches. A server whose router already expresses the rules (roadrunner) may compile
+to it natively:
 
 - Routes are tried in declaration order; the first match wins. A route the earlier ones fully
   shadow is a configuration error, refused at start.
@@ -127,9 +130,8 @@ does. A server whose router already expresses the rules (roadrunner) may compile
   encodes, UTF-8 or not, so such a capture never fails the match: `/p/%FF` matches `/p/:id` with
   `<<255>>`, and `/w/a%2Fb` matches `/w/*rest` with `[<<"a/b">>]`. Unlike a query param, a `+`
   stays a `+`. A segment holding a malformed escape (`%G1`, a trailing `%4`) is kept whole, as
-  written, none of its escapes decoded (`a%41%G1` stays `a%41%G1`). The standalone Cowboy
-  listener's own router answers such a path `400` over HTTP before Arizona matches it; a navigate,
-  a WebSocket upgrade's `_az_path` and a mounted Cowboy listener still match it raw. Literals
+  written, none of its escapes decoded (`a%41%G1` stays `a%41%G1`), over HTTP, on a navigate and
+  in a WebSocket upgrade's `_az_path` alike: it is a path to match, not a bad request. Literals
   match the raw bytes, case-sensitively. Empty segments and a trailing slash are ignored.
 - Several routes may share a path with different methods. A path that matches but whose method
   no matching route allows gets `405` with an `Allow` header listing the methods of **every**

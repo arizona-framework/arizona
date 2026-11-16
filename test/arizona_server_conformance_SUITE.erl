@@ -1111,11 +1111,12 @@ ws_navigate_to_non_utf8_param_route_replaces(Config) ->
 
 %% A malformed escape anywhere in a segment keeps the whole segment as written:
 %% no escape before it is decoded and none after it, and a truncated one is not
-%% decoded partially. Over a navigate, since the standalone Cowboy listener's
-%% own router answers such an HTTP path `400` before Arizona sees it.
+%% decoded partially. A navigate matches it exactly as an HTTP request does.
 ws_navigate_keeps_a_malformed_escape_raw(Config) ->
     [
         begin
+            {200, _, Body} = req(Config, ~"GET", <<"/items/", Raw/binary>>, []),
+            ?assertEqual(Raw, rendered(~"Item", Body)),
             Sock = live_socket(Config, ~"/"),
             ok = navigate(Sock, ~"navigate", <<"/items/", Raw/binary>>),
             {text, Resp} = arizona_wire_client:ws_recv(Sock),

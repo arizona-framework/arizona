@@ -231,8 +231,7 @@ Each key targets a binding:
   `/users/:id` is read as `?get(<<"id">>)`)
 - `params` / `headers` / `cookies` / `body` / `method` / `user_agent` --
   stored under the same-named key (`params` as `arizona_req:params/1` decodes
-  it: a malformed escape such as `%G1` is kept on roadrunner, `400` on Cowboy,
-  where a navigate to a route reading it closes the socket `4500`)
+  it: a malformed escape such as `%G1` is kept as written)
 
 Path bindings and query params are the octets their percent-escapes encode, not
 necessarily UTF-8, so validate a value before rendering it: a non-UTF-8 one

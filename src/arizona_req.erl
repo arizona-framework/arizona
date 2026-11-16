@@ -293,9 +293,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %%   page, and an HTTP/2 WebSocket upgrade arrives as `CONNECT`.
 %% - Match exactly as an HTTP request to `Path` would: same routes (those of the
 %%   listener that accepted the raw request), same order, same percent-decoded
-%%   bindings. The exception is a path with a malformed escape (`%G1`), which a
-%%   server's own router may refuse over HTTP (standalone Cowboy answers `400`)
-%%   while this still matches it, the segment kept raw.
+%%   bindings, a segment holding a malformed escape (`%G1`) kept as written.
 %% - `RouteOpts` is what that route renders with: `bindings`, `on_mount`,
 %%   `layouts` (the socket compares them to decide whether a navigate can swap
 %%   the page in place), and `middlewares` with the `check_origin` step the
@@ -447,11 +445,11 @@ Returns parsed query-string params as a proplist. Lazy-loaded and cached.
 Preserves repeat keys (`?tag=a&tag=b` returns two entries).
 
 A value is decoded as form encoding is: `+` is a space and each escape the octet
-it encodes, UTF-8 or not, and a bare key (`?debug`) is `true`. A malformed
-escape (`%G1`, a trailing `%4`) depends on the server: roadrunner keeps the text
-as written, while Cowboy fails the request with `400` once the query is parsed
-(always on a WebSocket upgrade, which reads it), and a navigate to a route that
-reads it closes the socket `4500`.
+it encodes, UTF-8 or not, and a bare key (`?debug`) is `true`. A key or value
+holding a malformed escape (`%G1`, a trailing `%4`) is kept as written, its `+`
+still a space, on every adapter. An adapter may cap the number of keys a query
+holds and answer `400` past it before this runs (Cowboy's `max_query_keys`);
+roadrunner has no cap.
 """.
 -spec params(request()) -> {params(), request()}.
 params(#{params := Params} = Req) ->
