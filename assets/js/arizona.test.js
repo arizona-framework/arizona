@@ -5944,6 +5944,27 @@ describe('crash and mount-failure recovery', () => {
         });
     });
 
+    it('a replay that throws logs the error itself', async () => {
+        const view = formView('[0,"a"]');
+        await throwingReplayOn(1, async (arm, error) => {
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            m.simulateClose(4500);
+            arm(true);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            arm(false);
+            expect(error).toHaveBeenCalledWith(
+                expect.stringContaining('az-change replay of form #%s failed'),
+                'f',
+                expect.objectContaining({ message: 'replay boom', stack: expect.any(String) }),
+            );
+        });
+    });
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';

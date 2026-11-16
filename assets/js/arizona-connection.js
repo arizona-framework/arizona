@@ -1401,16 +1401,21 @@ function rehomeHeld(marks) {
  * @param {string} azChange
  */
 function replayForm(form, formId, azChange) {
+    let events;
     try {
-        const events = replayEvents(JSON.parse(azChange));
-        if (events.length > 0) {
-            // Before running them: a throw part way may follow a sent event.
-            _replayedForms.add(formId);
-            executeJS(form, null, events);
-        }
+        events = replayEvents(JSON.parse(azChange));
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         console.warn(`[arizona] az-change of form #${formId} was not replayed: ${detail}`);
+        return;
+    }
+    if (events.length === 0) return;
+    // Before running them: a throw part way may follow a sent event.
+    _replayedForms.add(formId);
+    try {
+        executeJS(form, null, events);
+    } catch (err) {
+        console.error('[arizona] az-change replay of form #%s failed', formId, err);
     }
 }
 
