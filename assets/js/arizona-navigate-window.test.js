@@ -435,6 +435,20 @@ describe('isFragmentOfPage', () => {
         expect(mock.sent().some((m) => m[0] === 'navigate')).toBe(frame);
     });
 
+    // The page loaded at connect is the one popstate compares with, its empty
+    // query included: on `/start?`, landing on `/start?#x` only scrolls, and
+    // landing on `/start#x` is another page.
+    it.each([
+        ['/start?#x', 0],
+        ['/start#x', 1],
+    ])('a popstate onto %s on a page loaded at /start? sends %s frames', async (url, n) => {
+        history.replaceState(null, '', '/start?');
+        await connected();
+        history.replaceState(null, '', url);
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        expect(mock.sent().filter((m) => m[0] === 'navigate')).toHaveLength(n);
+    });
+
     // Back and Forward across that edge cross between two pages, so each asks the
     // server again; across a fragment of the page they only scroll.
     it.each([
