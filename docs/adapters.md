@@ -84,7 +84,8 @@ the socket `4500`), `parse_cookies/1`,
 invalid}`), and `scheme/1` (the connection's own, `https` only on TLS). `resolve_route/3` resolves a
 navigate target: its full contract is on the callback in `arizona_req`. In short, never crash or
 reply on an unknown path (it is client-supplied), match as a `GET` (an HTTP/2 WebSocket upgrade
-arrives as `CONNECT`), and match exactly as an HTTP request to that path would. The optional
+arrives as `CONNECT`), and match exactly as an HTTP request to that path would (save a malformed
+escape, which it keeps raw where standalone Cowboy's router answers HTTP `400`). The optional
 `peer/1` is the connection's `{IP, Port}`: without it, `arizona_req:peer/1` is `undefined` and an
 `mcp` route's localhost gate refuses every request.
 
