@@ -209,10 +209,8 @@ function localDesc(el) {
         desc = JSON.parse(raw);
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        warnOnce(
-            `[arizona] az-local ${raw} is no ?local descriptor; skipped: ${detail}`,
-            'az-local',
-        );
+        // Once per page load, and not the value: it can be long, and app data.
+        warnOnce(`[arizona] an az-local that is not JSON was skipped: ${detail}`, 'az-local');
     }
     _localDescs.set(el, { raw, desc });
     return desc;

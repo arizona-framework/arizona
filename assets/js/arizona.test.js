@@ -3732,13 +3732,32 @@ describe('?local -- set/get content', () => {
             expect(document.querySelector('[az="0"]').textContent).toBe('two');
             expect(get('v', 'title')).toBe('two');
             expect(get('title')).toBe('two');
-            const warns = warn.mock.calls.filter((c) => String(c[0]).includes('az-local'));
-            expect(warns).toHaveLength(1);
-            expect(String(warns[0][0])).toContain('{bad');
             // Rewritten (a set_attr effect, raw markup), it is read again.
             document.getElementById('bad').setAttribute('az-local', '{"a":{"data-t":"title"}}');
             set('v', 'title', 'three');
             expect(document.getElementById('bad').getAttribute('data-t')).toBe('three');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('warns once per page load about az-locals that are no descriptor, quoting only the error', async () => {
+        vi.resetModules();
+        const fresh = await import('./arizona.js');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const secret = 'x'.repeat(5000);
+            setupView(
+                'v',
+                `<i az-local="{bad1 ${secret}"></i><i az-local="{bad2"></i>` +
+                    `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>`,
+            );
+            fresh.set('v', 'title', 'one');
+            fresh.setAll('title', 'two');
+            expect(fresh.get('title')).toBe('two');
+            const warns = warn.mock.calls.filter((c) => String(c[0]).includes('az-local'));
+            expect(warns).toHaveLength(1);
+            expect(String(warns[0][0]).length).toBeLessThan(200);
         } finally {
             warn.mockRestore();
         }
