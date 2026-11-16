@@ -404,8 +404,10 @@ Triggers a SPA navigation to `Path` with options.
   (a controller/asset path, a 404); the framework itself emits this to degrade a
   navigate/patch whose path does not resolve to a live view. An `http`/`https`
   `Path` on another origin is always loaded this way, since `pushState` refuses it.
-  Any other scheme (`javascript:`, `data:`) is never loaded: the client drops the
-  effect with a warning, since loading it would run it in the page.
+  In a `fetch/2` response a relative `Path` resolves against the URL the response
+  came from (after redirects), as an HTTP 3xx `Location` does; anywhere else, against
+  the document base. Any other scheme (`javascript:`, `data:`) is never loaded: the
+  client drops the effect with a warning, since loading it would run it in the page.
 """.
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
@@ -464,7 +466,9 @@ normal `handle_event/3` (no subscription; it targets that view and does not echo
 the form fields). Use `arizona_pubsub` from the controller instead to reach
 *other* views (broadcast). To send the user elsewhere, return `arizona_js:navigate/1`
 (e.g. via `reply_redirect/1`), not an HTTP 3xx -- a fetch-followed redirect can't
-drive a SPA navigation.
+drive a SPA navigation. A relative URL in a `full => true` navigate in the response
+resolves against the URL the response came from (after redirects), as an HTTP 3xx
+`Location` does; every other URL in it resolves against the document base.
 
 **Identity changes need a reload.** The WebSocket is not re-handshaked when the
 cookie changes, so a fetch that changes *who* the user is (login/logout) must

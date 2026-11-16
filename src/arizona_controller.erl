@@ -230,9 +230,13 @@ identity provider, an absolute URL -- cannot be SPA-navigated, so it is sent wit
 full too, resolved against the URL the fetch response came from (after redirects),
 exactly as an HTTP `Location` is resolved against its request: the endpoint's directory,
 not the page that posted or its `<base href>`. Only a full navigate resolves there (see
-`reply_effects/1`). A scheme other than `http`/`https` (`javascript:`,
-`data:`) raises `{unsafe_redirect, Location}`: the client would run it in the page, so a
-`Location` taken from the request (a `next` parameter) would be script injection.
+`reply_effects/1`). A path on this origin (`~"/login"`) goes out as a SPA navigate, which
+resolves against the document base like any client navigate: that path on the page's
+origin (or on a `<base href>`'s, when it names another), never on the endpoint's -- they
+differ only for a cross-origin (CORS) endpoint. A scheme other than `http`/`https`
+(`javascript:`, `data:`) raises `{unsafe_redirect, Location}`: the client would run it in
+the page, so a `Location` taken from the request (a `next` parameter) would be script
+injection.
 
 This is a SPA navigation over the existing WebSocket, so it suits same-identity
 redirects. After an **identity change** (login/logout) use `arizona_js:reload/0`
