@@ -31,6 +31,7 @@ internal state.
 -export([live_head_has_the_get_status_and_no_body/1]).
 -export([live_path_answers_other_methods_with_405/1]).
 -export([unknown_path_is_404/1]).
+-export([unknown_path_with_a_malformed_escape_is_404/1]).
 -export([same_path_verbs_reach_their_own_controllers/1]).
 -export([allow_is_the_union_across_overlapping_patterns/1]).
 -export([get_controller_answers_head/1]).
@@ -175,6 +176,7 @@ groups() ->
                 live_head_has_the_get_status_and_no_body,
                 live_path_answers_other_methods_with_405,
                 unknown_path_is_404,
+                unknown_path_with_a_malformed_escape_is_404,
                 same_path_verbs_reach_their_own_controllers,
                 allow_is_the_union_across_overlapping_patterns,
                 get_controller_answers_head,
@@ -570,6 +572,14 @@ live_path_answers_other_methods_with_405(Config) ->
 
 unknown_path_is_404(Config) ->
     ?assertMatch({404, _, _}, req(Config, ~"GET", ~"/no/such/route", [])).
+
+%% A malformed escape is part of a path like any other byte: one no route
+%% matches is a miss, not a bad request.
+unknown_path_with_a_malformed_escape_is_404(Config) ->
+    [
+        ?assertMatch({404, _, _}, req(Config, ~"GET", Path, []))
+     || Path <- [~"/nowhere/%G1", ~"/nowhere/a%4", ~"/no%ZZ/such/route"]
+    ].
 
 same_path_verbs_reach_their_own_controllers(Config) ->
     ?assertMatch({200, _, ~"users#create"}, req(Config, ~"POST", ~"/verbs", [])),
