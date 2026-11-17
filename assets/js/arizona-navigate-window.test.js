@@ -212,8 +212,10 @@ describe('navigate page-swap window', () => {
         const assign = vi.fn();
         vi.stubGlobal('location', { assign, href: 'http://localhost/' });
         mock.answer(null, [[JS_NAVIGATE, '/next', { full: true }]]);
+        // The load starts in a microtask (`loadPage`).
+        await Promise.resolve();
         vi.unstubAllGlobals();
-        expect(assign).toHaveBeenCalledWith('/next');
+        expect(assign).toHaveBeenCalledWith(new URL('/next', document.baseURI).href);
         click();
         expect(events()).toEqual([['page', 'bump', {}]]);
     });
@@ -330,8 +332,10 @@ describe('navigate page-swap window', () => {
         const assign = vi.fn();
         vi.stubGlobal('location', { assign, href: 'http://localhost/' });
         mock.answer(null, [[JS_NAVIGATE, '/a', { full: true }]]);
+        // The load starts in a microtask (`loadPage`).
+        await Promise.resolve();
         vi.unstubAllGlobals();
-        expect(assign).toHaveBeenCalledWith('/a');
+        expect(assign).toHaveBeenCalledWith(new URL('/a', document.baseURI).href);
         click();
         expect(events()).toEqual([]);
     });

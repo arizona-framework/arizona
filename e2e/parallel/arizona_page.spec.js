@@ -1832,3 +1832,311 @@ test('about page timer restarts after reconnect', async ({ page }) => {
         { timeout: 8000 },
     );
 });
+
+// An az-form-reset submit resets once what it sent went out, at once, whatever its
+// navigation does next: Back does not bring the sent text back (a slow load the
+// socket's resync happens during included), and a prompt that cancels the load does
+// not undo the send.
+test.describe('az-form-reset with a navigation that leaves the page', () => {
+    const fullNavigateSubmit = (page) =>
+        page.evaluate(() => {
+            const form = document.getElementById('add-todo');
+            const cmds = JSON.parse(form.getAttribute('az-submit'));
+            const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+            form.setAttribute(
+                'az-submit',
+                JSON.stringify([...list, [10, '/scroll-home', { full: true }]]),
+            );
+        });
+    const field = (page) => page.locator('#add-todo input:not([type=submit])').first();
+
+    test('Back after the load shows the field empty', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await fullNavigateSubmit(page);
+        await field(page).fill('secret text');
+        const loaded = page.waitForURL((u) => u.pathname === '/scroll-home');
+        await field(page).press('Enter');
+        await loaded;
+        await wsReady(page);
+        await page.goBack();
+        await page.waitForURL((u) => u.pathname === '/');
+        await page.waitForTimeout(500);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    // An SPA navigate swaps only the view: a form outside it (a layout's) stays on
+    // screen, so its reset happens at once, not at an unload that never comes.
+    test('a form outside the view an SPA navigate replaces is reset at once', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(() => {
+            const f = document.createElement('form');
+            f.id = 'layout-form';
+            f.setAttribute('az-form-reset', '');
+            f.setAttribute('az-submit', JSON.stringify([10, '/about']));
+            f.innerHTML = '<input name="q" id="lfq">';
+            document.body.prepend(f);
+        });
+        await page.locator('#lfq').fill('search');
+        await page.locator('#lfq').press('Enter');
+        await expect(page.locator('main h1')).toHaveText('About');
+        await expect(page.locator('#lfq')).toHaveValue('');
+    });
+
+    // Firefox closes the socket as the load starts; the worker redials and the
+    // resync replaces the form while the slow page loads. A reset deferred to the
+    // unload would clear the replaced form, and Back would show the sent text.
+    test('Back after a slow load shows the field empty', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await fullNavigateSubmit(page);
+        await page.route('**/scroll-home', async (route) => {
+            if (route.request().resourceType() === 'document') {
+                await new Promise((r) => setTimeout(r, 3000));
+            }
+            await route.continue();
+        });
+        await field(page).fill('secret text');
+        const loaded = page.waitForURL((u) => u.pathname === '/scroll-home', { timeout: 20000 });
+        await field(page).press('Enter');
+        await loaded;
+        await wsReady(page);
+        await page.goBack();
+        await page.waitForURL((u) => u.pathname === '/');
+        await page.waitForTimeout(500);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    test('a load the prompt cancelled still clears what was sent', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await fullNavigateSubmit(page);
+        await page.evaluate(() =>
+            window.addEventListener('beforeunload', (e) => {
+                e.preventDefault();
+                e.returnValue = '';
+            }),
+        );
+        await page.mouse.click(5, 5);
+        let prompts = 0;
+        page.on('dialog', async (d) => {
+            prompts++;
+            await d.dismiss();
+        });
+        await field(page).fill('draft');
+        await field(page).press('Enter');
+        await expect.poll(() => prompts).toBe(1);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    // With the socket closed for good, a submit whose lone navigation loads the
+    // page resets as it does on a live socket, before the page goes.
+    test('Back after a disconnected submit loaded the page shows the field empty', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(() =>
+            document
+                .getElementById('add-todo')
+                .setAttribute('az-submit', JSON.stringify([10, '/scroll-home'])),
+        );
+        await field(page).fill('secret text');
+        await page.evaluate(() => window._ws.close(1000));
+        await page.waitForFunction(() =>
+            document.documentElement.classList.contains('az-disconnected'),
+        );
+        const loaded = page.waitForURL((u) => u.pathname === '/scroll-home');
+        await field(page).press('Enter');
+        await loaded;
+        await page.goBack();
+        await page.waitForURL((u) => u.pathname === '/');
+        await page.waitForTimeout(500);
+        await expect(field(page)).toHaveValue('');
+    });
+
+    // An app's unsaved-changes guard runs as the load starts: the form is reset
+    // before then, so the guard sees no unsent text, with the socket up or down.
+    for (const socket of ['live', 'down']) {
+        test(`a beforeunload guard sees the form already reset (${socket})`, async ({ page }) => {
+            await page.goto('/');
+            await wsReady(page);
+            if (socket === 'live') {
+                await fullNavigateSubmit(page);
+            } else {
+                await page.evaluate(() =>
+                    document
+                        .getElementById('add-todo')
+                        .setAttribute('az-submit', JSON.stringify([10, '/scroll-home'])),
+                );
+            }
+            await page.evaluate(() => {
+                window.__seen = [];
+                window.addEventListener('beforeunload', (e) => {
+                    const f = document.querySelector('#add-todo input:not([type=submit])');
+                    window.__seen.push(f.value);
+                    e.preventDefault();
+                    e.returnValue = '';
+                });
+            });
+            await page.mouse.click(5, 5);
+            page.on('dialog', (d) => d.dismiss());
+            await field(page).fill('draft');
+            if (socket === 'down') {
+                await page.evaluate(() => window._ws.close(1000));
+                await page.waitForFunction(() =>
+                    document.documentElement.classList.contains('az-disconnected'),
+                );
+            }
+            await field(page).press('Enter');
+            await expect.poll(() => page.evaluate(() => window.__seen.length)).toBe(1);
+            expect(await page.evaluate(() => window.__seen)).toEqual(['']);
+        });
+    }
+
+    // A load starts once the submit's commands have run, and goes where its
+    // command asked: an SPA navigation later in the same submit runs first, and a
+    // relative load still resolves against the page it was asked on.
+    test('a relative full navigate before an SPA navigate loads /about', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(
+            (c) => {
+                window.__mark = 1;
+                document.getElementById('add-todo').setAttribute('az-submit', JSON.stringify(c));
+            },
+            [
+                [10, 'about', { full: true }],
+                [10, '/transitions/detail'],
+            ],
+        );
+        await field(page).fill('x');
+        await field(page).press('Enter');
+        await page.waitForFunction(() => window.__mark === undefined, null, { timeout: 8000 });
+        await page.waitForLoadState('load');
+        expect(new URL(page.url()).pathname).toBe('/about');
+    });
+
+    // A reload starts once the submit's commands have run, and reloads the page
+    // the address shows then: the SPA navigation after it pushed `/about`, so
+    // `/about` is reloaded. The entries keep their state, so Back and Forward
+    // stay consistent with what they show.
+    test('a reload before an SPA navigate reloads the page that navigation reached', async ({
+        page,
+    }) => {
+        await page.goto('/about');
+        await wsReady(page);
+        // An SPA navigation onto `/`, so the entries carry an index.
+        await page.evaluate(() => {
+            const a = document.createElement('a');
+            a.setAttribute('href', '/');
+            a.setAttribute('az-navigate', '');
+            document.body.appendChild(a);
+            a.click();
+        });
+        await expect(page.locator('main h1')).toHaveText('Welcome');
+        await page.evaluate(() => {
+            window.__mark = 1;
+            document
+                .getElementById('add-todo')
+                .setAttribute('az-submit', JSON.stringify([[15], [10, '/about']]));
+        });
+        await field(page).fill('x');
+        await field(page).press('Enter');
+        await page.waitForFunction(() => window.__mark === undefined, null, { timeout: 8000 });
+        await page.waitForLoadState('load');
+        await wsReady(page);
+        expect(new URL(page.url()).pathname).toBe('/about');
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(typeof (await page.evaluate(() => history.state?._azIdx))).toBe('number');
+        await page.goBack();
+        await expect(page.locator('main h1')).toHaveText('Welcome');
+        expect(new URL(page.url()).pathname).toBe('/');
+        await page.goForward();
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(new URL(page.url()).pathname).toBe('/about');
+    });
+
+    // A reload after a fragment jump in the same submit is still a reload, of the
+    // page the address shows when it starts.
+    test('a reload on /#a before a jump to #b reloads /#b', async ({ page }) => {
+        await page.goto('/#a');
+        await wsReady(page);
+        await page.evaluate(() => {
+            window.__mark = 1;
+            document
+                .getElementById('add-todo')
+                .setAttribute('az-submit', JSON.stringify([[15], [10, '#b']]));
+        });
+        await field(page).fill('x');
+        await field(page).press('Enter');
+        await page.waitForFunction(() => window.__mark === undefined, null, { timeout: 8000 });
+        await page.waitForLoadState('load');
+        const u = new URL(page.url());
+        expect(u.pathname + u.hash).toBe('/#b');
+    });
+
+    // A reload whose prompt the user cancels leaves the page the SPA navigation
+    // after it reached: the address and the screen agree.
+    test('a reload the prompt cancelled before an SPA navigate leaves address and screen agreeing', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(() => {
+            window.__mark = 1;
+            document
+                .getElementById('add-todo')
+                .setAttribute('az-submit', JSON.stringify([[15], [10, '/about']]));
+            window.addEventListener('beforeunload', (e) => {
+                e.preventDefault();
+                e.returnValue = '';
+            });
+        });
+        await page.mouse.click(5, 5);
+        let prompts = 0;
+        page.on('dialog', async (d) => {
+            prompts++;
+            await d.dismiss();
+        });
+        await field(page).fill('x');
+        await field(page).press('Enter');
+        await expect.poll(() => prompts).toBe(1);
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(new URL(page.url()).pathname).toBe('/about');
+        expect(await page.evaluate(() => window.__mark)).toBe(1);
+    });
+
+    // A full navigate to a download never leaves the page, so a patch after it in
+    // the same submit still runs.
+    test('a patch after a full navigate to a download runs', async ({ page }) => {
+        await page.route('**/export.csv', (route) =>
+            route.fulfill({
+                status: 200,
+                contentType: 'text/csv',
+                headers: { 'content-disposition': 'attachment; filename="export.csv"' },
+                body: 'a,b\n1,2\n',
+            }),
+        );
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(() => {
+            window.__mark = 1;
+            document.getElementById('add-todo').setAttribute(
+                'az-submit',
+                JSON.stringify([
+                    [10, '/export.csv', { full: true }],
+                    [24, '/?exported=1'],
+                ]),
+            );
+        });
+        const download = page.waitForEvent('download');
+        await field(page).fill('x');
+        await field(page).press('Enter');
+        await download;
+        await page.waitForURL((u) => u.search === '?exported=1');
+        expect(await page.evaluate(() => window.__mark)).toBe(1);
+        await expect(page.locator('main h1')).toHaveText('Welcome');
+    });
+});

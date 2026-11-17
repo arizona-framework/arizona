@@ -380,7 +380,11 @@ toggle_attr(Sel, Attr, A, B) ->
     Payload :: map().
 dispatch_event(Name, Payload) -> {arizona_effect, [?EFFECT_DISPATCH_EVENT, Name, Payload]}.
 
--doc "Triggers a SPA navigation to `Path`.".
+-doc """
+Triggers a SPA navigation to `Path`. An `http`/`https` `Path` on another origin
+is loaded as a page instead (see `navigate/2`), and that load starts once the
+running commands have finished.
+""".
 -spec navigate(Path) -> arizona_effect:cmd() when
     Path :: binary().
 navigate(Path) -> arizona_effect:navigate(Path).
@@ -408,6 +412,8 @@ Triggers a SPA navigation to `Path` with options.
   came from (after redirects), as an HTTP 3xx `Location` does; anywhere else, against
   the document base. Any other scheme (`javascript:`, `data:`) is never loaded: the
   client drops the effect with a warning, since loading it would run it in the page.
+  The load starts once the running commands have finished, so the commands after it
+  in the same list run first.
 """.
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
@@ -430,8 +436,9 @@ same `flash` opt as `navigate/2` (carried in-process to the patched route's `fla
 binding, stripped from the client effect) and its `replace` opt.
 
 An `http`/`https` `Path` on another origin cannot be patched in place: the client
-loads it as a page (`location.assign`, or `location.replace` with `replace`). Any
-other scheme is dropped with a warning, as for `navigate/2`.
+loads it as a page (`location.assign`, or `location.replace` with `replace`), and
+that load starts once the running commands have finished. Any other scheme is
+dropped with a warning, as for `navigate/2`.
 """.
 -spec patch(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
@@ -643,7 +650,10 @@ scroll_to(Sel, Opts) -> {arizona_effect, [?EFFECT_SCROLL_TO, Sel, Opts]}.
     Title :: binary().
 set_title(Title) -> {arizona_effect, [?EFFECT_SET_TITLE, Title]}.
 
--doc "Reloads the current page.".
+-doc """
+Reloads the current page. The reload starts once the running commands have
+finished, and reloads the page the address bar shows then.
+""".
 -spec reload() -> arizona_effect:cmd().
 reload() -> {arizona_effect, [?EFFECT_RELOAD]}.
 
