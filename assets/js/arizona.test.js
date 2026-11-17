@@ -3777,17 +3777,23 @@ describe('?local -- set/get content', () => {
         '{"a":{"bad name":"title"}}',
         '{"a":{"":"title"}}',
         '{"a":{"data-t":"title"},"ap":{"a=b":["x","y"]}}',
+        // An `ap` name holding each other character the server never writes in one.
+        ...['/', '>', '\t', '\n', '\u0000', '\u007f', '"', "'", '<'].map((ch) =>
+            JSON.stringify({ a: { 'data-t': 'title' }, ap: { [`a${ch}b`]: ['x', 'y'] } }),
+        ),
     ]) {
-        it(`skips an az-local of the wrong shape (${bad}), warning once, and serves the rest`, async () => {
+        it(`skips an az-local of the wrong shape (${JSON.stringify(bad)}), warning once, and serves the rest`, async () => {
             vi.resetModules();
             const fresh = await import('./arizona.js');
             const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
             try {
                 setupView(
                     'v',
-                    `<span az="0" az-local='${bad}'><!--az:0-->x<!--/az--></span>` +
+                    '<span az="0"><!--az:0-->x<!--/az--></span>' +
                         `<span az="1" az-local='{"c":{"0":"title"}}'><!--az:1-->old<!--/az--></span>`,
                 );
+                // Written as a set_attr effect would, so any character reaches it.
+                document.querySelector('[az="0"]').setAttribute('az-local', bad);
                 fresh.set('v', 'title', 'one');
                 expect(document.querySelector('[az="1"]').textContent).toBe('one');
                 fresh.setAll('title', 'two');
