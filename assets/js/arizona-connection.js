@@ -4,6 +4,9 @@ import {
     executeJS,
     formFields,
     heldNodes,
+    JS_NAVIGATE,
+    JS_PATCH,
+    JS_TRANSITION,
     osHost,
     rehome,
     replayEvents,
@@ -19,7 +22,7 @@ import {
 } from './arizona-events.js';
 import { destroyAllHooks, mountHooks, notifyUpdated } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
-import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
+import { applyOps, OP, opsMatchTransition, resolveEl } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition, withTransitionAttr } from './arizona-transitions.js';
 import {
@@ -30,6 +33,7 @@ import {
     isWebUrl,
     loadPage,
     pageUrl,
+    reloadPage,
     warnOnce,
 } from './arizona-util.js';
 
@@ -39,8 +43,6 @@ const W_CONNECT = 0;
 const W_SEND = 1;
 
 const W_CLOSE = 2;
-
-const W_UPDATE_PATH = 3;
 
 const W_ACK_REPLAY = 4;
 
@@ -149,8 +151,105 @@ function cancelMountReload() {
     _mountReloadTimer = null;
 }
 
-/** A view mounted: a mount-failure loop in this tab, if any, is over. */
-function mountSucceeded() {
+/**
+ * The page loads that answer navigations issued with no user input since the page
+ * mounted (`_userActed`) are bounded per tab: two pages whose navigations fail over
+ * the socket but load over HTTP, each navigating to the other on connect, would load
+ * each other forever. Each such load is recorded before it starts, in sessionStorage
+ * (it survives the loads it bounds, and is gone with the tab), as `{t, slow}`: its
+ * start time and whether it waited. Once NAV_LOAD_MAX of them fall within
+ * NAV_LOAD_WINDOW, every further one waits NAV_LOAD_FAILSAFE first, and says why
+ * once per page load; that slow state sticks until NAV_LOAD_QUIET passes with no
+ * such load, so a loop slower than the window cannot drift out of it. A load
+ * answering another such navigation while one waits takes its place and keeps its
+ * deadline. Nothing clears the record: its entries expire. A load answering a
+ * navigation issued after user input (a layout-crossing click, a wizard step whose
+ * handler redirects) is never counted or delayed.
+ */
+const NAV_LOAD_KEY = 'arizona:nav-loads';
+
+const NAV_LOAD_WINDOW = 300000;
+
+const NAV_LOAD_MAX = 10;
+
+const NAV_LOAD_FAILSAFE = 30000;
+
+const NAV_LOAD_QUIET = 30000;
+
+/** Whether this page load already logged entering the failsafe delay. */
+let _navLoadLogged = false;
+
+/** @type {ReturnType<typeof setTimeout> | null} */
+let _navLoadTimer = null;
+
+/** The effects being applied answer a navigation issued with no user input. */
+let _answeringNav = false;
+
+/** The effects being applied answer a navigation of this page (its reply). */
+let _answeringOwn = false;
+
+/**
+ * Record a load that answers a navigation issued with no input, and return how long
+ * it must wait: 0 within the bound, NAV_LOAD_FAILSAFE past it.
+ * @returns {number}
+ */
+function navLoadDelay() {
+    const now = Date.now();
+    /** @type {Array<{t: number, slow: boolean}>} */
+    let recent = [];
+    try {
+        const stored = JSON.parse(sessionStorage.getItem(NAV_LOAD_KEY) ?? '[]');
+        if (Array.isArray(stored)) {
+            recent = stored.filter((e) => Number.isFinite(e?.t) && now - e.t < NAV_LOAD_WINDOW);
+        }
+    } catch {
+        /* sessionStorage unavailable or the value corrupt -- an empty record */
+    }
+    const last = recent.reduce(
+        (/** @type {{t: number, slow: boolean}|null} */ a, e) => (a === null || e.t > a.t ? e : a),
+        null,
+    );
+    const slow =
+        recent.length >= NAV_LOAD_MAX ||
+        (last !== null && last.slow === true && now - last.t < NAV_LOAD_QUIET);
+    const delay = slow ? NAV_LOAD_FAILSAFE : 0;
+    try {
+        // Stamped with when the load starts, so a delayed one counts from then.
+        sessionStorage.setItem(NAV_LOAD_KEY, JSON.stringify([...recent, { t: now + delay, slow }]));
+    } catch {
+        /* sessionStorage unavailable -- unbounded, as without a record */
+    }
+    if (slow && !_navLoadLogged) {
+        _navLoadLogged = true;
+        console.error(
+            `[arizona] the server answered ${recent.length} of its own navigations with a ` +
+                `page load within ${NAV_LOAD_WINDOW / 60000} min; loading every ` +
+                `${NAV_LOAD_FAILSAFE / 1000} s until the loads stop.`,
+        );
+    }
+    return delay;
+}
+
+/**
+ * The load waiting out the failsafe, run when its timer fires: the latest one the
+ * server answered its navigations with while it waited.
+ * @type {(() => void) | null}
+ */
+let _navLoadNext = null;
+
+function cancelNavLoad() {
+    if (_navLoadTimer !== null) clearTimeout(_navLoadTimer);
+    _navLoadTimer = null;
+    _navLoadNext = null;
+}
+
+/**
+ * A view mounted: a mount-failure loop in this tab, if any, is over.
+ * @param {boolean} [acted] the input the page's view starts with: the issuing
+ *   navigation's own for a navigate reply's mount, else none
+ */
+function mountSucceeded(acted = false) {
+    _userActed = acted;
     cancelMountReload();
     // The worker's reconnect backoff keys on mounts too; this is their one source.
     workerPost(W_MOUNTED);
@@ -218,20 +317,162 @@ function announceConnected(/** @type {number} */ closes) {
     dispatchConnection('arizona:connected', { reconnect });
 }
 
-// Path + query of the page last asked of the server, which the reconnect URL is
-// built from.
+// The page on screen: the path + query of the view the DOM holds, which is what a
+// reconnect dials (the worker keeps its own copy, `_wsUrl`) and what a popstate
+// compares against to tell a fragment change from a page change. It starts at the
+// loaded URL and moves when a navigate/patch reply arrives that put its page there
+// -- on arrival, not when applied: a reply held behind a view transition is still
+// applied before any later resync. A reply that is itself a navigation (a
+// redirect, a full load the server answered the frame with) moves nothing.
 /** @type {string} */
-let _currentPath = '';
+let _shownPath = '';
 
 /** @type {string} */
-let _currentQs = '';
+let _shownQs = '';
 
-// The URL of that page, an empty query included: the popstate handler tells a
-// real cross-page back/forward (which needs a server navigate) from a fragment
-// change on it (scroll, no round-trip) by `isSamePage`, the rule the az-navigate
-// click handler's `isFragmentOfPage` applies to the page on screen.
+// Its URL, an empty query included: popstate tells a fragment change on it from a
+// page change by `isSamePage`, the rule the az-navigate click handler's
+// `isFragmentOfPage` applies to the address bar.
 /** @type {string} */
-let _currentHref = '';
+let _shownHref = '';
+
+/**
+ * The address bar names the page on screen again (a navigation's reply put a page
+ * there, or Back returned to it): an unload no longer leaves a page the DOM is not
+ * showing, as after a load the user cancelled (see _unloadingToOtherPage).
+ */
+function shownAgain() {
+    _unloadingToOtherPage = false;
+}
+
+/**
+ * The navigate/patch frames sent on a live socket whose reply has not arrived, by
+ * reply ref, with the page each asks for and the view transition it was issued
+ * under. A close loses them (`dropOwedReplies`).
+ * `acted` says the page had user input since it mounted when it was issued (see
+ * `_userActed`): a load answering it is no loop, and is never bounded.
+ * @type {Map<number, {kind: 'navigate'|'patch', path: string, qs: string, href: string, own: typeof _pendingTransition, acted: boolean}>}
+ */
+const _navOwed = new Map();
+
+/**
+ * A person acted on the page on screen since it mounted: a trusted pointer, key or
+ * click reached it (see `watchUserInput`), or a cross-page Back or Forward the
+ * browser started (see the popstate listener). What the page's own code sends -- an
+ * `arizona:connected` listener, a hook, a timer, an app's `executeJS` or `fetch` --
+ * is no person, however it reaches the server. Set to the issuing
+ * navigation's own `acted` when a navigate reply mounts its page (a person's chain
+ * through a live hop stays theirs), cleared at any other mount. What tells a loop
+ * from a person: a page that navigates on connect with no input is one, a wizard
+ * step answering a click is not, whoever chose the URL.
+ */
+let _userActed = false;
+
+/** The last traversal the Navigation API reported was started by the user. */
+let _traverseByUser = false;
+
+/**
+ * The input events a person makes. A page's own code cannot dispatch them trusted:
+ * a scripted `click()` is untrusted. Not `input` or `change`: a checkbox's scripted
+ * `click()` and `execCommand` both fire those trusted, with no person.
+ */
+const USER_INPUT_EVENTS = ['pointerdown', 'keydown', 'click'];
+
+/**
+ * Note a person acting on `win` (see `_userActed`): a trusted pointer, key or click
+ * -- the click covers a screen reader's default action and voice control. A held
+ * key's autorepeat is not a fresh act. Captured on the window,
+ * ahead of every document listener, so one stopping the event cannot hide it.
+ * Also run on each Document Picture-in-Picture window (`host.watchInput`).
+ * @param {Window} win
+ * @param {AbortSignal} signal
+ */
+function watchUserInput(win, signal) {
+    /** @param {Event} e */
+    const input = (e) => {
+        if (e.isTrusted && !(/** @type {KeyboardEvent} */ (e).repeat)) _userActed = true;
+    };
+    for (const type of USER_INPUT_EVENTS) {
+        win.addEventListener(type, input, { capture: true, signal });
+    }
+}
+
+/**
+ * The reply ref of the last navigation issued, sent or pended. Newer wins: a reply
+ * to an older one may still carry a navigation of its own (a redirect, a full load
+ * the server answered it with), which must not override the one the user issued
+ * since (`withoutNavigations`).
+ * @type {number|null}
+ */
+let _lastNavRef = null;
+
+/**
+ * `cmds` without the navigations they carry (a `navigate`/`patch`, also inside a
+ * `transition`, which goes when it wraps nothing else).
+ * @param {Array<Array<*>>} cmds
+ * @returns {Array<Array<*>>}
+ */
+function withoutNavigations(cmds) {
+    /** @type {Array<Array<*>>} */
+    const kept = [];
+    for (const c of cmds) {
+        const op = Array.isArray(c) ? c[0] : undefined;
+        if (op === JS_NAVIGATE || op === JS_PATCH) continue;
+        if (op === JS_TRANSITION) {
+            const inner = withoutNavigations(Array.isArray(c[2]?.[0]) ? c[2] : [c[2]]);
+            if (inner.length > 0) kept.push([c[0], c[1], inner]);
+            continue;
+        }
+        kept.push(c);
+    }
+    return kept;
+}
+
+/**
+ * The one navigation waiting for the page on screen to be live again: issued while
+ * the socket was down with a reconnect due, or owed a reply a close lost. The last
+ * one wins. It carries the scroll and view transition it was issued with, taken off
+ * the globals so the reconnect's resync (an `OP_REPLACE` of the page on screen) does
+ * not consume them. Sent once the frame proving the mount is applied
+ * (`replayPendingNav`), or dropped when it names the page on screen.
+ *
+ * `dials` is how many connect attempts the worker had started when it was pended:
+ * once one started after it fails without opening, the socket will not carry it
+ * soon (an upgrade-only outage, an auth gate halting the upgrade), so it runs as
+ * with no socket, a load of its URL -- leaving the page the user was already
+ * leaving. One requeued from a lost reply (`lost`) waits for a failed attempt at
+ * the backoff's cap instead: the user issued nothing while down, and an ordinary
+ * server restart gets the whole backoff to come back before the page loads.
+ * @type {{kind: 'navigate'|'patch', path: string, qs: string, href: string,
+ *   scroll: typeof _pendingScroll,
+ *   transition: typeof _pendingTransition, dials: number, lost: boolean,
+ *   acted: boolean}|null}
+ */
+let _pendingNav = null;
+
+/** Connect attempts the worker has started (its `[4]`). */
+let _dials = 0;
+
+/** The last of them was scheduled at the backoff's cap. */
+let _dialCapped = false;
+
+/**
+ * The worker will (re)open a socket: set at every spawn, cleared by a `1000` close
+ * (a deliberate end, never reconnected) and by `disconnect()`. A `pagehide` keeps
+ * it: the bfcache restore respawns.
+ */
+let _reconnectDue = false;
+
+/**
+ * Whether a navigation the socket cannot carry now waits for it (`_pendingNav`):
+ * only with a reconnect due on a page that has mounted once. Before a first mount
+ * nothing proves a socket will ever open (a proxy that never upgrades), so a
+ * navigation is served as with no socket: its page loads, a link is left to the
+ * browser.
+ */
+function navWaits() {
+    return _reconnectDue && _hadMount;
+}
 
 // Extra query params passed to `connect(endpoint, params)`. Unlike the page's
 // own query string they are connection-level config, constant across SPA
@@ -290,11 +531,14 @@ let _teardown = null;
 /**
  * Set right before an unload the framework starts while the current history
  * entry already names a page the DOM is not showing: a `leavePage` replace (a
- * navigate the server degraded to a full load, its entry pushed before asking)
+ * navigate the server answered with a full load, its entry pushed before asking)
  * and a popstate served by `location.reload()` (the browser already moved to the
  * destination entry). A full load that is not a replace leaves this page's
- * entry in place, so its scroll is stamped for Back to restore. The scroll on screen belongs to the previous page, so the unload
- * stamp must not write it onto that entry. Cleared by `pagehide`.
+ * entry in place, so its scroll is stamped for Back to restore. The scroll on
+ * screen belongs to the previous page, so the unload stamp must not write it onto
+ * that entry. Cleared by `pagehide`, and by `shownAgain`: a load the user cancelled
+ * (a `beforeunload` prompt) leaves it set until the address bar names the page on
+ * screen again.
  */
 let _unloadingToOtherPage = false;
 
@@ -1064,8 +1308,38 @@ function settleNavReplies(ref, resync) {
  * A socket that went away owes no more replies. An open page-swap window waits
  * for the reconnect's resync instead, and a transition waiting for a reply no
  * longer comes would otherwise sit armed until something re-armed it.
+ *
+ * The last navigate/patch still owed becomes the pending one, sent again once the
+ * reconnect has put the page on screen back, whatever the close. One the server
+ * failed is never among them: it answers a navigation it could not complete with
+ * the full load of its page. One whose reply was lost on this side (a dropped
+ * socket, a `pagehide`) may have run already and runs again, so a navigation must
+ * be idempotent, as any request. Its scroll and transition leave the globals, so
+ * the resync does not consume them.
  */
 function dropOwedReplies() {
+    const last = [..._navOwed].pop();
+    _navOwed.clear();
+    if (last) {
+        const [ref, { kind, path, qs, href, own, acted }] = last;
+        const scroll = _pendingScroll?.ref === ref ? _pendingScroll : null;
+        if (scroll) setPendingScroll(null);
+        const transition = own !== null && own === _pendingTransition ? own : null;
+        if (transition) armPendingTransition(null);
+        // None is pending: a navigation sent on a live socket supersedes the
+        // pending one, so an owed one and a pending one never coexist.
+        _pendingNav = {
+            kind,
+            path,
+            qs,
+            href,
+            scroll,
+            transition,
+            dials: _dials,
+            lost: true,
+            acted,
+        };
+    }
     if (_navRefs.size > 0) {
         _navRefs.clear();
         _navAwaitResync = true;
@@ -1077,20 +1351,70 @@ function dropOwedReplies() {
 }
 
 /**
- * Post a navigate/patch frame, tagged with its reply ref, and retarget the
- * reconnect URL. A navigate arms the page-swap window (`_navRefs`) -- only on a
- * live socket: a frame posted while disconnected is dropped by the worker and gets
- * no reply, and the reconnect's resync is what puts the new page on screen. A
- * patch issued under the pending 'any' transition (`own`) is the frame that
- * transition waits for -- on a live socket; a dropped frame takes it with it.
+ * Post a navigate/patch frame, tagged with its reply ref and, for the worker, with
+ * the page it asks for (the reply that puts it on screen moves the reconnect URL
+ * there). On a live socket only: the frame is owed a reply (`_navOwed`), a navigate
+ * arms the page-swap window (`_navRefs`), and a patch issued under the pending 'any'
+ * transition (`own`) is the frame that transition waits for. A navigation sent now
+ * supersedes the pending one.
+ *
+ * While the socket is down with a reconnect due, nothing is sent: the navigation
+ * becomes the pending one, sent once the page on screen is live again
+ * (`replayPendingNav`). With no reconnect due (the connection was torn down) it is
+ * dropped.
  * @param {'navigate'|'patch'} kind
  * @param {string} path
  * @param {string} qs
  * @param {number} [ref]
  * @param {typeof _pendingTransition} [own]
+ * @param {string} [href] the URL of the page asked for (its callers have moved the
+ *   address bar there already)
+ * @param {boolean|null} [acted] the page had user input when it was issued (see
+ *   `_navOwed`); `null` takes it from now, this navigation counting as input
+ *   when no server frame is applied
  */
-function sendNav(kind, path, qs, ref = nextRef(), own = null) {
-    if (kind === 'navigate' && _connected) {
+function sendNav(kind, path, qs, ref = nextRef(), own = null, href = location.href, acted = null) {
+    _lastNavRef = ref;
+    // A navigation issued outside a server frame after a person acted wins over a
+    // load still waiting out the failsafe. Any other does not: answered with a load
+    // in turn, that load takes the waiting one's place and deadline, so a loop keeps
+    // its pace rather than putting its next load off forever.
+    if (acted === null) {
+        if (!_inFrame && _userActed) cancelNavLoad();
+        acted = _userActed;
+    }
+    if (!_connected) {
+        // Its scroll and transition go with it: the resync must not consume them.
+        const scroll = _pendingScroll?.ref === ref ? _pendingScroll : null;
+        if (scroll) setPendingScroll(null);
+        const transition = own !== null && own === _pendingTransition ? own : null;
+        if (transition) armPendingTransition(null);
+        if (!navWaits()) return;
+        // Back (or any navigation) to the page on screen: nothing is left to carry,
+        // so the pending one is dropped rather than replaced, and its scroll lands
+        // here at once.
+        if (path === _shownPath && qs === _shownQs) {
+            _pendingNav = null;
+            shownAgain();
+            if (scroll) applyScroll(scroll);
+            return;
+        }
+        _pendingNav = {
+            kind,
+            path,
+            qs,
+            href,
+            scroll,
+            transition,
+            dials: _dials,
+            lost: false,
+            acted,
+        };
+        return;
+    }
+    _pendingNav = null;
+    _navOwed.set(ref, { kind, path, qs, href, own, acted });
+    if (kind === 'navigate') {
         _navRefs.add(ref);
         _navEpoch++;
     }
@@ -1100,35 +1424,106 @@ function sendNav(kind, path, qs, ref = nextRef(), own = null) {
         own.kind === 'any' &&
         _transitionRef === null
     ) {
-        if (kind === 'patch' && _connected) _transitionRef = ref;
+        if (kind === 'patch') _transitionRef = ref;
         else armPendingTransition(null);
     }
-    workerPost(W_SEND, JSON.stringify([kind, { path, qs }, ref]));
-    workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
-    _currentPath = path;
-    _currentQs = qs;
-    // Both callers have moved the URL to the page asked for already.
-    _currentHref = location.href;
+    workerPost(W_SEND, JSON.stringify([kind, { path, qs }, ref]), {
+        ref,
+        path,
+        qs: reconnectUserQs(qs),
+        href,
+        base: document.baseURI,
+        closes: _closeCount,
+    });
+}
+
+/**
+ * Send the pending navigation, if any, now that the frame proving the page on
+ * screen mounted has been applied (its form restore and focus included): in that
+ * same apply, so no user event fits between the two. One naming the page on screen
+ * is dropped -- that page is what the reconnect mounted. Its scroll and transition
+ * are armed again, for the new frame.
+ */
+function replayPendingNav() {
+    const p = _pendingNav;
+    if (!p) return;
+    _pendingNav = null;
+    if (p.path === _shownPath && p.qs === _shownQs) return;
+    const ref = nextRef();
+    if (p.scroll) setPendingScroll({ ...p.scroll, ref });
+    if (p.transition) armPendingTransition(p.transition);
+    sendNav(p.kind, p.path, p.qs, ref, p.transition, p.href, p.acted);
 }
 
 /**
  * Load `url` as a real page. `replace` finishes a navigation already in history
- * -- the server degrading the client's own navigate frame, whose entry was pushed
- * before asking -- so it must not add a second entry; the browser only folds the
- * load into the current entry by itself when the URL is identical.
+ * -- the server answering the client's own navigate frame with a full load, its
+ * entry pushed before asking -- so it must not add a second entry. A load of the
+ * address bar's own page reloads it, keeping the entry's state. A load the server
+ * answered a navigation with is bounded (`navLoadDelay`).
  *
  * Only an http(s) URL may be loaded. Any other scheme (`javascript:`, `data:`)
  * would run in this page, and the URL can come from a server that echoed a
  * request parameter -- so it is dropped with a warning, never loaded.
  * @param {string} url
  * @param {boolean} [replace]
+ * @param {boolean} [recover] a recovery load of the address bar's own URL -- a
+ *   pending navigation's fallback, or the resync of a view the page does not hold --
+ *   rather than a load an effect or a link asked for
  */
-function leavePage(url, replace) {
+function leavePage(url, replace, recover = false) {
     if (!isWebUrl(url)) return;
-    // A replace finishes a navigation whose entry already names `url`, so the
-    // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
-    _unloadingToOtherPage = Boolean(replace);
-    loadPage(url, replace);
+    const own = _answeringOwn;
+    const load = () => {
+        // A replace finishes a navigation whose entry already names `url`, so the
+        // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
+        _unloadingToOtherPage = Boolean(replace);
+        const target = pageUrl(url).href;
+        const bare = location.href.split('#')[0];
+        if (own && target === bare) {
+            // The load answering this page's own navigation, of the URL it pushed (its
+            // fragment aside: the frame carries none), reloads that entry so it keeps
+            // its state (`_azIdx`, the transition edges) and its fragment, which the
+            // reloaded page scrolls to: a `location.replace` starts it afresh.
+            reloadPage();
+        } else if (
+            recover &&
+            target.split('#')[0] === bare &&
+            (target.includes('#') || location.href.includes('#'))
+        ) {
+            // A recovery load of the address bar's own URL with a fragment cannot go
+            // by URL: that is a same-document fragment navigation, which loads
+            // nothing. An entry this client stamped (it rewrote its state, so it is no
+            // form POST's) reloads, its fragment kept; any other loads the page
+            // without its fragment, since a reload would post a form again.
+            const st = history.state;
+            if (typeof st?._azIdx === 'number' || st?._azScroll) reloadPage();
+            else loadPage(target.split('#')[0], replace);
+        } else {
+            // A load an effect or a link asked for goes by URL, a fragment of the page
+            // on screen included (which only scrolls, as the browser does).
+            loadPage(url, replace);
+        }
+    };
+    // A load answering a navigation issued with no input while another waits takes its
+    // place, keeping its deadline (and its one entry in the record).
+    if (_answeringNav && _navLoadTimer !== null) {
+        _navLoadNext = load;
+        return;
+    }
+    cancelNavLoad();
+    const delay = _answeringNav ? navLoadDelay() : 0;
+    if (delay === 0) {
+        load();
+        return;
+    }
+    _navLoadNext = load;
+    _navLoadTimer = setTimeout(() => {
+        const next = _navLoadNext;
+        _navLoadTimer = null;
+        _navLoadNext = null;
+        next?.();
+    }, delay);
 }
 
 /**
@@ -1178,6 +1573,12 @@ function navigateEffect(full, opts, kind, transition) {
             history.pushState(null, '', u.href);
         }
         if (!opts.noscroll) applyScroll({ kind: 'push', hash });
+        return;
+    }
+    // After a deliberate end (`1000`), or before the page has mounted once, no
+    // socket is known to come back to ask: load the page.
+    if (_worker && !_connected && !navWaits()) {
+        leavePage(full, opts.replace);
         return;
     }
     if (transition !== undefined && transition !== _pendingTransition) {
@@ -1407,7 +1808,7 @@ function rehomeHeld(marks) {
  * stops at the first item it cannot read (a `null`, a transition of `null`, or a
  * `null` a transition's scan meets) with the push_events before it. Only those two cases warn, once per
  * form, rather than throw: a throw here would leave the forms after it unrestored
- * and the resync frame unfinished (focus, `arizona:connected`).
+ * and the resync frame unfinished (focus, `arizona:connected`, and the pending navigation).
  * @param {HTMLFormElement} form
  * @param {string} formId
  * @param {string} azChange
@@ -1565,12 +1966,25 @@ export function connect(endpoint, params = {}) {
     // comment above applyScroll for the full model.
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
-    // Seed the rendered path/qs so the popstate handler can distinguish a
-    // fragment-only change (scroll, no server round-trip) from a real
-    // cross-page navigation.
-    _currentPath = location.pathname;
-    _currentQs = location.search ? location.search.slice(1) : '';
-    _currentHref = location.href;
+    watchUserInput(window, signal);
+    // Where the Navigation API exists, it says whether the browser's own Back or
+    // Forward started a traversal (`userInitiated`), which popstate does not.
+    // Every navigate event sets it, so a stale traverse never carries over.
+    const navApi = /** @type {any} */ (globalThis).navigation;
+    if (navApi?.addEventListener) {
+        navApi.addEventListener(
+            'navigate',
+            (/** @type {any} */ e) => {
+                _traverseByUser = e.navigationType === 'traverse' && e.userInitiated === true;
+            },
+            { signal },
+        );
+    }
+
+    // The page on screen is the one loaded.
+    _shownPath = location.pathname;
+    _shownQs = location.search.slice(1);
+    _shownHref = location.href;
     // Resume the entry index a reload or a full-document return lands on.
     _historyIdx = typeof history.state?._azIdx === 'number' ? history.state._azIdx : 0;
 
@@ -1605,7 +2019,9 @@ export function connect(endpoint, params = {}) {
             const el = /** @type {HTMLAnchorElement} */ (
                 /** @type {Element} */ (e.target).closest('[az-navigate], [az-patch]')
             );
-            if (!el || !_connected) return;
+            // Down with a reconnect due on a mounted page, the click is queued
+            // (`sendNav`); otherwise the browser follows the link.
+            if (!el || !(_connected || navWaits())) return;
             // An app listener already handled the click, or the browser is meant
             // to open the link elsewhere (`target`) or save it (`download`).
             if (e.defaultPrevented || el.hasAttribute('download')) return;
@@ -1648,6 +2064,9 @@ export function connect(endpoint, params = {}) {
     window.addEventListener(
         'popstate',
         (e) => {
+            // Taken now: the navigate event that set it belongs to this traversal.
+            const byUser = navApi?.addEventListener ? _traverseByUser : true;
+            _traverseByUser = false;
             const path = location.pathname;
             const qs = location.search ? location.search.slice(1) : '';
             const hash = location.hash ? location.hash.slice(1) : '';
@@ -1668,25 +2087,33 @@ export function connect(endpoint, params = {}) {
                     ? e.state._azTransitionPrev
                     : null;
             if (hasIdx) _historyIdx = idx;
-            // Fragment-only change (`isSamePage`: origin, path and query, an
-            // empty one included, unchanged): a same-page hash jump fires
-            // popstate, but it needs no server round-trip -- just scroll. The
-            // same rule as the click handler's `isFragmentOfPage`, so an edge a
-            // click navigated is navigated again and in-page anchors don't
-            // trigger a full OP_REPLACE. Needs no connection either, so it runs
-            // even while disconnected.
-            if (isSamePage(location, new URL(_currentHref))) {
+            // Fragment-only change (the page on screen, with no navigation in
+            // flight or pending to replace it): a same-page hash jump fires
+            // popstate in some browsers, but it needs no server round-trip --
+            // just scroll. Mirrors the click handler's same-page fast path so
+            // in-page anchors don't trigger a full OP_REPLACE. Needs no
+            // connection either, so it runs even while disconnected.
+            if (
+                isSamePage(location, new URL(_shownHref)) &&
+                _navOwed.size === 0 &&
+                _pendingNav === null
+            ) {
+                shownAgain();
                 applyScroll({ kind: 'pop', hash, saved });
                 return;
             }
-            // A cross-page popstate cannot be served over a down WebSocket, and
-            // the browser has already changed the URL -- returning would desync
-            // URL and content and leave the reconnect URL stale (a reconnect
-            // would resync to the pre-back path, and a later Forward would look
-            // fragment-only). Degrade to a full load of the URL the browser now
-            // shows, like a disconnected az-navigate click falls through to the
-            // browser.
-            if (!_connected) {
+            // A cross-page Back or Forward is a person: where the Navigation API
+            // can tell, only one the browser's own UI started (a script's
+            // `history.back()` is not); without it, every traversal counts. A
+            // fragment-only one above never does: a script writing `location.hash`
+            // or a scroll-spy's history entries are no person.
+            if (byUser) _userActed = true;
+            // Down with a reconnect due on a mounted page, it is queued like any
+            // navigation (`sendNav`). Otherwise no socket is known to come back to
+            // serve it, and the browser has already changed the URL: load the URL
+            // it now shows, like a disconnected az-navigate click falls through to
+            // the browser.
+            if (!_connected && !navWaits()) {
                 _unloadingToOtherPage = true;
                 location.reload();
                 return;
@@ -1707,20 +2134,18 @@ export function connect(endpoint, params = {}) {
     // The WS URL is (re)built at every worker spawn -- the Worker can't access
     // location.*. Framework keys are `_az_`-prefixed so they can't collide with
     // user params or the page's own query string; the user-facing qs is the
-    // tracked page qs plus the connect() extras (server reaches them via
-    // arizona_req:params/1). Building from `_currentPath`/`_currentQs` rather
-    // than a connect-time snapshot matters for the bfcache respawn: an SPA
-    // navigation moves the path only inside the worker (W_UPDATE_PATH), the
-    // worker dies on pagehide, and the respawned one must target the route the
-    // restored page actually shows.
+    // page's qs plus the connect() extras (server reaches them via
+    // arizona_req:params/1). It names the page on screen (`_shownPath`), not a
+    // connect-time snapshot nor the address bar: the worker dies on pagehide, and
+    // the respawned one must resync the view the restored DOM holds.
     /** @type {Record<string, string>} */
     const stringParams = {};
     for (const k of Object.keys(params)) stringParams[k] = String(params[k]);
     _connectQs = new URLSearchParams(stringParams).toString();
     const buildWsUrl = () => {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const pagePath = encodeURIComponent(_currentPath);
-        const userQs = reconnectUserQs(_currentQs);
+        const pagePath = encodeURIComponent(_shownPath);
+        const userQs = reconnectUserQs(_shownQs);
         const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
         // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
         // handshake so the live process can answer ?capability(...). Absent in a
@@ -1742,6 +2167,7 @@ export function connect(endpoint, params = {}) {
     // full-page resync (and the first frame restore any saved form state).
     /** @param {boolean} reconnect */
     const spawnWorker = (reconnect) => {
+        _reconnectDue = true;
         // Worker is co-located with this script. This static
         // `new Worker(new URL(..., import.meta.url), { type: 'module' })` shape is
         // what bundlers (Vite/Rollup/rolldown) statically detect: Arizona's own
@@ -1761,7 +2187,30 @@ export function connect(endpoint, params = {}) {
             const msg = e.data;
             switch (msg[0]) {
                 case 0: {
-                    // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null, ref|null]
+                    // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null, ref|null, shown]
+                    // A navigate/patch reply that put its page on screen (`shown`,
+                    // decided by the worker, which moved its reconnect URL with it)
+                    // moves the page on screen -- here, on arrival, ahead of the
+                    // mount proof, which compares it with the address bar.
+                    const owed = msg[5] === null ? undefined : _navOwed.get(msg[5]);
+                    // The reply to an older navigation than the last one issued
+                    // navigates nowhere: newer wins.
+                    const effects =
+                        owed && msg[5] !== _lastNavRef && msg[2]
+                            ? withoutNavigations(msg[2])
+                            : msg[2];
+                    if (owed) {
+                        _navOwed.delete(msg[5]);
+                        if (msg[6]) {
+                            _shownPath = owed.path;
+                            _shownQs = owed.qs;
+                            _shownHref = owed.href;
+                            shownAgain();
+                            // A newer navigation went live: a load still waiting
+                            // out the failsafe would override it.
+                            cancelNavLoad();
+                        }
+                    }
                     // A navigate's reply is its new view's OP_REPLACE, which proves
                     // that mount too. Only the first proof on a socket is a
                     // connection event: a later one is a navigate on a live socket.
@@ -1774,13 +2223,30 @@ export function connect(endpoint, params = {}) {
                     ) {
                         mounted = _mountProof !== null;
                         _mountProof = null;
-                        mountSucceeded();
+                        // A navigate reply's mount keeps its navigation's input.
+                        mountSucceeded(owed?.acted === true);
                     }
                     // The app's `az-*` vocabulary, collected by the parse transform
                     // and sent on the connect frame. Delegated BEFORE the ops land,
                     // so a listener exists the moment an element declaring one does.
                     if (msg[4]) noteAzAttrs(msg[4]);
                     const apply = () => {
+                        // A resync replaces the view the DOM holds, by its id. One
+                        // naming a view the DOM lacks (the reconnect mounted another
+                        // page than the one on screen) has nothing to replace, and applying the rest would leave the old page up,
+                        // its events reaching a view that is gone: load the address
+                        // bar's URL, the page the user last asked for. It does not
+                        // loop: the loaded page holds its own view.
+                        if (
+                            msg[3] &&
+                            msg[1]?.some(
+                                (/** @type {Array<*>} */ op) =>
+                                    op[0] === OP.REPLACE && resolveEl(op[1]) === null,
+                            )
+                        ) {
+                            leavePage(location.href, true, true);
+                            return;
+                        }
                         // A patch-scroll intent lives until its patch's reply: the
                         // frame carrying the patch's ref, which the server sends
                         // even when the patch changed nothing. It scrolls when that
@@ -1818,10 +2284,17 @@ export function connect(endpoint, params = {}) {
                                 setPendingScroll(null);
                             }
                             _applying = null;
-                            if (msg[2]) applyEffects(msg[2]);
+                            // A navigation's reply: a load among its effects answers
+                            // it, bounded when the page had no user input when it
+                            // was issued.
+                            _answeringOwn = owed !== undefined;
+                            _answeringNav = owed !== undefined && !owed.acted;
+                            if (effects) applyEffects(effects);
                         } finally {
                             _inFrame = false;
                             _applying = null;
+                            _answeringNav = false;
+                            _answeringOwn = false;
                         }
                         settleCtls(msg[5]);
                         if (msg[3]) restoreFormState();
@@ -1829,6 +2302,9 @@ export function connect(endpoint, params = {}) {
                         // Here, not after the dispatch below: a transition defers
                         // this, and a listener must see the remounted view.
                         if (mounted) announceConnected(closes);
+                        // Last: the page on screen is live, its fields and focus
+                        // back. A close since voids it, as it does the announcement.
+                        if (mounted && closes === _closeCount) replayPendingNav();
                     };
                     // A pending transition wraps its batch -- ops and effects
                     // together, in order, so the swap and any effect fall inside
@@ -1871,12 +2347,30 @@ export function connect(endpoint, params = {}) {
                 case 2: {
                     // [2, closeCode]
                     const code = msg[1];
+                    // An attempt that never opened (the socket was not up).
+                    const failedAttempt = !_connected;
                     _closeCount++;
                     _connected = false;
                     _mountProof = null;
-                    // The replies still owed died with the socket; the reconnect's
-                    // resync is what replaces the page now.
+                    if (code === WS_CLOSE_NORMAL) _reconnectDue = false;
+                    // The replies still owed died with the socket: the reconnect
+                    // resyncs the page on screen and then sends the last
+                    // navigation again (`dropOwedReplies`).
                     dropOwedReplies();
+                    // No reconnect follows a deliberate end, and an attempt that
+                    // started after the navigation was pended failing without
+                    // opening says none will carry it soon: either way it is
+                    // served by loading the address bar's URL, as with no socket.
+                    if (
+                        _pendingNav !== null &&
+                        (code === WS_CLOSE_NORMAL ||
+                            (failedAttempt &&
+                                _dials > _pendingNav.dials &&
+                                (!_pendingNav.lost || _dialCapped)))
+                    ) {
+                        _pendingNav = null;
+                        leavePage(location.href, true, true);
+                    }
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
                     // A crash after the mount needs no reload: the worker's
@@ -1903,12 +2397,17 @@ export function connect(endpoint, params = {}) {
                     // [3] -- the server handled the form replay (see W_ACK_REPLAY).
                     _replayedForms.clear();
                     break;
+                case 4:
+                    // [4, capped] -- the worker started a connect attempt.
+                    _dials++;
+                    _dialCapped = msg[1] === true;
+                    break;
             }
         };
 
         // Send connect message to Worker, rebuilding the URL from the
         // currently tracked route (see buildWsUrl).
-        workerPost(W_CONNECT, buildWsUrl(), reconnect);
+        workerPost(W_CONNECT, buildWsUrl(), reconnect, _closeCount);
     };
 
     spawnWorker(false);
@@ -1996,6 +2495,7 @@ export function connect(endpoint, params = {}) {
                 dropOwedReplies();
                 _replayedForms.clear();
                 cancelMountReload();
+                cancelNavLoad();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
                 // killed abruptly, so no [2, closeCode] arrives to do this).
@@ -2011,6 +2511,7 @@ export function connect(endpoint, params = {}) {
             // Only on a real bfcache restore; a normal load already has a
             // worker. A restore is semantically a reconnect: the DOM exists
             // with evolved live state, so the server must resync it.
+            _traverseByUser = false;
             if (e.persisted && !_worker) spawnWorker(true);
         },
         { signal },
@@ -2029,8 +2530,12 @@ export function connect(endpoint, params = {}) {
         _connected = false;
         _mountProof = null;
         _outage = false;
+        _reconnectDue = false;
+        _navOwed.clear();
+        _pendingNav = null;
         _replayedForms.clear();
         cancelMountReload();
+        cancelNavLoad();
         setPendingScroll(null);
         _unloadingToOtherPage = false;
         armPendingTransition(null);
@@ -2071,6 +2576,7 @@ export function connect(endpoint, params = {}) {
 // The shared runtime (delegation, commands, hooks) reaches the socket and the
 // history through `host`; this module is what serves a live page.
 setHost({
+    watchInput: watchUserInput,
     ready: () => _connected,
     epoch: () => _navEpoch,
     sendEvent,

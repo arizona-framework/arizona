@@ -47,9 +47,16 @@ function setupMockWorker() {
     const disconnect = mod.connect('/ws');
     unembed();
     const sent = () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+    // As the worker reports it: the reply to a navigate/patch frame put its page on
+    // screen unless it navigates again.
     /** @type {(ops: *, effects?: *, resync?: boolean, ref?: number|null) => void} */
-    const frame = (ops, effects = null, resync = false, ref = null) =>
-        worker.onmessage({ data: [0, ops, effects, resync, null, ref] });
+    const frame = (ops, effects = null, resync = false, ref = null) => {
+        const nav = posted.some((d) => d[0] === 1 && d[2]?.ref === ref);
+        const again = (effects ?? []).some(
+            (/** @type {Array<*>} */ c) => c[0] === JS_NAVIGATE || c[0] === JS_PATCH,
+        );
+        worker.onmessage({ data: [0, ops, effects, resync, null, ref, nav && !again] });
+    };
     // The server answers every navigate/patch frame, in order, with one frame
     // carrying its reply ref back.
     let answered = 0;
@@ -236,14 +243,21 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([['page', 'inc', {}]]);
     });
 
-    it('a close keeps the window until the reconnect resync replaces the page', async () => {
+    it('a close keeps the window through the resync, until the navigate sent again is answered', async () => {
         await connected();
         navigate('/next');
-        mock.close(4500);
+        mock.close(1006);
         mock.open(true);
         click();
         expect(events()).toEqual([]);
-        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, true);
+        // The resync puts the page on screen back; the lost navigate goes out again
+        // in the same apply, so the window stays shut.
+        mock.frame([[OP_REPLACE, 'page', PAGE]], null, true);
+        click();
+        expect(events()).toEqual([]);
+        const navs = mock.sent().filter((m) => m[0] === 'navigate');
+        expect(navs.length).toBe(2);
+        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, false, navs[1][2]);
         click();
         expect(events()).toEqual([['page', 'inc', {}]]);
     });
@@ -312,46 +326,58 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([['page', 'inc', {}]]);
     });
 
-    it('a redirect reply while another navigate is in flight keeps the count', async () => {
+    it('a redirect reply to an older navigate re-arms nothing: newer wins', async () => {
         await connected();
         navigate('/admin');
         navigate('/b');
-        mock.answer(null, [[JS_NAVIGATE, '/login']]); // /admin's reply re-arms for /login
-        replace(); // /b's reply: /login still in flight
+        mock.answer(null, [[JS_NAVIGATE, '/login']]); // /admin's reply: its redirect dropped
         click();
-        expect(events()).toEqual([]);
-        replace(); // /login's reply
+        expect(events()).toEqual([]); // /b still in flight
+        replace(); // /b's reply
         click();
         expect(events()).toEqual([['page', 'inc', {}]]);
+        expect(
+            mock
+                .sent()
+                .filter((m) => m[0] === 'navigate')
+                .map((m) => m[1].path),
+        ).toEqual(['/admin', '/b']);
     });
 
-    it('a full-page navigate reply closes only its own navigate', async () => {
+    it('a full-page navigate reply to an older navigate loads nothing, the newer one awaited', async () => {
         await connected();
         navigate('/a');
         navigate('/b');
         const assign = vi.fn();
-        vi.stubGlobal('location', { assign, href: 'http://localhost/' });
+        const replaceLoad = vi.fn();
+        vi.stubGlobal('location', { assign, replace: replaceLoad, href: 'http://localhost/' });
         mock.answer(null, [[JS_NAVIGATE, '/a', { full: true }]]);
-        // The load starts in a microtask (`loadPage`).
+        // A load would start in a microtask (`loadPage`).
         await Promise.resolve();
         vi.unstubAllGlobals();
-        expect(assign).toHaveBeenCalledWith(new URL('/a', document.baseURI).href);
+        expect(assign).not.toHaveBeenCalled();
+        expect(replaceLoad).not.toHaveBeenCalled();
         click();
         expect(events()).toEqual([]);
     });
 
-    it('a close with navigates in flight waits for the resync, not their replies', async () => {
+    it('a close with navigates in flight sends the last again after the resync, and waits for it', async () => {
         await connected();
         navigate('/a');
         navigate('/b');
         mock.close(1006);
         mock.open(true);
-        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, true);
+        mock.frame([[OP_REPLACE, 'page', PAGE]], null, true);
+        const navs = mock.sent().filter((m) => m[0] === 'navigate');
+        expect(navs.map((m) => m[1].path)).toEqual(['/a', '/b', '/b']);
+        click();
+        expect(events()).toEqual([]);
+        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, false, navs[2][2]);
         click();
         expect(events()).toEqual([['page', 'inc', {}]]);
     });
 
-    it('a bfcache round trip with a navigate in flight waits for the resync', async () => {
+    it('a bfcache round trip with a navigate in flight sends it again after the resync', async () => {
         await connected();
         navigate('/a');
         window.dispatchEvent(new Event('pagehide'));
@@ -359,7 +385,12 @@ describe('navigate page-swap window', () => {
         Object.defineProperty(show, 'persisted', { value: true });
         window.dispatchEvent(show);
         mock.open(true);
-        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, true);
+        mock.frame([[OP_REPLACE, 'page', PAGE]], null, true);
+        const navs = mock.sent().filter((m) => m[0] === 'navigate');
+        expect(navs.map((m) => m[1].path)).toEqual(['/a', '/a']);
+        click();
+        expect(events()).toEqual([]);
+        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, false, navs[1][2]);
         click();
         expect(events()).toEqual([['page', 'inc', {}]]);
     });
