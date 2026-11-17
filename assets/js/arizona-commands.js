@@ -886,8 +886,17 @@ export function replayEvents(cmds, out = []) {
         else if (c[0] === JS_TRANSITION) {
             // Read as `execOne` reads it before running any of its commands, so a
             // wrapper whose scan cannot read an item replays none, as it runs none.
-            transitionKind(c[2]);
-            replayEvents(c[2], out);
+            // One that waits for no reply runs its commands inside the view
+            // transition, where a throw ends only them (`runTransition`'s
+            // containment), so the items after it still run.
+            if (transitionKind(c[2])) replayEvents(c[2], out);
+            else {
+                try {
+                    replayEvents(c[2], out);
+                } catch {
+                    // Contained, as a live change contains it: no warning here.
+                }
+            }
         }
     }
     return out;

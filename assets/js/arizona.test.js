@@ -6141,6 +6141,17 @@ describe('crash and mount-failure recovery', () => {
         ['a nested list item', '[[[0,"a"]],[0,"b"]]', ''],
         ['a transition of null', '[[0,"a"],[20,{},null],[0,"b"]]', ''],
         ['a transition holding a number', '[[20,{},[[0,"a"],5]]]', ''],
+        [
+            'a bad transition inside an in-place one',
+            '[[20,{},[[20,{},[[0,"a"],null]]]],[0,"b"]]',
+            '',
+        ],
+        [
+            'a good and a bad transition inside an in-place one',
+            '[[20,{},[[20,{},[[0,"a"]]],[20,{},[[0,"c"],null]]]],[0,"b"]]',
+            '',
+        ],
+        ['a bad transition beside a push_event', '[[20,{},[[0,"a"],null]],[0,"b"]]', ''],
     ]) {
         it(`replays what a change sends for ${shape}`, async () => {
             const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
