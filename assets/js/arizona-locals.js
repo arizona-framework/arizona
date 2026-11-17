@@ -15,6 +15,7 @@ import {
     forEachNodeInSlot,
     setMarkerText,
 } from './arizona-slots.js';
+import { warnOnce } from './arizona-util.js';
 
 /**
  * Reconstruct a content slot's comment-marker az from the element's runtime az
@@ -182,28 +183,90 @@ function affix(a) {
 
 // Parsed `az-local` descriptors, cached per element. NOT a persistent index --
 // discovery still queries the live DOM every call; only the JSON.parse of each
-// element's descriptor is memoized. The attribute is written once at SSR and a
-// ?local slot is never diffed, so a descriptor is immutable for its element's
-// lifetime; a re-rendered slot is a NEW element (a fresh cache key) and dropped
-// elements fall out of the WeakMap with GC.
-/** @type {WeakMap<Element, LocalDesc>} */
+// element's descriptor is memoized, with the text it was parsed from: the server
+// writes the attribute once at SSR and never diffs a ?local slot, but a
+// `set_attr` effect or `?raw` markup can write it too, with any value. A
+// re-rendered slot is a NEW element (a fresh cache key) and dropped elements fall
+// out of the WeakMap with GC.
+/** @type {WeakMap<Element, {raw: string, desc: LocalDesc|null}>} */
 const _localDescs = new WeakMap();
 
 /**
- * The `az-local` descriptor of `el`, parsed once; `null` when it has none.
+ * The `az-local` descriptor of `el`, parsed once per value; `null` when it has
+ * none, or one that is not JSON or not of the descriptor's shape -- skipped with
+ * a warning, so the locals after it are still served.
  * @param {Element} el
  * @returns {LocalDesc|null}
  */
 function localDesc(el) {
-    let parsed = _localDescs.get(el);
-    if (parsed === undefined) {
-        const desc = el.getAttribute('az-local');
-        if (!desc) return null;
-        // The descriptor is always framework-generated valid JSON.
-        parsed = /** @type {LocalDesc} */ (JSON.parse(desc));
-        _localDescs.set(el, parsed);
+    const raw = el.getAttribute('az-local');
+    if (!raw) return null;
+    const cached = _localDescs.get(el);
+    if (cached?.raw === raw) return cached.desc;
+    /** @type {LocalDesc|null} */
+    let desc = null;
+    let fault = null;
+    try {
+        const parsed = JSON.parse(raw);
+        if (isLocalDesc(parsed)) desc = parsed;
+        else fault = 'not a ?local descriptor';
+    } catch (err) {
+        fault = err instanceof Error ? err.message : String(err);
     }
-    return parsed;
+    // Once per page load, and not the value: it can be long, and app data.
+    if (fault !== null) warnOnce(`[arizona] an az-local was skipped: ${fault}`, 'az-local');
+    _localDescs.set(el, { raw, desc });
+    return desc;
+}
+
+/** @param {*} v @returns {boolean} a JSON object, not an array or null */
+const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** @param {*} v @returns {boolean} an object of keys, as `c` and `a` hold */
+const isKeyMap = (v) => isObject(v) && Object.values(v).every((k) => typeof k === 'string');
+
+/**
+ * Whether every key of `v` is an attribute name the server's `?html` writes: not
+ * empty, no ASCII space or control character, none of `/ > = " ' <`. `setAttribute`
+ * throws on most others, which would end a scan partway.
+ * @param {Object<string, *>} v
+ * @returns {boolean}
+ */
+const namesAttrs = (v) => Object.keys(v).every(isAttrName);
+
+/** @param {string} n @returns {boolean} */
+function isAttrName(n) {
+    if (n === '') return false;
+    for (const ch of n) {
+        const c = ch.codePointAt(0) ?? 0;
+        if (c <= 0x20 || c === 0x7f || '/>="\'<'.includes(ch)) return false;
+    }
+    return true;
+}
+
+/** @param {*} v @returns {boolean} an affix: text, or a select value's static parts */
+const isAffix = (v) =>
+    typeof v === 'string' || (Array.isArray(v) && v.every((p) => typeof p === 'string'));
+
+/**
+ * Whether `v` has the shape the server writes (`LocalDesc`): a value of any other
+ * shape (a `set_attr` effect or `?raw` markup can write one) would throw partway
+ * through a scan, leaving the locals after it unserved.
+ * @param {*} v
+ * @returns {v is LocalDesc}
+ */
+function isLocalDesc(v) {
+    return (
+        isObject(v) &&
+        (v.c === undefined || isKeyMap(v.c)) &&
+        (v.a === undefined || (isKeyMap(v.a) && namesAttrs(v.a))) &&
+        (v.ap === undefined ||
+            (isObject(v.ap) &&
+                namesAttrs(v.ap) &&
+                Object.values(v.ap).every(
+                    (p) => Array.isArray(p) && p.length === 2 && isAffix(p[0]) && isAffix(p[1]),
+                )))
+    );
 }
 
 /**

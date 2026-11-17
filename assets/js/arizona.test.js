@@ -3718,6 +3718,98 @@ describe('?local -- set/get content', () => {
         expect(get('v', 'title')).toBe('new');
     });
 
+    it('skips an az-local that is no descriptor, warning once, and serves the rest', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            setupView(
+                'v',
+                `<i id="bad" az-local="{bad"></i>` +
+                    `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>`,
+            );
+            set('v', 'title', 'one');
+            expect(document.querySelector('[az="0"]').textContent).toBe('one');
+            setAll('title', 'two');
+            expect(document.querySelector('[az="0"]').textContent).toBe('two');
+            expect(get('v', 'title')).toBe('two');
+            expect(get('title')).toBe('two');
+            // Rewritten (a set_attr effect, raw markup), it is read again.
+            document.getElementById('bad').setAttribute('az-local', '{"a":{"data-t":"title"}}');
+            set('v', 'title', 'three');
+            expect(document.getElementById('bad').getAttribute('data-t')).toBe('three');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('warns once per page load about az-locals that are no descriptor, quoting only the error', async () => {
+        vi.resetModules();
+        const fresh = await import('./arizona.js');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const secret = 'x'.repeat(5000);
+            setupView(
+                'v',
+                `<i az-local="{bad1 ${secret}"></i><i az-local="{bad2"></i>` +
+                    `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>`,
+            );
+            fresh.set('v', 'title', 'one');
+            fresh.setAll('title', 'two');
+            expect(fresh.get('title')).toBe('two');
+            const warns = warn.mock.calls.filter((c) => String(c[0]).includes('az-local'));
+            expect(warns).toHaveLength(1);
+            expect(String(warns[0][0]).length).toBeLessThan(200);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    for (const bad of [
+        '{"a":{"data-t":"title"},"ap":{"data-t":5}}',
+        '{"a":{"data-t":"title"},"ap":{"data-t":[null,null]}}',
+        '{"a":{"data-t":"title"},"ap":{"data-t":["x"]}}',
+        '{"a":{"data-t":"title"},"ap":{"data-t":["x",[1]]}}',
+        '{"a":{"data-t":"title"},"ap":5}',
+        '{"c":{"0":"title"},"a":"title"}',
+        '{"c":["title"]}',
+        '{"c":{"0":5}}',
+        '[null,null]',
+        '5',
+        '{"a":{"bad name":"title"}}',
+        '{"a":{"":"title"}}',
+        '{"a":{"data-t":"title"},"ap":{"a=b":["x","y"]}}',
+        // An `ap` name holding each other character the server never writes in one.
+        ...['/', '>', '\t', '\n', '\u0000', '\u007f', '"', "'", '<'].map((ch) =>
+            JSON.stringify({ a: { 'data-t': 'title' }, ap: { [`a${ch}b`]: ['x', 'y'] } }),
+        ),
+    ]) {
+        it(`skips an az-local of the wrong shape (${JSON.stringify(bad)}), warning once, and serves the rest`, async () => {
+            vi.resetModules();
+            const fresh = await import('./arizona.js');
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                setupView(
+                    'v',
+                    '<span az="0"><!--az:0-->x<!--/az--></span>' +
+                        `<span az="1" az-local='{"c":{"0":"title"}}'><!--az:1-->old<!--/az--></span>`,
+                );
+                // Written as a set_attr effect would, so any character reaches it.
+                document.querySelector('[az="0"]').setAttribute('az-local', bad);
+                fresh.set('v', 'title', 'one');
+                expect(document.querySelector('[az="1"]').textContent).toBe('one');
+                fresh.setAll('title', 'two');
+                expect(document.querySelector('[az="1"]').textContent).toBe('two');
+                expect(fresh.get('v', 'title')).toBe('two');
+                expect(fresh.get('title')).toBe('two');
+                expect(document.querySelector('[az="0"]').textContent).toBe('x');
+                expect(document.querySelector('[az="0"]').hasAttribute('data-t')).toBe(false);
+                const warns = warn.mock.calls.filter((c) => String(c[0]).includes('az-local'));
+                expect(warns).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+            }
+        });
+    }
+
     it('get returns the SSR initial before any set', () => {
         contentView('v', 'title', 'hello');
         expect(get('v', 'title')).toBe('hello');
@@ -5832,6 +5924,278 @@ describe('crash and mount-failure recovery', () => {
         expect(field('q').value).toBe('q1');
     });
 
+    for (const bad of ['null', '[0,']) {
+        it(`a form whose az-change is ${bad} restores, and stops no other form or the frame`, async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const connected = vi.fn();
+            document.addEventListener('arizona:connected', connected);
+            try {
+                const view =
+                    '<div id="page" az-view>' +
+                    `<form id="a" az-change='${bad}'><input name="x" value=""></form>` +
+                    '<form id="b" az-change=\'[0,"changed"]\'>' +
+                    '<input id="y" name="y" value=""></form></div>';
+                const m = await start();
+                document.body.innerHTML = view;
+                m.simulateOpen();
+                m.simulateMessage(null, null);
+                expect(connected).toHaveBeenCalledTimes(1);
+                field('x').value = 'xx';
+                field('y').value = 'yy';
+                field('y').focus();
+                field('y').setSelectionRange(1, 1);
+                m.simulateClose(4500);
+                const before = m.posted.length;
+                m.simulateOpen(true);
+                m.simulateMessage([[8, 'page', view]], null, true);
+                const after = m.posted.slice(before);
+                expect(field('x').value).toBe('xx');
+                expect(field('y').value).toBe('yy');
+                expect(sends(after).map((s) => s[1])).toEqual(['changed']);
+                expect(ackRequests(m)).toBe(1);
+                expect(document.activeElement).toBe(field('y'));
+                expect(field('y').selectionStart).toBe(1);
+                expect(connected).toHaveBeenCalledTimes(2);
+                expect(warn).toHaveBeenCalledWith(
+                    expect.stringContaining(
+                        'az-change of form #a did not replay as a command list',
+                    ),
+                );
+            } finally {
+                document.removeEventListener('arizona:connected', connected);
+                warn.mockRestore();
+            }
+        });
+
+        it(`a change event on an az-change of ${bad} warns and runs nothing`, async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                const m = await start();
+                document.body.innerHTML = formView(bad);
+                m.simulateOpen();
+                m.simulateMessage(null, null);
+                const before = m.posted.length;
+                field('q').value = 'typed';
+                field('q').dispatchEvent(new Event('change', { bubbles: true }));
+                expect(m.posted.slice(before)).toEqual([]);
+                expect(warn).toHaveBeenCalledWith(
+                    expect.stringContaining('az-change did not run as a command list'),
+                );
+            } finally {
+                warn.mockRestore();
+            }
+        });
+    }
+
+    /**
+     * Run `body` with the `n`th `[az-view]` lookup from form `f` throwing, once
+     * armed: a replayed push_event resolves its target that way before it is sent.
+     */
+    async function throwingReplayOn(n, body) {
+        const closest = Element.prototype.closest;
+        let count = 0;
+        let armed = false;
+        Element.prototype.closest = function (sel) {
+            if (armed && sel === '[az-view]' && this.id === 'f' && ++count === n)
+                throw new Error('replay boom');
+            return closest.call(this, sel);
+        };
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            await body((on) => {
+                armed = on;
+                count = 0;
+            }, error);
+        } finally {
+            Element.prototype.closest = closest;
+            error.mockRestore();
+        }
+    }
+
+    it('a replay that throws after sending an event is withheld after a crash', async () => {
+        const view = formView('[[0,"a"],[0,"b"]]');
+        await throwingReplayOn(2, async (arm) => {
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            m.simulateClose(4500);
+            const before = m.posted.length;
+            arm(true);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            arm(false);
+            const first = m.posted.slice(before);
+            expect(sends(first).map((s) => s[1])).toEqual(['a']);
+            expect(first.at(-1)).toEqual([4]);
+            m.simulateClose(4500); // before the acknowledgement: "a" is suspect
+            const again = m.posted.length;
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            expect(field('q').value).toBe('typed');
+            expect(sends(m.posted.slice(again))).toEqual([]);
+        });
+    });
+
+    it('a replay that throws logs the error itself', async () => {
+        const view = formView('[0,"a"]');
+        await throwingReplayOn(1, async (arm, error) => {
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            m.simulateClose(4500);
+            arm(true);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            arm(false);
+            expect(error).toHaveBeenCalledWith(
+                expect.stringContaining('az-change replay of form #%s failed'),
+                'f',
+                expect.objectContaining({ message: 'replay boom', stack: expect.any(String) }),
+            );
+        });
+    });
+
+    it('a bad az-change warns once per form, not on every reconnect', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const view =
+                '<div id="page" az-view>' +
+                '<form id="a" az-change="null"><input name="x" value=""></form>' +
+                '<form id="b" az-change="null"><input name="y" value=""></form></div>';
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            for (let i = 0; i < 3; i++) {
+                field('x').value = `x${i}`;
+                field('y').value = `y${i}`;
+                m.simulateClose(1006);
+                m.simulateOpen(true);
+                m.simulateMessage([[8, 'page', view]], null, true);
+                expect(field('x').value).toBe(`x${i}`);
+            }
+            const replayWarns = warn.mock.calls
+                .map((c) => String(c[0]))
+                .filter((w) => w.includes('did not replay as a command list'));
+            expect(replayWarns).toHaveLength(2);
+            expect(replayWarns[0]).toContain('form #a');
+            expect(replayWarns[1]).toContain('form #b');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('replays the push_events before the first item that is no command, as a change runs them', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const view = formView('[[0,"a"],null,[0,"b"]]');
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            const live = m.posted.length;
+            field('q').value = 'typed';
+            field('q').dispatchEvent(new Event('change', { bubbles: true }));
+            expect(sends(m.posted.slice(live)).map((s) => s[1])).toEqual(['a']);
+            m.simulateClose(4500);
+            const before = m.posted.length;
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            const after = m.posted.slice(before);
+            expect(sends(after).map((s) => s[1])).toEqual(['a']);
+            expect(after.at(-1)).toEqual([4]);
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('az-change of form #f did not replay as a command list'),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('a replay that throws before sending anything is not withheld', async () => {
+        const view = formView('[0,"a"]');
+        await throwingReplayOn(1, async (arm) => {
+            const m = await start();
+            document.body.innerHTML = view;
+            m.simulateOpen();
+            m.simulateMessage(null, null);
+            field('q').value = 'typed';
+            m.simulateClose(4500);
+            const before = m.posted.length;
+            arm(true);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            arm(false);
+            const first = m.posted.slice(before);
+            expect(sends(first)).toEqual([]);
+            expect(first.filter((d) => d[0] === 4)).toEqual([]); // nothing to acknowledge
+            m.simulateClose(4500);
+            const again = m.posted.length;
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', view]], null, true);
+            expect(sends(m.posted.slice(again)).map((s) => s[1])).toEqual(['a']);
+        });
+    });
+
+    for (const [shape, change, extra] of [
+        ['a transition holding an unreadable item', '[[20,{},[[0,"a"],null]]]', ''],
+        ['an unreadable item under az-transition', '[[0,"a"],null]', ' az-transition'],
+        ['an unreadable item', '[[0,"a"],null,[0,"b"]]', ''],
+        ['a number item', '[[0,"a"],5,[0,"b"]]', ''],
+        ['a string item', '[[0,"a"],"x",[0,"b"]]', ''],
+        ['a nested list item', '[[[0,"a"]],[0,"b"]]', ''],
+        ['a transition of null', '[[0,"a"],[20,{},null],[0,"b"]]', ''],
+        ['a transition holding a number', '[[20,{},[[0,"a"],5]]]', ''],
+        [
+            'a bad transition inside an in-place one',
+            '[[20,{},[[20,{},[[0,"a"],null]]]],[0,"b"]]',
+            '',
+        ],
+        [
+            'a good and a bad transition inside an in-place one',
+            '[[20,{},[[20,{},[[0,"a"]]],[20,{},[[0,"c"],null]]]],[0,"b"]]',
+            '',
+        ],
+        ['a bad transition beside a push_event', '[[20,{},[[0,"a"],null]],[0,"b"]]', ''],
+    ]) {
+        it(`replays what a change sends for ${shape}`, async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                const view = formView(change, extra);
+                const m = await start();
+                document.body.innerHTML = view;
+                m.simulateOpen();
+                m.simulateMessage(null, null);
+                const live = m.posted.length;
+                field('q').value = 'typed';
+                field('q').dispatchEvent(new Event('change', { bubbles: true }));
+                const liveSends = sends(m.posted.slice(live)).map((s) => s[1]);
+                m.simulateClose(4500);
+                const before = m.posted.length;
+                m.simulateOpen(true);
+                m.simulateMessage([[8, 'page', view]], null, true);
+                expect(sends(m.posted.slice(before)).map((s) => s[1])).toEqual(liveSends);
+            } finally {
+                warn.mockRestore();
+            }
+        });
+    }
+
+    it('skips an item the interpreter skips without a warning', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const { after } = await crashAndRemount(formView('[[0,"a"],5,"x",[[0,"z"]],[0,"b"]]'));
+            expect(sends(after).map((s) => s[1])).toEqual(['a', 'b']);
+            expect(warn).not.toHaveBeenCalled();
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it('the withheld replay comes back after one remount', async () => {
         const m = await startWithForms();
         field('q').value = 'v';
@@ -5842,6 +6206,27 @@ describe('crash and mount-failure recovery', () => {
         m.simulateClose(1006);
         remount(m); // replay 2
         expect(changeSends(m)).toBe(2);
+    });
+});
+
+describe('replayEvents', () => {
+    it("reads a transition's items as far as a change does: past a server navigate, not at all", async () => {
+        vi.resetModules();
+        const m = setupMockWorker(await import('./arizona.js'));
+        try {
+            const { replayEvents } = await import('./arizona-commands.js');
+            // A server navigate ends the transition's kind scan, so the item after
+            // it is reached only when the commands run, after the push_event before.
+            const events = [];
+            expect(() => replayEvents([20, {}, [[0, 'a'], [10, '/p'], null]], events)).toThrow();
+            expect(events).toEqual([[0, 'a']]);
+            // With none, the scan reads every item first, and runs none of them.
+            const none = [];
+            expect(() => replayEvents([20, {}, [[0, 'a'], [24, '/p'], null]], none)).toThrow();
+            expect(none).toEqual([]);
+        } finally {
+            m.restore();
+        }
     });
 });
 

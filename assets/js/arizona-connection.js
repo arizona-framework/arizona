@@ -21,7 +21,7 @@ import { destroyAllHooks, mountHooks, notifyUpdated } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
-import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
+import { parseTransitionAttr, runTransition, withTransitionAttr } from './arizona-transitions.js';
 import {
     formControls,
     isForm,
@@ -30,6 +30,7 @@ import {
     isWebUrl,
     loadPage,
     pageUrl,
+    warnOnce,
 } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
@@ -254,6 +255,12 @@ const _savedForms = new Map();
  * @type {Set<string>}
  */
 const _replayedForms = new Set();
+
+/**
+ * Event frames posted to the worker so far: a replay compares it across its run
+ * to tell whether it sent anything, whatever a command threw after.
+ */
+let _eventsSent = 0;
 
 /**
  * Keep the origin of the command running now for work it runs later: the returned
@@ -541,6 +548,7 @@ function sendEvent(
         armPendingTransition(null);
     }
     workerPost(W_SEND, JSON.stringify(frame, wellFormed));
+    _eventsSent++;
     return _connected;
 }
 
@@ -1392,6 +1400,47 @@ function rehomeHeld(marks) {
 }
 
 /**
+ * Replay the `push_event`s of a restored form's `az-change`, as far as the live
+ * `change` listener would run them. A value that does not parse replays nothing;
+ * one that parses is read item by item as the interpreter reads it, so an item it
+ * skips (a number, a string, a nested list) is skipped here too, and the replay
+ * stops at the first item it cannot read (a `null`, a transition of `null`, or a
+ * `null` a transition's scan meets) with the push_events before it. Only those two cases warn, once per
+ * form, rather than throw: a throw here would leave the forms after it unrestored
+ * and the resync frame unfinished (focus, `arizona:connected`).
+ * @param {HTMLFormElement} form
+ * @param {string} formId
+ * @param {string} azChange
+ */
+function replayForm(form, formId, azChange) {
+    /** @type {Array<Array<*>>} */
+    const events = [];
+    try {
+        // Fills `events` in order, so what it collected before a bad item stays.
+        // Wrapped in the form's `az-transition` as the live listener wraps it.
+        replayEvents(withTransitionAttr(form, JSON.parse(azChange)), events);
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        // Once per form: the value stays bad, and every reconnect would repeat it.
+        warnOnce(
+            `[arizona] az-change of form #${formId} did not replay as a command list: ${detail}`,
+            `az-change-replay:${formId}`,
+        );
+    }
+    if (events.length === 0) return;
+    const sent = _eventsSent;
+    try {
+        executeJS(form, null, events);
+    } catch (err) {
+        console.error('[arizona] az-change replay of form #%s failed', formId, err);
+    } finally {
+        // Only a form that sent something awaits the acknowledgement, including
+        // one whose replay threw after a send: nothing sent cannot crash the view.
+        if (_eventsSent !== sent) _replayedForms.add(formId);
+    }
+}
+
+/**
  * Restore form state after reconnection. Sets field values on matching forms
  * and replays their az-change push_events to sync server state, once: a replayed form is
  * tracked in `_replayedForms` until the server acknowledges the replay.
@@ -1466,11 +1515,7 @@ export function restoreFormState() {
         }
         // Only the push_events (see replayEvents): a fetch-only form asks for
         // no acknowledgement, so it never becomes suspect.
-        const events = replay && azChange && _connected ? replayEvents(JSON.parse(azChange)) : [];
-        if (events.length > 0) {
-            executeJS(form, null, events);
-            _replayedForms.add(formId);
-        }
+        if (replay && azChange && _connected) replayForm(formEl, formId, azChange);
     }
     _savedForms.clear();
     // The server handles a socket's frames in order, and an event synchronously,
