@@ -8786,18 +8786,20 @@ describe('form submit', () => {
         }
     });
 
-    // An SPA navigation cannot travel a down socket, but the page it names can be
-    // loaded for real -- what a disconnected az-navigate click does.
+    // After a deliberate end (1000) no socket comes back: the page the navigation
+    // names is loaded for real, as a navigate effect or an az-navigate click is.
     it.each([
         ['navigate', '[10,"/next"]', 'assign'],
         ['patch', '[24,"/next?tab=2"]', 'assign'],
         ['transition-wrapped navigate', '[20,{},[10,"/next"]]', 'assign'],
         ['replace navigate', '[10,"/next",{"replace":true}]', 'replace'],
-    ])('degrades a disconnected %s submit to a full page load', async (_label, cmd, how) => {
+    ])('loads the page of a %s submit after a deliberate end', async (_label, cmd, how) => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', `<form id="f" az-submit='${cmd}'></form>`);
         mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose(1000);
         const assign = vi.fn();
         const replace = vi.fn();
         const ev = new Event('submit', { bubbles: true, cancelable: true });
@@ -8821,6 +8823,112 @@ describe('form submit', () => {
         // Resolved as the submit ran (the load is held until its form reset).
         expect({ assign, replace }[how]).toHaveBeenCalledWith(new URL(url, document.baseURI).href);
         expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    // With a reconnect due (a first connect still dialing, an abnormal close), the
+    // navigation waits for the page on screen to be live again, as a link click or
+    // a navigate effect does: nothing loads, and it goes out after the resync. It
+    // raised no push_event, so its az-form-reset resets at once, as on a live socket.
+    it.each([['an abnormal close', 1006]])(
+        'a navigate submit during %s waits for the resync',
+        async (_label, code) => {
+            vi.resetModules();
+            const mod = await import('./arizona.js');
+            setupView(
+                'page',
+                `<form id="f" az-submit='[10,"/next"]' az-form-reset><input name="q" value=""></form>`,
+            );
+            mock = setupMockWorker(mod);
+            if (code !== null) {
+                mock.simulateOpen();
+                mock.simulateMessage(null, null);
+                mock.simulateClose(code);
+            }
+            const input = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+            input.value = 'typed';
+            const assign = vi.fn();
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            const { origin, href, pathname, search } = window.location;
+            vi.stubGlobal('location', { assign, replace: assign, origin, href, pathname, search });
+            try {
+                document.getElementById('f').dispatchEvent(ev);
+            } finally {
+                await Promise.resolve();
+                vi.unstubAllGlobals();
+            }
+            expect(ev.defaultPrevented).toBe(true);
+            expect(assign).not.toHaveBeenCalled();
+            expect(input.value).toBe('');
+            const navs = () => mock.getSentMessages().filter((m) => m[0] === 'navigate');
+            expect(navs()).toEqual([]);
+            mock.simulateOpen(code !== null);
+            mock.simulateMessage(
+                code === null ? null : [[8, 'page', '<div id="page" az-view></div>']],
+                null,
+                code !== null,
+            );
+            expect(navs().map((m) => m[1])).toEqual([{ path: '/next', qs: '' }]);
+            history.replaceState(null, '', '/');
+        },
+    );
+
+    // Before the page has mounted once nothing proves a socket will open (a proxy
+    // that never upgrades): the navigation loads its page, as with no socket.
+    it('loads the page of a navigate submit before the page has mounted', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[10,"/next"]'></form>`);
+        mock = setupMockWorker(mod);
+        const assign = vi.fn();
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        const { origin, href, pathname, search } = window.location;
+        vi.stubGlobal('location', { assign, replace: assign, origin, href, pathname, search });
+        try {
+            document.getElementById('f').dispatchEvent(ev);
+        } finally {
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+        }
+        expect(ev.defaultPrevented).toBe(true);
+        expect(assign).toHaveBeenCalledWith('http://localhost:3000/next');
+        expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    // A navigate submit pended while down loads once a reconnect attempt started
+    // after it fails without opening, as a link click does.
+    it('loads the page of a pending navigate submit once a later attempt fails', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[10,"/next"]'></form>`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateMessage(null, null); // the first connect's mount
+        mock.simulateClose(1006);
+        document
+            .getElementById('f')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const load = vi.fn();
+        const { origin, href, pathname, search } = window.location;
+        vi.stubGlobal('location', {
+            replace: load,
+            assign: load,
+            reload: load,
+            origin,
+            href,
+            pathname,
+            search,
+        });
+        try {
+            mock.worker.onmessage({ data: [4] }); // an attempt starts
+            mock.simulateClose(1006); // and fails without opening
+        } finally {
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+        }
+        // The address bar's own page, reloaded.
+        expect(load).toHaveBeenCalledOnce();
+        expect(href).toContain('/next');
+        history.replaceState(null, '', '/');
     });
 
     // A submit with no push_event of its own resets whatever its navigation does:
@@ -9334,6 +9442,8 @@ describe('form submit', () => {
         const mod = await import('./arizona.js');
         setupView('page', `<form id="f" az-submit='[10,"javascript:alert(1)"]'></form>`);
         mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose(1000);
         const assign = vi.fn();
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.stubGlobal('location', {

@@ -509,22 +509,18 @@ export function bindDocumentEvents(target, signal, abort) {
             openSubmit(form, e);
             try {
                 // While the socket is down (the worker drops pre-open sends):
-                // - an SPA navigation alone degrades to a full load of its URL, as a
-                //   disconnected az-navigate click does, and resets as the same
-                //   submit on a live socket would (it raised no push_event), before
-                //   its load starts, so Back does not bring the typed text back;
+                // - an SPA navigation alone runs as any navigate effect does, which
+                //   decides: with a reconnect due it waits for the page on screen to
+                //   be live again, else its URL is loaded; either way it resets as the
+                //   same submit on a live socket would (it raised no push_event),
+                //   before its load starts, so Back does not bring the typed text back;
                 // - anything else needing the socket drops the submission whole rather
                 //   than run it in part, keeping the typed fields (no reset), with a
                 //   warning and `arizona:submit-dropped` on the form for app feedback.
-                //   A navigation beside a fetch drops too: the load would cancel it.
+                //   A navigation beside a fetch drops too: a load would cancel it.
                 // - a `fetch` needs no socket and runs, so an HTTP login form works
                 //   before the first open.
-                if (!host.ready() && needs.nav && !needs.event && !needs.fetch) {
-                    host.leavePage(needs.nav[1], needs.nav[2]?.replace);
-                    closeSubmit(form, e);
-                    return;
-                }
-                if (!host.ready() && (needs.event || needs.nav)) {
+                if (!host.ready() && (needs.event || (needs.nav && needs.fetch))) {
                     dropSubmit(form, 'disconnected');
                     return;
                 }
