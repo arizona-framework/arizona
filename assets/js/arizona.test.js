@@ -3774,6 +3774,9 @@ describe('?local -- set/get content', () => {
         '{"c":{"0":5}}',
         '[null,null]',
         '5',
+        '{"a":{"bad name":"title"}}',
+        '{"a":{"":"title"}}',
+        '{"a":{"data-t":"title"},"ap":{"a=b":["x","y"]}}',
     ]) {
         it(`skips an az-local of the wrong shape (${bad}), warning once, and serves the rest`, async () => {
             vi.resetModules();

@@ -225,6 +225,25 @@ const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 /** @param {*} v @returns {boolean} an object of keys, as `c` and `a` hold */
 const isKeyMap = (v) => isObject(v) && Object.values(v).every((k) => typeof k === 'string');
 
+/**
+ * Whether every key of `v` is an attribute name the server's `?html` writes: not
+ * empty, no ASCII space or control character, none of `/ > = " ' <`. `setAttribute`
+ * throws on most others, which would end a scan partway.
+ * @param {Object<string, *>} v
+ * @returns {boolean}
+ */
+const namesAttrs = (v) => Object.keys(v).every(isAttrName);
+
+/** @param {string} n @returns {boolean} */
+function isAttrName(n) {
+    if (n === '') return false;
+    for (const ch of n) {
+        const c = ch.codePointAt(0) ?? 0;
+        if (c <= 0x20 || c === 0x7f || '/>="\'<'.includes(ch)) return false;
+    }
+    return true;
+}
+
 /** @param {*} v @returns {boolean} an affix: text, or a select value's static parts */
 const isAffix = (v) =>
     typeof v === 'string' || (Array.isArray(v) && v.every((p) => typeof p === 'string'));
@@ -240,9 +259,10 @@ function isLocalDesc(v) {
     return (
         isObject(v) &&
         (v.c === undefined || isKeyMap(v.c)) &&
-        (v.a === undefined || isKeyMap(v.a)) &&
+        (v.a === undefined || (isKeyMap(v.a) && namesAttrs(v.a))) &&
         (v.ap === undefined ||
             (isObject(v.ap) &&
+                namesAttrs(v.ap) &&
                 Object.values(v.ap).every(
                     (p) => Array.isArray(p) && p.length === 2 && isAffix(p[0]) && isAffix(p[1]),
                 )))
