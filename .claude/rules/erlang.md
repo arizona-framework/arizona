@@ -369,8 +369,8 @@ convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
 Path bindings and query params are the octets their percent-escapes encode, not
 necessarily UTF-8, so validate a value before rendering it: a non-UTF-8 one fails a
 dev-mode render and any `?json` render (`500`), and any live frame that renders it: a
-navigate to its page or a reconnect resync (socket closed `4501`), or a patch or a later
-diff (socket closed `4500`). Only the HTTP render of a production `?html` page carries
+reconnect resync (socket closed `4501`), a navigate or patch to its page (answered with the
+load of that page, then socket closed `4500`), or a later diff (socket closed `4500`). Only the HTTP render of a production `?html` page carries
 its raw bytes, so such a page loads and then dies on its first reconnect.
 `unicode:characters_to_binary/1` returns a binary unchanged only when it is UTF-8; apply
 it to each binary, since a `*name` binding is a list of segments (the call would join

@@ -58,16 +58,30 @@ The live process is linked. Exits map to WebSocket close codes:
   among them.
 - Anything else (including raises in `handle_in/2` and `handle_info/2`,
   among them a frame that cannot be encoded) -- crash close `4500`: the
-  view crashed after it mounted. Client remounts it in place by reconnecting.
+  view crashed after it mounted. Client remounts the page on screen in
+  place by reconnecting.
+
+A navigate or patch the socket cannot complete -- the live process crashes
+under its call (the new page's mount, the old page's unmount, a patch's
+`handle_update/3`), or a middleware, the route adapter or the encode raises --
+is answered with the full load of its URL (`navigate(Url, #{full => true,
+replace => true})`, as for a target the socket cannot serve in place), on its
+reply ref when it carried one, and the session then closes `4500`. The server
+knows which navigation failed, so the client loads that navigation's page and
+never sends it over the socket again. With the live process gone, a frame queued
+behind it stays unanswered; with it still up (a middleware raise), frames already
+queued run and are answered before the close. A navigation whose reply the client
+lost on its own side (its socket dropped, the page hidden) may have run and may be
+sent again, so a navigation must be idempotent, as any request.
 
 In dev mode (`arizona_reloader:enabled/0`) the socket also joins the reloader
 topic and closes `1001` on `{arizona_reloader, reload}`, whatever the client:
 funs held in the view's state (a stream's key fun, a fun prop) point into code
 a second reload purges, so the client reconnects and remounts on fresh code.
 
-A failure to mount the view closes `4501` instead, whatever the exit: the
-connect's mount (`init/4`), a reconnect's deferred resync mount, and a
-navigate -- each up to the frame that delivers the view.
+A failure to mount the page on screen closes `4501` instead, whatever the
+exit: the connect's mount (`init/4`) and a reconnect's deferred resync mount,
+each up to the frame that delivers the view.
 The page itself may be stale (a deploy changed the route or the assets), so
 the client reloads it after a jittered delay.
 """.
@@ -458,8 +472,14 @@ answer_unrecognized(_Frame, Socket) ->
 %% not, so the answer names it, and a client never sends it over the socket again,
 %% where it would fail again. The close comes from the crash exit queued behind the
 %% process's last pushes, or, with the process still up, from a message to self
-%% queued behind the reply. Frames queued behind the failed one find the process
-%% gone and stay unanswered: they never ran, and the close fails their refs.
+%% queued behind the reply. With the process gone, frames queued behind the failed
+%% one find it gone and stay unanswered: they did not run, and the close fails their
+%% refs. With it still up, the frames already queued ahead of that message run and
+%% are answered as usual before the close.
+%%
+%% Residual window: a navigate whose new page mounted but whose reply then failed to
+%% encode leaves the live process on the new page, so frames queued ahead of the
+%% close run against it, not the page on screen.
 %%
 %% A call that finds the process gone before it (`noproc`), or ended deliberately
 %% (a drain, a `shutdown`), is not this frame's failure: it is dropped unanswered,
@@ -1105,9 +1125,9 @@ event_target(_Target, RootViewId) -> RootViewId.
 %% leave the ref behind for a later frame (a push would then settle a frame the
 %% client sent next). A reply gets the ref spliced in at the front of its object
 %% (every reply frame is a JSON object built by encode_frame/1); no reply becomes
-%% one carrying only the ref. A close answers nothing: the client fails every
-%% ref still pending on it. A raise never reaches here -- crash_close/4 drops the
-%% frame and the exit or close that follows does the same.
+%% one carrying only the ref. A raise never reaches here: crash_close/4 drops an
+%% event frame, whose ref the close that follows fails on the client, and
+%% nav_frame/5 answers a navigate/patch frame with a full load.
 answer(Ref, {ok, Socket}) ->
     {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $}], Socket};
 answer(Ref, {reply, [<<${, Rest/binary>> | Tail], Socket}) ->
