@@ -29,11 +29,54 @@ const OP_MOVE = 9;
 // arizona_effect op codes (mirror include/arizona_effect.hrl).
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
+const EFFECT_TRANSITION = 20;
+const EFFECT_PATCH = 24;
 
 // A command value holds one command ([0, "inc"]) or a list of them
 // ([[0, "inc"], [10, "/n"]]), told apart by the first element exactly as the
 // web client's executeJS does.
 const commands = (cmds) => (Array.isArray(cmds) && Array.isArray(cmds[0]) ? cmds : [cmds]);
+
+// Does an effect list navigate away from `page` (a URL), the page a navigate's
+// reply answers for (a navigate/patch, also inside a transition)? Such a reply is
+// itself a navigation (a redirect, a full navigate), so the page it asked for did
+// not go on screen. One that only names a fragment of that page, and is no full
+// navigate, has nothing to ask the server.
+const navigates = (effects, page) =>
+    (effects ?? []).some(
+        (c) =>
+            Array.isArray(c) &&
+            (((c[0] === EFFECT_NAVIGATE || c[0] === EFFECT_PATCH) &&
+                (c[2]?.full === true || !fragmentOf(c[1], page))) ||
+                (c[0] === EFFECT_TRANSITION && navigates(commands(c[2]), page))),
+    );
+
+// Does `url`, resolved against `page`, name a fragment of it (the same path and
+// query, an empty one included)? A native client has no `<base>`: the page is
+// the base its URLs resolve against.
+function fragmentOf(url, page) {
+    if (typeof url !== 'string') return false;
+    const u = new URL(url, page);
+    const p = new URL(page);
+    const hasQuery = (h) => h.split('#')[0].includes('?');
+    return (
+        (u.hash !== '' || u.href.endsWith('#')) &&
+        u.pathname === p.pathname &&
+        u.search === p.search &&
+        hasQuery(u.href) === hasQuery(p.href)
+    );
+}
+
+// Is `c` a navigation (a navigate/patch, or a transition wrapping one)? Newer wins:
+// the reply to an older navigate than the last one sent runs none.
+const isNavigation = (c) =>
+    Array.isArray(c) &&
+    (c[0] === EFFECT_NAVIGATE ||
+        c[0] === EFFECT_PATCH ||
+        (c[0] === EFFECT_TRANSITION && commands(c[2]).some(isNavigation)));
+
+// A page as a URL fragments resolve against.
+const pageUrl = (path, qs) => `http://page${path}${qs ? `?${qs}` : ''}`;
 
 // Heartbeat (the protocol of assets/js/arizona-worker.js): the client pings '0' every 30s
 // and the server pongs '1'; a missed pong before the next tick means the socket
@@ -47,6 +90,18 @@ const HEARTBEAT_MS = 30000;
 const WS_CLOSE_CRASH = 4500;
 const WS_CLOSE_MOUNT_FAILED = 4501;
 const CRASH_STABLE_MS = 10000;
+// The first reconnect attempt index whose backoff delay is the cap (10 s).
+const BACKOFF_CAP_ATTEMPT = 3;
+// The fresh connections that answer navigates issued with no user input are bounded
+// (mirrors navLoadDelay in assets/js/arizona-connection.js): past NAV_LOAD_MAX within
+// NAV_LOAD_WINDOW each waits NAV_LOAD_FAILSAFE, and that slow state sticks until
+// NAV_LOAD_QUIET passes with none. Two pages whose navigates fail over the socket
+// but mount fresh, each navigating to the other on connect, would otherwise
+// reconnect to each other as fast as the server answers.
+const NAV_LOAD_WINDOW = 300000;
+const NAV_LOAD_MAX = 10;
+const NAV_LOAD_FAILSAFE = 30000;
+const NAV_LOAD_QUIET = 30000;
 
 // Fingerprint-cache bound (mirrors FP_CACHE_MAX in assets/js/arizona-core.js).
 // A fingerprint hashes a template's statics, so every deploy mints a new key and
@@ -96,6 +151,43 @@ export class NativeClient {
         // reply to an untagged frame) can never be mistaken for one.
         this._nextRef = 1;
         this._replies = new Map();
+        // Reconnect to the page on screen (mirrors the web client). The reconnect
+        // re-mounts what `wsUrl` names, which moves only when a navigate's reply
+        // arrives that put its page on screen. `_navOwed` holds the navigates sent
+        // on the open socket by ref; `_pendingNav` is the one a down socket could
+        // not carry -- issued while down, or owed a reply a close lost -- sent once
+        // the reconnect's OP_REPLACE has put the page on screen back.
+        this._live = false;
+        this._mountProof = false;
+        this._ended = false;
+        // Connect attempts started so far, and whether the last one was scheduled at
+        // the backoff's cap: a pending navigation records the count when pended, and
+        // once an attempt started after it fails without opening, no socket is about
+        // to carry it, so it connects fresh to its page -- one a close lost (`lost`)
+        // only once an attempt at the cap fails, so a restart has time to come back.
+        this._dials = 0;
+        this._dialCapped = false;
+        this._nextCapped = false;
+        this._navOwed = new Map();
+        this._pendingNav = null;
+        // The reply ref of the last navigate sent (see isNavigation).
+        this._lastNavRef = null;
+        // While a server frame's effects run: what they send is no user input.
+        this._inFrame = false;
+        // A person acted on the view on screen since it mounted: the UI layer called
+        // noteUserInput() from a real touch or key handler (tap() does). A bare app
+        // navigate()/pushEvent() is no person. Set to the issuing navigate's own
+        // `acted` when its reply mounts the view, cleared at any other mount. A
+        // navigate issued with no input since (one a view makes on connect) is what
+        // a loop is made of; one answering a person's input is theirs.
+        this._userActed = false;
+        // While the effects of the reply to a navigate issued with no input run.
+        this._answeringNav = false;
+        // The fresh connection of a bounded full navigate is waiting its delay: the
+        // client has no open socket for up to NAV_LOAD_FAILSAFE meanwhile.
+        this._delayedReopen = false;
+        // The fresh connections answering navigates issued with no input (`{t, slow}`).
+        this._navLoads = [];
     }
 
     connect() {
@@ -111,8 +203,13 @@ export class NativeClient {
     // the OP_REPLACE the server sends.
     _open() {
         this._mountedAt = null;
+        this._ended = false;
+        this._dials++;
+        this._dialCapped = this._nextCapped;
         this.ws = new WebSocket(this.wsUrl);
         this.ws.onopen = () => {
+            this._live = true;
+            this._mountProof = true;
             this.ws.send(JSON.stringify(['cached_fps', this._cachedFps()]));
             this._startHeartbeat();
         };
@@ -136,7 +233,21 @@ export class NativeClient {
             }
             // An OP_REPLACE is a mount: the reconnect's first render, or a
             // navigate's new view.
-            if (msg.o?.some((op) => op[0] === OP_REPLACE)) this._mountedAt = Date.now();
+            const mounted = msg.o?.some((op) => op[0] === OP_REPLACE) ?? false;
+            const nav = msg.r === undefined ? undefined : this._navOwed.get(msg.r);
+            if (mounted) {
+                this._mountedAt = Date.now();
+                // A navigate reply's mount keeps its navigate's input.
+                this._userActed = nav?.acted === true;
+            }
+            // A navigate's reply that put its page on screen moves the reconnect
+            // there; one that navigates again moves nothing.
+            const effects =
+                nav && msg.r !== this._lastNavRef ? msg.e?.filter((c) => !isNavigation(c)) : msg.e;
+            if (nav) {
+                this._navOwed.delete(msg.r);
+                if (!navigates(msg.e, pageUrl(nav.path, nav.qs))) this._dialPage(nav.path, nav.qs);
+            }
             if (msg.o) this._applyOps(msg.o);
             // After the ops, so an awaited frame resolves on the state its reply
             // produced; before the effects, so a full navigate among them (which
@@ -146,17 +257,65 @@ export class NativeClient {
             // Handler-returned effects (the "e" array): dispatch the portable
             // ones, skip web-only effects (set_title, dispatch_event, ...).
             // Isolated per effect, like the ops.
-            if (msg.e) for (const cmd of msg.e) this._runEffectSafe(cmd);
+            this._inFrame = true;
+            this._answeringNav = nav !== undefined && !nav.acted;
+            try {
+                if (effects) for (const cmd of effects) this._runEffectSafe(cmd);
+            } finally {
+                this._inFrame = false;
+                this._answeringNav = false;
+            }
             if (this.root) this._resolveConnect(this); // first frame applied (no-op after)
+            // The socket's first mount put the page on screen back: send the
+            // navigation it could not carry.
+            if (mounted && this._mountProof) {
+                this._mountProof = false;
+                this._replayPendingNav();
+            }
             this._flushWaiters();
         };
         this.ws.onclose = (e) => {
             this._stopHeartbeat();
-            // A close loses every reply still owed, whatever happens next.
+            // An attempt that never opened.
+            const failedAttempt = !this._live;
+            this._live = false;
+            this._mountProof = false;
+            // A close loses every reply still owed, whatever happens next. The last
+            // navigate owed one becomes the pending one, whatever the close: the
+            // server answers a navigate it could not complete with a full navigate,
+            // so one still owed is not one it failed (one whose reply this client
+            // lost may run again: a navigation must be idempotent).
+            const last = [...this._navOwed.values()].pop();
+            this._navOwed.clear();
+            if (last) this._pendingNav = { ...last, dials: this._dials, lost: true };
             this._failReplies(new Error(`socket closed (${e.code}) before the reply`));
+            if (this._closing) {
+                this._pendingNav = null;
+                return;
+            }
+            // No reconnect follows a deliberate end (1000): a pending navigation
+            // connects fresh to its page, as the browser loads it.
+            if (e.code === 1000 && this._pendingNav) {
+                const { path, qs } = this._pendingNav;
+                this._pendingNav = null;
+                this.reload(qs ? `${path}?${qs}` : path);
+                return;
+            }
             // No reconnect on an intentional close (1000) or a never-connected
-            // initial failure; any other drop reconnects with backoff.
-            if (this._closing || e.code === 1000 || !this.root) return;
+            // initial failure; any other drop reconnects with backoff. After a
+            // deliberate end a navigate connects fresh to its page (see navigate).
+            if (e.code === 1000) this._ended = true;
+            if (e.code === 1000 || !this.root) return;
+            const pending = this._pendingNav;
+            if (
+                failedAttempt &&
+                pending &&
+                this._dials > pending.dials &&
+                (!pending.lost || this._dialCapped)
+            ) {
+                this.reload(pending.qs ? `${pending.path}?${pending.qs}` : pending.path);
+                return;
+            }
             // Reset the backoff only after a working session: one that mounted,
             // did not fail to mount, and did not crash right after its last mount.
             if (
@@ -166,6 +325,7 @@ export class NativeClient {
             ) {
                 this._reconnectAttempt = 0;
             }
+            this._nextCapped = this._reconnectAttempt >= BACKOFF_CAP_ATTEMPT;
             this._reconnectTimer = setTimeout(
                 () => this._open(),
                 backoff(this._reconnectAttempt++),
@@ -197,6 +357,7 @@ export class NativeClient {
         this._closing = true;
         this._stopHeartbeat();
         if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+        this._delayedReopen = false;
         if (this.ws) this.ws.close(1000);
     }
 
@@ -233,6 +394,12 @@ export class NativeClient {
         this.ws.send(JSON.stringify([viewId, event, payload]));
     }
 
+    // A person acted: the UI layer calls this from a real touch or key handler
+    // (tap() does), as the web client listens for trusted pointer and key events.
+    noteUserInput() {
+        this._userActed = true;
+    }
+
     // pushEvent, resolved once the server has handled the event: the frame
     // carries a reply ref, which the server answers with exactly one frame even
     // when the event changes nothing (and so would otherwise get no reply), or
@@ -249,14 +416,17 @@ export class NativeClient {
     // socket).
     navigateAwait(path, timeoutMs = 2000) {
         const [p, qs = ''] = path.split('?');
-        return this._sendAwait(['navigate', { path: p, qs }], `navigate ${path}`, timeoutMs, () =>
-            this._retargetReconnect(p),
+        return this._sendAwait(
+            ['navigate', { path: p, qs }],
+            `navigate ${path}`,
+            timeoutMs,
+            (ref) => this._sentNav(ref, p, qs, this._userActed),
         );
     }
 
     // Send `frame` with a fresh reply ref appended and wait for the frame that
-    // carries it back. `sent` runs once the frame is actually on the socket.
-    _sendAwait(frame, label, timeoutMs, sent = () => {}) {
+    // carries it back. `sent(ref)` runs once the frame is actually on the socket.
+    _sendAwait(frame, label, timeoutMs, sent = (_ref) => {}) {
         const ref = this._nextRef++;
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -266,7 +436,7 @@ export class NativeClient {
             this._replies.set(ref, { resolve, reject, timer });
             try {
                 this.ws.send(JSON.stringify([...frame, ref]));
-                sent();
+                sent(ref);
             } catch (err) {
                 // Not sent (the socket is still connecting, or already gone), so
                 // no reply is coming: fail now rather than at the timeout.
@@ -295,19 +465,93 @@ export class NativeClient {
 
     // SPA navigate: transition to a new view on the same socket (the server's
     // handle_navigate re-mounts and replies with OP_REPLACE). Mirrors the browser
-    // sending ['navigate', {path, qs}].
+    // sending ['navigate', {path, qs}, ref]. While the socket is down it is not
+    // sent: it becomes the pending navigation (the last one wins), sent once the
+    // reconnect has put the page on screen back -- once a page has mounted and no
+    // deliberate end (1000) stopped the reconnects: otherwise nothing proves a
+    // socket will open again, so it connects fresh to its page, as the browser
+    // loads it. After close() nothing runs.
     navigate(path) {
-        const [p, qs = ''] = path.split('?');
-        this.ws.send(JSON.stringify(['navigate', { path: p, qs }]));
-        this._retargetReconnect(p);
+        // A person navigating does not wait out a bounded fresh connection, nor land
+        // on the page it was for: it connects fresh to their page at once.
+        if (!this._inFrame && this._userActed && this._delayedReopen) {
+            this.reload(path);
+            return;
+        }
+        this._navigate(path, this._userActed);
     }
 
-    // Keep the reconnect URL in sync so a drop re-mounts the navigated path, not
-    // the launch path (mirrors the browser worker updating _wsUrl on a navigate).
-    // Reconnect = a fresh mount, so only the route (_az_path) matters.
-    _retargetReconnect(path) {
+    // `acted`: the view had user input when it was issued (see `_userActed`).
+    _navigate(path, acted) {
+        const [p, qs = ''] = path.split('?');
+        if (this._closing) return;
+        if (!this._live && (!this.root || this._ended)) {
+            this.reload(path);
+            return;
+        }
+        if (!this._live) {
+            // One to the page on screen leaves nothing to carry: drop the pending one.
+            this._pendingNav =
+                this._shownUrl() === pageUrl(p, qs)
+                    ? null
+                    : { path: p, qs, dials: this._dials, lost: false, acted };
+            return;
+        }
+        const ref = this._nextRef++;
+        this.ws.send(JSON.stringify(['navigate', { path: p, qs }, ref]));
+        this._sentNav(ref, p, qs, acted);
+    }
+
+    // A navigate went out on the open socket: it is owed a reply, and it
+    // supersedes the pending one.
+    _sentNav(ref, path, qs, acted) {
+        this._lastNavRef = ref;
+        this._pendingNav = null;
+        this._navOwed.set(ref, { path, qs, acted });
+    }
+
+    // Send the pending navigation, unless it names the page on screen -- the one
+    // the reconnect just mounted.
+    _replayPendingNav() {
+        const pending = this._pendingNav;
+        this._pendingNav = null;
+        if (!pending) return;
+        if (this._shownUrl() === pageUrl(pending.path, pending.qs)) return;
+        this._navigate(pending.qs ? `${pending.path}?${pending.qs}` : pending.path, pending.acted);
+    }
+
+    // Record a fresh connection answering a navigate issued with no input, and return
+    // how long it must wait: 0 within the bound, NAV_LOAD_FAILSAFE past it.
+    _navLoadDelay() {
+        const now = Date.now();
+        const recent = this._navLoads.filter((e) => now - e.t < NAV_LOAD_WINDOW);
+        const last = recent.reduce((a, e) => (a === null || e.t > a.t ? e : a), null);
+        const slow =
+            recent.length >= NAV_LOAD_MAX || (last?.slow === true && now - last.t < NAV_LOAD_QUIET);
+        const delay = slow ? NAV_LOAD_FAILSAFE : 0;
+        this._navLoads = [...recent, { t: now + delay, slow }];
+        return delay;
+    }
+
+    // The page on screen, as a URL fragments resolve against.
+    _shownUrl() {
+        const u = new URL(this.wsUrl);
+        const qs = new URLSearchParams(
+            [...u.searchParams].filter(([k]) => !k.startsWith('_az_')),
+        ).toString();
+        return pageUrl(u.searchParams.get('_az_path'), qs);
+    }
+
+    // Point the reconnect at the page on screen: the route in `_az_path`, the
+    // query as plain params beside the framework ones (the way the browser
+    // connect carries them).
+    _dialPage(path, qs) {
         const u = new URL(this.wsUrl);
         u.searchParams.set('_az_path', path);
+        for (const key of [...u.searchParams.keys()]) {
+            if (!key.startsWith('_az_')) u.searchParams.delete(key);
+        }
+        for (const [k, v] of new URLSearchParams(qs)) u.searchParams.append(k, v);
         this.wsUrl = u.toString();
     }
 
@@ -320,13 +564,7 @@ export class NativeClient {
         // Path and query, the way the browser connect carries them: the route in
         // `_az_path`, the query as plain params beside the framework ones.
         const [p, qs = ''] = path.split('?');
-        const u = new URL(this.wsUrl);
-        u.searchParams.set('_az_path', p);
-        for (const key of [...u.searchParams.keys()]) {
-            if (!key.startsWith('_az_')) u.searchParams.delete(key);
-        }
-        for (const [k, v] of new URLSearchParams(qs)) u.searchParams.append(k, v);
-        this.wsUrl = u.toString();
+        this._dialPage(p, qs);
         // The old socket's handlers are detached below, so its close would fail
         // nothing: what it still owes is lost with it, now.
         this._failReplies(new Error(`socket replaced by a full navigate to ${path}`));
@@ -335,8 +573,23 @@ export class NativeClient {
         old.onclose = null;
         old.onerror = null;
         this._stopHeartbeat();
+        // A fresh page: nothing the old one owed or held back carries over.
+        this._live = false;
+        this._mountProof = false;
+        this._navOwed.clear();
+        this._pendingNav = null;
         old.close(1000);
-        this._open();
+        // One answering a navigate issued with no input is bounded (`_navLoadDelay`).
+        const delay = this._answeringNav ? this._navLoadDelay() : 0;
+        if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+        this._delayedReopen = delay > 0;
+        if (delay === 0) this._open();
+        else
+            this._reconnectTimer = setTimeout(() => {
+                this._delayedReopen = false;
+                this._open();
+            }, delay);
     }
 
     // Interpret a node's tap command prop (an arizona_effect command array) and
@@ -345,6 +598,8 @@ export class NativeClient {
     // `false`, or none at all) fires nothing.
     tap(node, prop = 'on_tap') {
         if (!Array.isArray(node[prop])) return;
+        // A tap is a person's touch.
+        this.noteUserInput();
         for (const cmd of commands(node[prop])) this._runEffect(cmd, true, node.__view);
     }
 
@@ -360,9 +615,11 @@ export class NativeClient {
         };
         if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT)
             this.pushEvent(arg(1), cmd[2] ?? {}, view);
-        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE)
+        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) {
+            // A fragment of the page on screen has nothing to ask the server.
+            if (cmd[2]?.full !== true && fragmentOf(arg(1), this._shownUrl())) return;
             cmd[2]?.full === true ? this.reload(arg(1)) : this.navigate(arg(1));
-        else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
+        } else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
     }
 
     // The server's "e" entries are wire input arriving asynchronously, so one

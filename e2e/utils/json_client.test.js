@@ -22,6 +22,7 @@ function clientWithRecorder(viewId = 'json_counter') {
     const client = new NativeClient('http://localhost:4040', '/json/counter');
     const sent = [];
     client.ws = { send: (frame) => sent.push(frame) };
+    client._live = true; // as an open socket leaves it
     client.viewId = viewId;
     return { client, sent };
 }
@@ -67,7 +68,7 @@ describe('JSON client effect dispatch', () => {
     it('dispatches a navigate frame with the split path and query', () => {
         const { client, sent } = clientWithRecorder();
         client._runEffect([EFFECT_NAVIGATE, '/foo?x=1'], true, undefined);
-        expect(JSON.parse(sent[0])).toEqual(['navigate', { path: '/foo', qs: 'x=1' }]);
+        expect(JSON.parse(sent[0])).toEqual(['navigate', { path: '/foo', qs: 'x=1' }, 1]);
     });
 
     // A `full` navigate cannot be served on this socket, and sending it back
@@ -208,7 +209,7 @@ describe('JSON client effect dispatch', () => {
         client.tap(node);
         expect(sent.map((f) => JSON.parse(f))).toEqual([
             ['child_view', 'save', { id: '7' }],
-            ['navigate', { path: '/done', qs: '' }],
+            ['navigate', { path: '/done', qs: '' }, 1],
         ]);
     });
 });
@@ -592,7 +593,7 @@ describe('JSON client op application', () => {
             const effects = ws.latest().sent.slice(1);
             expect(effects.map((f) => JSON.parse(f))).toEqual([
                 ['json_x', 'saved', { id: '1' }],
-                ['navigate', { path: '/done', qs: 'x=1' }],
+                ['navigate', { path: '/done', qs: 'x=1' }, 1],
             ]);
             expect(warn).toHaveBeenCalledTimes(1);
         } finally {
@@ -975,6 +976,685 @@ describe('JSON client reply refs', () => {
         } finally {
             ws.restore();
             vi.useRealTimers();
+        }
+    });
+});
+
+// The reconnect re-mounts the page on screen: what `wsUrl` names moves only when a
+// navigate's reply arrives that put its page there, and a navigation a down socket
+// could not carry goes out once the reconnect has put that page back.
+describe('JSON client reconnect to the page on screen', () => {
+    const replace = (id) =>
+        JSON.stringify({ o: [[OP_REPLACE, id, { f: 'R', s: ROOT_STATICS, d: [id, ''] }]] });
+    const path = (url) => new URL(url).searchParams.get('_az_path');
+    const navs = (sock) => sock.sent.map((f) => JSON.parse(f)).filter((f) => f[0] === 'navigate');
+
+    function connected() {
+        vi.useFakeTimers();
+        const ws = installWebSocketStub();
+        const client = newClient();
+        client.connect();
+        ws.latest().simulateOpen();
+        ws.latest().simulateMessage(replace('json_x'));
+        return { ws, client };
+    }
+
+    /** Drop the socket abnormally and open the reconnect. */
+    function redial(ws, code = 1006) {
+        ws.latest().close(code);
+        vi.advanceTimersByTime(15000);
+        ws.latest().simulateOpen();
+        return ws.latest();
+    }
+
+    afterEach(() => vi.useRealTimers());
+
+    it('does not move the reconnect when a navigate is sent', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b?x=1');
+            const sock = redial(ws);
+            expect(path(sock.url)).toBe('/json/x');
+            expect(sock.url).not.toContain('x=1');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('moves the reconnect when the reply put the page on screen', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b?x=1');
+            const ref = navs(ws.latest()).at(-1)[2];
+            ws.latest().simulateMessage(
+                JSON.stringify({ ...JSON.parse(replace('json_b')), r: ref }),
+            );
+            const sock = redial(ws);
+            expect(path(sock.url)).toBe('/json/b');
+            expect(new URL(sock.url).searchParams.get('x')).toBe('1');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('does not move the reconnect when the reply navigates again', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/gated');
+            const ref = navs(ws.latest()).at(-1)[2];
+            ws.latest().simulateMessage(
+                JSON.stringify({
+                    r: ref,
+                    e: [[EFFECT_NAVIGATE, '/json/login', { replace: true }]],
+                }),
+            );
+            const sock = redial(ws);
+            expect(path(sock.url)).toBe('/json/x');
+            // The redirect's own navigate, lost with the socket, goes out after the mount.
+            sock.simulateMessage(replace('json_x'));
+            expect(navs(sock).map((f) => f[1])).toEqual([{ path: '/json/login', qs: '' }]);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('moves the reconnect when the reply only navigates to a fragment of the page', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b?x=1');
+            const ref = navs(ws.latest()).at(-1)[2];
+            ws.latest().simulateMessage(
+                JSON.stringify({
+                    ...JSON.parse(replace('json_b')),
+                    r: ref,
+                    e: [[EFFECT_NAVIGATE, '#bottom', {}]],
+                }),
+            );
+            // A fragment has nothing to ask the server: no frame goes out for it.
+            expect(navs(ws.latest()).length).toBe(1);
+            const sock = redial(ws);
+            expect(path(sock.url)).toBe('/json/b');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('sends a navigate whose reply a close lost again after the reconnect mounts', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b');
+            const sock = redial(ws);
+            expect(navs(sock)).toEqual([]);
+            sock.simulateMessage(replace('json_x'));
+            expect(navs(sock).map((f) => f[1])).toEqual([{ path: '/json/b', qs: '' }]);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('holds a navigate issued while down, the last one winning, for the reconnect', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1006);
+            client.navigate('/json/a');
+            client.navigate('/json/b');
+            vi.advanceTimersByTime(15000);
+            const sock = ws.latest();
+            sock.simulateOpen();
+            expect(path(sock.url)).toBe('/json/x');
+            sock.simulateMessage(replace('json_x'));
+            expect(navs(sock).map((f) => f[1])).toEqual([{ path: '/json/b', qs: '' }]);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('drops a pending navigate naming the page on screen', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1006);
+            client.navigate('/json/x');
+            vi.advanceTimersByTime(15000);
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(replace('json_x'));
+            expect(navs(ws.latest())).toEqual([]);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // An owed navigate is one the server never ran: one it ran and could not
+    // complete is answered with a full navigate before the close.
+    for (const code of [4500, 4501]) {
+        it(`sends again a navigate a ${code} lost once the page on screen is back`, () => {
+            const { ws, client } = connected();
+            try {
+                client.navigate('/json/b');
+                const sock = redial(ws, code);
+                expect(path(sock.url)).toBe('/json/x');
+                sock.simulateMessage(replace('json_x'));
+                expect(navs(sock).map((f) => f[1])).toEqual([{ path: '/json/b', qs: '' }]);
+            } finally {
+                ws.restore();
+            }
+        });
+    }
+
+    it('connects fresh to the page of a navigate the server answered with a full navigate', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b');
+            const sock = ws.latest();
+            const ref = navs(sock)[0][2];
+            sock.simulateMessage(
+                JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+            );
+            expect(ws.instances.length).toBe(2);
+            expect(path(ws.latest().url)).toBe('/json/b');
+            // The old socket's 4500 is detached: nothing is sent again.
+            sock.close(4500);
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(replace('json_b'));
+            expect(navs(ws.latest())).toEqual([]);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('runs no navigation a reply to an older navigate carries: newer wins', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b');
+            client.navigate('/json/c');
+            const sock = ws.latest();
+            const [b] = navs(sock).map((f) => f[2]);
+            sock.simulateMessage(
+                JSON.stringify({ r: b, e: [[10, '/json/b', { full: true, replace: true }]] }),
+            );
+            sock.simulateMessage(JSON.stringify({ r: b + 1, e: [[10, '/json/login', {}]] }));
+            // The stale full navigate did not replace the socket; the newer reply's
+            // redirect went out on it.
+            expect(ws.instances.length).toBe(1);
+            expect(navs(sock).map((f) => f[1].path)).toEqual(['/json/b', '/json/c', '/json/login']);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // Two pages that navigate to each other on connect, every navigate answered with
+    // a full navigate: the fresh connections answering navigates issued with no
+    // person acting are bounded, 10 then one per 30 s, slow until 30 s pass with none.
+    it('bounds the fresh connections answering navigates issued with no person acting', () => {
+        const { ws, client } = connected();
+        try {
+            /** The open socket's view navigates on connect; answered with a full one. */
+            const bounce = (to) => {
+                const sock = ws.latest();
+                sock.simulateMessage(JSON.stringify({ e: [[10, to, {}]] }));
+                const ref = navs(sock).at(-1)[2];
+                sock.simulateMessage(
+                    JSON.stringify({ r: ref, e: [[10, to, { full: true, replace: true }]] }),
+                );
+            };
+            const opened = () => ws.instances.length;
+            for (let i = 0; i < 10; i++) {
+                const n = opened();
+                bounce(i % 2 ? '/json/a' : '/json/b');
+                expect(opened()).toBe(n + 1);
+                ws.latest().simulateOpen();
+                ws.latest().simulateMessage(replace('json_x'));
+            }
+            const n = opened();
+            bounce('/json/a');
+            expect(opened()).toBe(n);
+            vi.advanceTimersByTime(29999);
+            expect(opened()).toBe(n);
+            vi.advanceTimersByTime(1);
+            expect(opened()).toBe(n + 1);
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(replace('json_x'));
+            // Still slow: the next comes right after.
+            bounce('/json/b');
+            expect(opened()).toBe(n + 1);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('never bounds a full navigate answering a navigate the user issued', () => {
+        const { ws, client } = connected();
+        try {
+            for (let i = 0; i < 20; i++) {
+                const n = ws.instances.length;
+                client.noteUserInput(); // a person's touch
+                client.navigate('/json/b');
+                const sock = ws.latest();
+                const ref = navs(sock).at(-1)[2];
+                sock.simulateMessage(
+                    JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+                );
+                expect(ws.instances.length).toBe(n + 1);
+                ws.latest().simulateOpen();
+                ws.latest().simulateMessage(replace('json_x'));
+            }
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    /** The open socket's view navigates on its own (a push), answered with a full one. */
+    function bounceOnce(ws, to) {
+        const sock = ws.latest();
+        sock.simulateMessage(JSON.stringify({ e: [[10, to, {}]] }));
+        const ref = navs(sock).at(-1)[2];
+        sock.simulateMessage(
+            JSON.stringify({ r: ref, e: [[10, to, { full: true, replace: true }]] }),
+        );
+    }
+    const full = () => Array(10).fill({ t: Date.now(), slow: false });
+
+    it('never bounds a user stepping through server redirects', () => {
+        const { ws, client } = connected();
+        try {
+            for (let i = 0; i < 20; i++) {
+                const n = ws.instances.length;
+                const sock = ws.latest();
+                client.noteUserInput(); // a person's touch...
+                client.pushEvent('next'); // ...raises the step's event...
+                sock.simulateMessage(JSON.stringify({ e: [[10, '/json/b', {}]] })); // ...redirected
+                const ref = navs(sock).at(-1)[2];
+                sock.simulateMessage(
+                    JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+                );
+                expect(ws.instances.length).toBe(n + 1);
+                ws.latest().simulateOpen();
+                ws.latest().simulateMessage(replace('json_x'));
+                vi.advanceTimersByTime(20000);
+            }
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('stays slow while the loop keeps coming, however slowly', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = [{ t: Date.now() - 10000, slow: true }];
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/b');
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('a navigate issued with no input keeps that across its replay', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            ws.latest().simulateMessage(JSON.stringify({ e: [[10, '/json/b', {}]] }));
+            const sock = redial(ws); // its reply lost; sent again once the page is back
+            sock.simulateMessage(replace('json_x'));
+            const ref = navs(sock).at(-1)[2];
+            const n = ws.instances.length;
+            sock.simulateMessage(
+                JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+            );
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it("a person's navigate during a delayed fresh connection connects to their page", () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/b');
+            expect(ws.instances.length).toBe(n);
+            client.noteUserInput();
+            client.navigate('/json/c');
+            // At once, straight to their page: not the loop's.
+            expect(ws.instances.length).toBe(n + 1);
+            expect(path(ws.latest().url)).toBe('/json/c');
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(replace('json_c'));
+            expect(navs(ws.latest())).toEqual([]);
+            // The delayed one is gone (short of the heartbeat's missed-pong close).
+            vi.advanceTimersByTime(31000);
+            expect(ws.instances.length).toBe(n + 1);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('a bare app navigate or pushEvent is no person: the loop stays bounded', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            client.pushEvent('hello');
+            const n = ws.instances.length;
+            client.navigate('/json/b'); // the app's own, not a person's
+            const sock = ws.latest();
+            const ref = navs(sock).at(-1)[2];
+            sock.simulateMessage(
+                JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+            );
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('a mount clears the input: a view navigating on its own is bounded again', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            client.noteUserInput();
+            ws.latest().simulateMessage(replace('json_x')); // a new view, no input since
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/b');
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it("a tap is a person's touch: its navigate is never bounded", () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            client.tap({ on_tap: [10, '/json/b', {}] });
+            const sock = ws.latest();
+            const ref = navs(sock).at(-1)[2];
+            const n = ws.instances.length;
+            sock.simulateMessage(
+                JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+            );
+            expect(ws.instances.length).toBe(n + 1);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('a no-person live hop keeps no input: the fresh connection after it is bounded', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            client.navigate('/json/r'); // the app's own, no person
+            const sock = ws.latest();
+            const ref = navs(sock).at(-1)[2];
+            sock.simulateMessage(
+                JSON.stringify({
+                    r: ref,
+                    o: [[OP_REPLACE, 'json_r', { f: 'R', s: ROOT_STATICS, d: ['json_r', ''] }]],
+                }),
+            );
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/w');
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('an app navigate during a delayed fresh connection waits it out', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/b');
+            client.navigate('/json/c'); // the app's own, no person
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('a navigate a frame runs during a delayed fresh connection waits it out', () => {
+        // A person acted after the bounded navigate went out; the frame answering it
+        // carries another navigate, which is the server's, not theirs.
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            const sock = ws.latest();
+            sock.simulateMessage(JSON.stringify({ e: [[10, '/json/b', {}]] }));
+            const ref = navs(sock).at(-1)[2];
+            client.noteUserInput();
+            const n = ws.instances.length;
+            sock.simulateMessage(
+                JSON.stringify({
+                    r: ref,
+                    e: [
+                        [10, '/json/b', { full: true, replace: true }],
+                        [10, '/json/c', {}],
+                    ],
+                }),
+            );
+            expect(ws.instances.length).toBe(n);
+            // The delayed connection opens to the page it was for; the frame's own
+            // navigate waits, pending, for that page to be back.
+            vi.advanceTimersByTime(30000);
+            expect(ws.instances.length).toBe(n + 1);
+            expect(path(ws.latest().url)).toBe('/json/b');
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('navigateAwait is no person: the fresh connection answering it is bounded', async () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            const sock = ws.latest();
+            const p = client.navigateAwait('/json/b').catch(() => {});
+            const ref = navs(sock).at(-1)[2];
+            const n = ws.instances.length;
+            sock.simulateMessage(
+                JSON.stringify({ r: ref, e: [[10, '/json/b', { full: true, replace: true }]] }),
+            );
+            await p;
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it("a person's chain through a live hop stays theirs", () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            client.noteUserInput();
+            client.navigate('/json/r');
+            const sock = ws.latest();
+            const ref = navs(sock).at(-1)[2];
+            sock.simulateMessage(
+                JSON.stringify({
+                    r: ref,
+                    o: [[OP_REPLACE, 'json_r', { f: 'R', s: ROOT_STATICS, d: ['json_r', ''] }]],
+                }),
+            );
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/w'); // the live page's view navigates on connect
+            expect(ws.instances.length).toBe(n + 1);
+        } finally {
+            client.close();
+            ws.restore();
+        }
+    });
+
+    it('close() cancels a delayed fresh connection', () => {
+        const { ws, client } = connected();
+        try {
+            client._navLoads = full();
+            const n = ws.instances.length;
+            bounceOnce(ws, '/json/b');
+            client.close();
+            vi.advanceTimersByTime(60000);
+            expect(ws.instances.length).toBe(n);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // Before a first mount nothing proves a socket will ever open: a navigate
+    // connects fresh to its page, as the web client loads it, instead of waiting.
+    for (const failed of [false, true]) {
+        it(`connects fresh to a navigate before the first mount (${failed ? 'first connect failed' : 'still connecting'})`, () => {
+            vi.useFakeTimers();
+            const ws = installWebSocketStub();
+            try {
+                const client = newClient();
+                client.connect().catch(() => {});
+                if (failed) ws.latest().close(1006);
+                client.navigate('/json/b');
+                expect(ws.instances.length).toBe(2);
+                expect(path(ws.latest().url)).toBe('/json/b');
+                ws.latest().simulateOpen();
+                ws.latest().simulateMessage(replace('json_b'));
+                expect(navs(ws.latest())).toEqual([]);
+                expect(client.tree().id).toBe('json_b');
+            } finally {
+                ws.restore();
+            }
+        });
+    }
+
+    /** Let the reconnect timer start the next attempt, then fail it without opening. */
+    function failNextAttempt(ws) {
+        const n = ws.instances.length;
+        vi.advanceTimersByTime(15000);
+        expect(ws.instances.length).toBe(n + 1);
+        ws.latest().close(1006);
+    }
+
+    it('connects fresh to a navigate issued while down once a later attempt fails', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1006);
+            client.navigate('/json/b');
+            failNextAttempt(ws);
+            // A fresh connect to the pending page, as the browser loads it.
+            expect(path(ws.latest().url)).toBe('/json/b');
+            expect(client._pendingNav).toBeNull();
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('waits while the attempt in flight when the navigate was issued fails', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1006);
+            vi.advanceTimersByTime(15000); // an attempt starts
+            client.navigate('/json/b'); // pended while it is in flight
+            ws.latest().close(1006); // it fails
+            vi.advanceTimersByTime(15000);
+            expect(path(ws.latest().url)).toBe('/json/x');
+            ws.latest().close(1006); // one started after the pend fails
+            expect(path(ws.latest().url)).toBe('/json/b');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('connects fresh to a navigate a close lost only once an attempt at the cap fails', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b');
+            ws.latest().close(1006); // the reply is lost
+            for (let n = 0; n < 3; n++) {
+                failNextAttempt(ws); // 1 s, 2 s, 5 s
+                expect(client._pendingNav?.path).toBe('/json/b');
+            }
+            failNextAttempt(ws); // at the 10 s cap
+            expect(path(ws.latest().url)).toBe('/json/b');
+            expect(client._pendingNav).toBeNull();
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('an attempt that opens and closes before its mount connects nowhere fresh', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1006);
+            client.navigate('/json/b');
+            vi.advanceTimersByTime(15000);
+            ws.latest().simulateOpen();
+            ws.latest().close(1006);
+            expect(client._pendingNav?.path).toBe('/json/b');
+            vi.advanceTimersByTime(15000);
+            expect(path(ws.latest().url)).toBe('/json/x');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('drops a pending navigate when one to the page on screen follows it', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1006);
+            client.navigate('/json/b');
+            client.navigate('/json/x');
+            expect(client._pendingNav).toBeNull();
+            failNextAttempt(ws);
+            expect(path(ws.latest().url)).toBe('/json/x');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('connects fresh to a navigate issued after a deliberate end (1000)', () => {
+        const { ws, client } = connected();
+        try {
+            ws.latest().close(1000);
+            const before = ws.instances.length;
+            client.navigate('/json/b');
+            expect(ws.instances.length).toBe(before + 1);
+            expect(path(ws.latest().url)).toBe('/json/b');
+            expect(client._pendingNav).toBeNull();
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('sends nothing for a navigate issued after the client was closed', () => {
+        const { ws, client } = connected();
+        try {
+            client.close();
+            const before = ws.instances.length;
+            client.navigate('/json/b');
+            vi.advanceTimersByTime(60000);
+            expect(ws.instances.length).toBe(before);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('connects fresh to a pending navigate after a deliberate end (1000)', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b');
+            ws.latest().close(1000);
+            expect(path(ws.latest().url)).toBe('/json/b');
+            expect(ws.instances.length).toBe(2);
+        } finally {
+            ws.restore();
         }
     });
 });
