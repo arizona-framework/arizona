@@ -776,6 +776,42 @@ describe('a navigation and a crash', () => {
         }
     });
 
+    it("a full load a reply's fetch response asks for is not bounded", async () => {
+        // The navigation was issued with no input, but the fetch's response is no
+        // reply to it: its load starts at once, past a full record, and counts nothing.
+        await connected();
+        const full = JSON.stringify(Array(10).fill({ t: Date.now(), slow: false }));
+        sessionStorage.setItem('arizona:nav-loads', full);
+        navigate('/next');
+        const ref = mock.navs()[0][2];
+        /** @type {(r: *) => void} */
+        let resolve = () => {};
+        const pending = new Promise((r) => {
+            resolve = r;
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => pending),
+        );
+        mock.frame(null, [[JS_FETCH, '/api', { method: 'post' }]], false, ref);
+        vi.unstubAllGlobals();
+        const l = await loads(async () => {
+            resolve({
+                ok: true,
+                status: 200,
+                url: 'http://localhost:3000/api',
+                text: () =>
+                    Promise.resolve(
+                        JSON.stringify({ e: [[JS_NAVIGATE, '/login', { full: true }]] }),
+                    ),
+            });
+            await new Promise((r) => setTimeout(r, 0));
+            await new Promise((r) => setTimeout(r, 0));
+        });
+        expect(l.assign).toHaveBeenCalledExactlyOnceWith('http://localhost:3000/login');
+        expect(sessionStorage.getItem('arizona:nav-loads')).toBe(full);
+    });
+
     it("a full load of its page a reply's fetch response asks for goes by URL", async () => {
         // A fetch's response is no reply to the navigation: its loads go by URL,
         // unbounded, whatever page the address bar names when it lands.
