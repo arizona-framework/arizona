@@ -688,6 +688,33 @@ describe('a navigation and a crash', () => {
         expect(l.replace).not.toHaveBeenCalled();
     });
 
+    it('a full load of its page inside a view transition in the reply reloads its entry too', async () => {
+        // The transition runs the load in its update callback, after the reply has
+        // been applied: it still answers that reply's navigation.
+        await connected();
+        /** @type {Array<() => void>} */
+        const updates = [];
+        /** @type {any} */ (document).startViewTransition = (/** @type {() => void} */ fn) => {
+            updates.push(fn);
+        };
+        try {
+            navigate('/next');
+            const ref = mock.navs()[0][2];
+            mock.frame(
+                null,
+                [[JS_TRANSITION, {}, [JS_NAVIGATE, '/next', { full: true }]]],
+                false,
+                ref,
+            );
+            expect(updates.length).toBe(1);
+            const l = await loads(() => updates[0]());
+            expect(l.reload).toHaveBeenCalledOnce();
+            expect(l.count).toBe(1);
+        } finally {
+            delete (/** @type {any} */ (document).startViewTransition);
+        }
+    });
+
     it('a full navigate to a fragment of the page on screen goes by URL, as the browser does', async () => {
         await connected();
         const l = await loads(() => navigate('/start#sec', { full: true }));
@@ -1193,6 +1220,35 @@ describe('the bound on loads answering navigations', () => {
         }
         expect(stored()).toEqual([]);
         expect(error).not.toHaveBeenCalled();
+    });
+
+    it('bounds a load inside a view transition in the reply too', async () => {
+        // The transition runs the load in its update callback, after the reply has
+        // been applied: it still answers that reply's navigation.
+        await setup();
+        /** @type {Array<() => void>} */
+        const updates = [];
+        /** @type {any} */ (document).startViewTransition = (/** @type {() => void} */ fn) => {
+            updates.push(fn);
+        };
+        try {
+            sessionStorage.setItem(
+                KEY,
+                JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+            );
+            mock.frame(null, [[JS_NAVIGATE, '/a', {}]]);
+            mock.frame(
+                null,
+                [[JS_TRANSITION, {}, [JS_NAVIGATE, '/b', { full: true }]]],
+                false,
+                mock.navs().at(-1)[2],
+            );
+            expect(updates.length).toBe(1);
+            expect(await loads(() => updates[0]())).toBe(0);
+            expect(await loads(() => vi.advanceTimersByTime(30000))).toBe(1);
+        } finally {
+            delete (/** @type {any} */ (document).startViewTransition);
+        }
     });
 
     it('lets 10 through, then delays each by 30 s, said once', async () => {

@@ -510,18 +510,29 @@ let _eventsSent = 0;
 /**
  * Keep the origin of the command running now for work it runs later: the returned
  * runner runs that work as the command would have, so one a server frame ran (a
- * handler's `transition(set_attr(...))`) still writes as the server (`_inFrame`).
+ * handler's `transition(set_attr(...))`) still writes as the server (`_inFrame`),
+ * and a load in a navigation's reply (`transition(navigate(Url, #{full => true}))`)
+ * still answers that navigation (`_answeringNav`, `_answeringOwn`): bounded, and a
+ * reload of the entry it pushed when it names that page.
  * @returns {(fn: () => void) => void}
  */
 function keepOrigin() {
     const inFrame = _inFrame;
+    const answeringNav = _answeringNav;
+    const answeringOwn = _answeringOwn;
     return (fn) => {
         const outerFrame = _inFrame;
+        const outerNav = _answeringNav;
+        const outerOwn = _answeringOwn;
         _inFrame = inFrame;
+        _answeringNav = answeringNav;
+        _answeringOwn = answeringOwn;
         try {
             fn();
         } finally {
             _inFrame = outerFrame;
+            _answeringNav = outerNav;
+            _answeringOwn = outerOwn;
         }
     };
 }

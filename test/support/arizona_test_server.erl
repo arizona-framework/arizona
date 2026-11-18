@@ -276,6 +276,26 @@ routes() ->
             bindings => #{step => <<"2">>, other => <<"/wizard-1">>},
             layouts => Layouts ++ [{arizona_scroll_layout, render}]
         }},
+        %% Patch on connect, the reply a full load inside a view transition: of
+        %% `/transition-load` again (a loop), or of the page the patch asked for.
+        {live, <<"/transition-load">>, arizona_transition_load, #{
+            bindings => #{
+                auto => true,
+                patch => <<"/transition-load/p">>,
+                target => <<"/transition-load">>
+            },
+            layouts => Layouts
+        }},
+        {live, <<"/transition-load/p">>, arizona_transition_load, #{layouts => Layouts}},
+        {live, <<"/transition-own">>, arizona_transition_load, #{
+            bindings => #{
+                auto => true,
+                patch => <<"/transition-own/p">>,
+                target => <<"/transition-own/p">>
+            },
+            layouts => Layouts
+        }},
+        {live, <<"/transition-own/p">>, arizona_transition_load, #{layouts => Layouts}},
         %% Navigates to the next step on connect, then, 2 s later, to `/wizard-q`.
         {live, <<"/wizard-auto">>, arizona_wizard, #{
             bindings => #{step => <<"auto">>, other => <<"/wizard-2">>, auto => true},

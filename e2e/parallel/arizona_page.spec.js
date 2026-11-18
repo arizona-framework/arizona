@@ -3108,6 +3108,47 @@ test.describe('reconnect to the page on screen', () => {
         await expect(page.locator('#step')).toHaveText('q');
     });
 
+    // A reply's load inside a view transition runs in the transition's update
+    // callback, after the reply has been applied: it is still that reply's load.
+    // `/transition-load` patches on connect, with no input, and its reply loads
+    // `/transition-load` again, a loop the record (already full here) holds off.
+    test('a reply load inside a view transition is bounded too', async ({ page }) => {
+        test.setTimeout(30000);
+        await page.addInitScript(() => {
+            if (!sessionStorage.getItem('az-e2e-seeded')) {
+                sessionStorage.setItem('az-e2e-seeded', '1');
+                sessionStorage.setItem(
+                    'arizona:nav-loads',
+                    JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+                );
+            }
+        });
+        let loads = 0;
+        page.on('load', () => loads++);
+        await page.goto('/transition-load');
+        await expect(page.locator('#patched')).toHaveText('patched', { timeout: 10000 });
+        await page.waitForTimeout(5000);
+        expect(loads).toBe(1);
+    });
+
+    // ...and when it loads the page the navigation asked for, it reloads the entry
+    // the patch pushed, keeping its state.
+    test('a reply load of its own page inside a view transition reloads the entry', async ({
+        page,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/transition-own');
+        await expect
+            .poll(() => new URL(page.url()).pathname, { timeout: 10000 })
+            .toBe('/transition-own/p');
+        await page.waitForLoadState('load');
+        await expect(page.locator('#patched')).toHaveText('mounted');
+        await expect
+            .poll(() => page.evaluate(() => performance.getEntriesByType('navigation')[0].type))
+            .toBe('reload');
+        expect(typeof (await page.evaluate(() => history.state?._azIdx))).toBe('number');
+    });
+
     // The load answering a failed navigate: the user lets it through or no prompt is
     // shown, and it reloads the address bar's own entry, which keeps its state
     // (`_azIdx`), Back and Forward as with no failure at all; or the user cancels it,
