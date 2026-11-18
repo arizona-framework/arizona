@@ -1473,9 +1473,12 @@ function replayPendingNav() {
 /**
  * Load `url` as a real page. `replace` finishes a navigation already in history
  * -- the server answering the client's own navigate frame with a full load, its
- * entry pushed before asking -- so it must not add a second entry. A load of the
- * address bar's own page reloads it, keeping the entry's state. A load the server
- * answered a navigation with is bounded (`navLoadDelay`).
+ * entry pushed before asking -- so it must not add a second entry. One that loads
+ * the very page that navigation asked for reloads the entry instead, keeping its
+ * state (`isOwnPage`). A load the server answered a navigation with is bounded
+ * (`navLoadDelay`). The URL is resolved now, as `loadPage` resolves it, so a load
+ * waiting out the bound goes where it named when asked for, wherever the address
+ * bar has moved since.
  *
  * Only an http(s) URL may be loaded. Any other scheme (`javascript:`, `data:`)
  * would run in this page, and the URL can come from a server that echoed a
@@ -1489,12 +1492,12 @@ function replayPendingNav() {
 function leavePage(url, replace, recover = false) {
     if (!isWebUrl(url)) return;
     const own = _answeringOwn;
+    const u = pageUrl(url);
+    const target = u.href;
     const load = () => {
         // A replace finishes a navigation whose entry already names `url`, so the
         // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
         _unloadingToOtherPage = Boolean(replace);
-        const u = pageUrl(url);
-        const target = u.href;
         const bare = location.href.split('#')[0];
         if (own && isOwnPage(u, own)) {
             // The load answering this page's own navigation, of the page its frame
@@ -1520,7 +1523,7 @@ function leavePage(url, replace, recover = false) {
         } else {
             // A load an effect or a link asked for goes by URL, a fragment of the page
             // on screen included (which only scrolls, as the browser does).
-            loadPage(url, replace);
+            loadPage(target, replace);
         }
     };
     // A load answering a navigation issued with no input while another waits takes its

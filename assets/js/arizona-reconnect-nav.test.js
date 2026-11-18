@@ -1222,6 +1222,31 @@ describe('the bound on loads answering navigations', () => {
         expect(error).not.toHaveBeenCalled();
     });
 
+    it('a delayed load goes where its URL named when the server asked for it', async () => {
+        // A relative URL resolves against the page the answer came to, not the one
+        // the address bar names once the failsafe delay is over.
+        await setup();
+        sessionStorage.setItem(KEY, JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })));
+        mock.frame(null, [[JS_NAVIGATE, '/dir/a', {}]]);
+        mock.frame(
+            null,
+            [[JS_NAVIGATE, 'b', { full: true, replace: true }]],
+            false,
+            mock.navs().at(-1)[2],
+        );
+        history.replaceState(history.state, '', '/elsewhere/page');
+        const replace = vi.fn();
+        const { origin, href, pathname, search, hash } = window.location;
+        vi.stubGlobal('location', { replace, origin, href, pathname, search, hash });
+        try {
+            vi.advanceTimersByTime(30000);
+            await Promise.resolve();
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(replace).toHaveBeenCalledExactlyOnceWith('http://localhost:3000/dir/b');
+    });
+
     it('bounds a load inside a view transition in the reply too', async () => {
         // The transition runs the load in its update callback, after the reply has
         // been applied: it still answers that reply's navigation.
