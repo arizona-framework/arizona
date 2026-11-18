@@ -2477,22 +2477,25 @@ A navigation the server could not complete (its page failed to mount, its old pa
 unmounted, the view crashed reacting to a patch, a middleware raised) is answered with the load of
 its page, then the session closes `4500`; see "Exit handling". That is the navigation's one outcome.
 Let through, the load reloads the entry the navigation pushed when it names the page the
-navigation's frame asked for: the path and query the frame carried, compared as the frame carried
-them rather than as URL text (a link to `/x?` asks for `qs: ''`, and the server answers with `/x`),
-and no fragment of its own (the frame carries none). The entry keeps its history state, its URL as
-the link wrote it and its fragment, which the reloaded page scrolls to, and Back and Forward stay
-right. A load the reply runs inside a `transition`, in the transition's update callback after the
-reply has been applied, still answers the navigation: it reloads the entry the same way and is
-bounded as the reply's own load. A recovery load of the address bar's own URL with a fragment (a
-pending navigation's fallback, the resync of a view the page does not hold) cannot go by URL, which
-would only scroll: an entry the client stamped (`_azIdx`/`_azScroll` in its state) reloads with its
-fragment, an unstamped one loads without it, since it may be a form POST's. Any other load (a URL
-that differs, an app's own `full` navigate, a fragment of the page on screen included) goes by URL,
-as the browser takes it. Cancelled in a `beforeunload` prompt, the navigation is settled: the `4500`
-reconnects the page on screen, which stays live under the address of the page asked for, as after
-any cancelled full load, and nothing asks again. A navigate queued behind a crashing event did not
-run, so it goes out again once the page on screen is live: two pages that crash and navigate to each
-other on connect loop over the socket under the worker's backoff, loading nothing.
+navigation's frame asked for -- as does any full load among a navigation's reply effects, the app's
+own included (a patch's `handle_update/3` returning one): the path and query the frame carried,
+compared as the frame carried them rather than as URL text (a link to `/x?` asks for `qs: ''`, and
+the server answers with `/x`), and no fragment of its own (the frame carries none). The entry keeps
+its history state, its URL as the link wrote it and its fragment, which the reloaded page scrolls
+to, and Back and Forward stay right. A load the reply runs inside a `transition`, in the
+transition's update callback after the reply has been applied, still answers the navigation: it
+reloads the entry the same way and is bounded as the reply's own load. A recovery load of the
+address bar's own URL with a fragment (a pending navigation's fallback, the resync of a view the
+page does not hold) cannot go by URL, which would only scroll: an entry the client stamped
+(`_azIdx`/`_azScroll` in its state) reloads with its fragment, an unstamped one loads without it,
+since it may be a form POST's. Any other load (a URL that differs, a fragment of the page on screen
+included, an app's `full` navigate outside a navigation's reply, a `fetch` response's load, which is
+also unbounded) goes by URL, as the browser takes it. Cancelled in a `beforeunload` prompt, the
+navigation is settled: the `4500` reconnects the page on screen, which stays live under the address
+of the page asked for, as after any cancelled full load, and nothing asks again. A navigate queued
+behind a crashing event did not run, so it goes out again once the page on screen is live: two pages
+that crash and navigate to each other on connect loop over the socket under the worker's backoff,
+loading nothing.
 
 Newer wins: the reply to a navigation older than the last one issued runs no navigation it carries
 (a halt redirect, the full load the server answered it with), since replies keep frame order and it
