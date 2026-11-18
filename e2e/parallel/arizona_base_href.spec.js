@@ -97,22 +97,15 @@ test('a query patch in a fetch response patches the page, not the endpoint', asy
     await expect(page.locator('#clicks')).toHaveText('1');
 });
 
-// A relative navigate under `<base href>` to the same view under other layouts: the
-// server answers the frame with the full load of the page the base resolved it to,
-// which is that navigation's own page, so the entry it pushed reloads, keeping its
-// state.
+// A relative navigate under `<base href>` to a view under other layouts: the server
+// answers the frame with the full load of the page the base resolved it to (from
+// `/patch-demo/overview`, `crash-nav-twin` names `/crash-nav-twin` only under the
+// base), which is that navigation's own page, so the entry it pushed reloads,
+// keeping its state.
 test('a relative navigate answered with a load reloads the entry it pushed', async ({ page }) => {
-    await page.goto('/crash-nav');
+    await page.goto('/patch-demo/overview');
     await wsReady(page);
-    await page.evaluate(() => {
-        const b = document.createElement('base');
-        b.setAttribute('href', '/sub/');
-        document.head.appendChild(b);
-        const btn = document.createElement('button');
-        btn.id = 'rel-nav';
-        btn.setAttribute('az-click', JSON.stringify([10, '../crash-nav-twin']));
-        document.querySelector('main').appendChild(btn);
-    });
+    await addRelativeNav(page, '/', [10, 'crash-nav-twin']);
     const loaded = page.waitForEvent('load', { timeout: 15000 });
     await page.locator('#rel-nav').click();
     await loaded;
