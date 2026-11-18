@@ -29,26 +29,26 @@ const OP_MOVE = 9;
 // arizona_effect op codes (mirror include/arizona_effect.hrl).
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
-const EFFECT_TRANSITION = 20;
-const EFFECT_PATCH = 24;
 
 // A command value holds one command ([0, "inc"]) or a list of them
 // ([[0, "inc"], [10, "/n"]]), told apart by the first element exactly as the
 // web client's executeJS does.
 const commands = (cmds) => (Array.isArray(cmds) && Array.isArray(cmds[0]) ? cmds : [cmds]);
 
+// Is `c` a navigation this client runs? Newer wins: the reply to an older
+// navigate than the last one sent runs none. Only a bare navigate is one: a
+// `transition` (and whatever it wraps) and a `patch` are web-only effects
+// `_runEffect` skips, like every effect but push_event and navigate.
+const isNavigation = (c) => Array.isArray(c) && c[0] === EFFECT_NAVIGATE;
+
 // Does an effect list navigate away from `page` (a URL), the page a navigate's
-// reply answers for (a navigate/patch, also inside a transition)? Such a reply is
-// itself a navigation (a redirect, a full navigate), so the page it asked for did
-// not go on screen. One that only names a fragment of that page, and is no full
-// navigate, has nothing to ask the server.
+// reply answers for? Such a reply is itself a navigation (a redirect, a full
+// navigate), so the page it asked for did not go on screen. One that only names a
+// fragment of that page, and is no full navigate, has nothing to ask the server.
+// A reply whose navigation this client skips put its page on screen.
 const navigates = (effects, page) =>
     (effects ?? []).some(
-        (c) =>
-            Array.isArray(c) &&
-            (((c[0] === EFFECT_NAVIGATE || c[0] === EFFECT_PATCH) &&
-                (c[2]?.full === true || !fragmentOf(c[1], page))) ||
-                (c[0] === EFFECT_TRANSITION && navigates(commands(c[2]), page))),
+        (c) => isNavigation(c) && (c[2]?.full === true || !fragmentOf(c[1], page)),
     );
 
 // Does `url`, resolved against `page`, name a fragment of it (the same path and
@@ -66,14 +66,6 @@ function fragmentOf(url, page) {
         hasQuery(u.href) === hasQuery(p.href)
     );
 }
-
-// Is `c` a navigation (a navigate/patch, or a transition wrapping one)? Newer wins:
-// the reply to an older navigate than the last one sent runs none.
-const isNavigation = (c) =>
-    Array.isArray(c) &&
-    (c[0] === EFFECT_NAVIGATE ||
-        c[0] === EFFECT_PATCH ||
-        (c[0] === EFFECT_TRANSITION && commands(c[2]).some(isNavigation)));
 
 // A page as a URL fragments resolve against.
 const pageUrl = (path, qs) => `http://page${path}${qs ? `?${qs}` : ''}`;

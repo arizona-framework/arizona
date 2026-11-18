@@ -5,6 +5,8 @@ import { NativeClient } from './json_client.js';
 // cross-language sync is guarded by test/arizona_wire_SUITE.erl.
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
+const EFFECT_TRANSITION = 20;
+const EFFECT_PATCH = 24;
 
 // Diff op codes (mirror include/arizona_wire.hrl).
 const OP_TEXT = 0;
@@ -1176,6 +1178,62 @@ describe('JSON client reconnect to the page on screen', () => {
             // redirect went out on it.
             expect(ws.instances.length).toBe(1);
             expect(navs(sock).map((f) => f[1].path)).toEqual(['/json/b', '/json/c', '/json/login']);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // A native client runs only push_event and navigate: a transition, and a patch,
+    // are web-only effects it skips, so a navigation one of them carries never runs.
+    // The reply's page is the one on screen, and the reconnect dials it.
+    for (const [name, effect] of [
+        ['a transition wraps', [EFFECT_TRANSITION, {}, [EFFECT_NAVIGATE, '/json/c', {}]]],
+        [
+            'a transition wraps in a list',
+            [EFFECT_TRANSITION, {}, [[EFFECT_NAVIGATE, '/json/c', {}]]],
+        ],
+        ['a patch', [EFFECT_PATCH, '/json/c', {}]],
+    ]) {
+        it(`moves the reconnect when the reply carries a navigation ${name}, which it skips`, () => {
+            const { ws, client } = connected();
+            try {
+                client.navigate('/json/b');
+                const ref = navs(ws.latest()).at(-1)[2];
+                ws.latest().simulateMessage(
+                    JSON.stringify({ ...JSON.parse(replace('json_b')), r: ref, e: [effect] }),
+                );
+                expect(client.tree().id).toBe('json_b');
+                expect(navs(ws.latest()).map((f) => f[1].path)).toEqual(['/json/b']);
+                expect(path(redial(ws).url)).toBe('/json/b');
+            } finally {
+                ws.restore();
+            }
+        });
+    }
+
+    // Newer wins, and a skipped navigation is no navigation there either: the reply to
+    // an older navigate that put its page on screen moves the reconnect to it, and the
+    // newer navigate, whose reply the close lost, goes out once that page is back.
+    it('moves the reconnect to an older reply page whose transition-wrapped navigate it skips', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b');
+            client.navigate('/json/c');
+            const sock = ws.latest();
+            const [b] = navs(sock).map((f) => f[2]);
+            sock.simulateMessage(
+                JSON.stringify({
+                    ...JSON.parse(replace('json_b')),
+                    r: b,
+                    e: [[EFFECT_TRANSITION, {}, [EFFECT_NAVIGATE, '/json/z', { full: true }]]],
+                }),
+            );
+            expect(ws.instances.length).toBe(1);
+            expect(navs(sock).map((f) => f[1].path)).toEqual(['/json/b', '/json/c']);
+            const next = redial(ws);
+            expect(path(next.url)).toBe('/json/b');
+            next.simulateMessage(replace('json_b'));
+            expect(navs(next).map((f) => f[1].path)).toEqual(['/json/c']);
         } finally {
             ws.restore();
         }

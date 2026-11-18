@@ -2551,24 +2551,25 @@ page the user last asked for (not always the one the reconnect mounted). It does
 loaded page holds its own view, so its own resyncs find what they replace.
 
 The reference JSON client (`e2e/utils/json_client.js`) follows the same rule for `?json`: its
-reconnect re-mounts the page on screen, moved by a navigate's reply that put its page there, and a
-navigate a down socket could not carry (issued while down, or owed a reply a close lost; the last
-one wins) goes out once the reconnect's `OP_REPLACE` has put that page back, or is dropped when it
-names that page, whatever the close; a navigate the server answered with a full navigate connects
-fresh to its page, and a reply to an older navigate than the last one sent runs no navigation. It
-connects fresh to a pending navigate after a `1000` close (its full navigate), as it does to a
-navigate issued before its first mount or after such a close. A pending navigate behind attempts
-that keep failing gets the same two rules as on the web: one issued while down connects fresh to its
-page once an attempt started after it fails without opening, one a close lost only once such an
-attempt at the backoff's cap fails. A native client must bound its fresh connections the same way,
-since a full navigate there costs only a socket: the reference client delays one answering a
-navigate issued with no person acting since the view mounted by the web client's rule (10 within 5
-minutes, then one per 30 s until 30 s pass with none). A native client has no DOM to tell a person
-from code, so it marks input from its own touch and key handlers: the reference client's
-`noteUserInput()` (its `tap()` calls it), never a bare app `navigate()`, `navigateAwait()`,
-`pushEvent()` or `pushEventAwait()`. A navigate reply's mount keeps that navigate's own input, any
-other mount clears it. That delay keeps the client's socket closed for up to 30 s. A person's
-navigate during it connects fresh to their page at once; an app's waits it out.
+reconnect re-mounts the page on screen, moved by a navigate's reply that put its page there (one
+carrying only a `transition` or a `patch` did: those are web-only effects a native client skips, the
+navigation they carry included), and a navigate a down socket could not carry (issued while down, or
+owed a reply a close lost; the last one wins) goes out once the reconnect's `OP_REPLACE` has put
+that page back, or is dropped when it names that page, whatever the close; a navigate the server
+answered with a full navigate connects fresh to its page, and a reply to an older navigate than the
+last one sent runs no navigation. It connects fresh to a pending navigate after a `1000` close (its
+full navigate), as it does to a navigate issued before its first mount or after such a close. A
+pending navigate behind attempts that keep failing gets the same two rules as on the web: one issued
+while down connects fresh to its page once an attempt started after it fails without opening, one a
+close lost only once such an attempt at the backoff's cap fails. A native client must bound its
+fresh connections the same way, since a full navigate there costs only a socket: the reference
+client delays one answering a navigate issued with no person acting since the view mounted by the
+web client's rule (10 within 5 minutes, then one per 30 s until 30 s pass with none). A native
+client has no DOM to tell a person from code, so it marks input from its own touch and key handlers:
+the reference client's `noteUserInput()` (its `tap()` calls it), never a bare app `navigate()`,
+`navigateAwait()`, `pushEvent()` or `pushEventAwait()`. A navigate reply's mount keeps that
+navigate's own input, any other mount clears it. That delay keeps the client's socket closed for up
+to 30 s. A person's navigate during it connects fresh to their page at once; an app's waits it out.
 
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS
 sends `["patch", {path, qs}, ref]`. `arizona_socket` resolves the route + runs middlewares as for
