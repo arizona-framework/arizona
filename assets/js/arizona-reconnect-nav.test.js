@@ -720,6 +720,37 @@ describe('a navigation and a crash', () => {
         }
     });
 
+    it('a full load answering a navigation to another query of its page replaces the entry', async () => {
+        // The query is part of the page the frame asked for: `?a=2` is another page.
+        await connected();
+        navigate('/next?a=1');
+        const ref = mock.navs()[0][2];
+        const l = await loads(() =>
+            mock.frame(
+                null,
+                [[JS_NAVIGATE, '/next?a=2', { full: true, replace: true }]],
+                false,
+                ref,
+            ),
+        );
+        expect(l.reload).not.toHaveBeenCalled();
+        expect(l.replace).toHaveBeenCalledWith('http://localhost:3000/next?a=2');
+    });
+
+    it('a full load of its page once the address bar names another goes by URL', async () => {
+        // A reload would reload the entry on screen now, not the one the navigation
+        // pushed.
+        await connected();
+        navigate('/next');
+        const ref = mock.navs()[0][2];
+        history.replaceState(history.state, '', '/moved');
+        const l = await loads(() =>
+            mock.frame(null, [[JS_NAVIGATE, '/next', { full: true, replace: true }]], false, ref),
+        );
+        expect(l.reload).not.toHaveBeenCalled();
+        expect(l.replace).toHaveBeenCalledWith('http://localhost:3000/next');
+    });
+
     it("a full load of its page a reply's fetch response asks for goes by URL", async () => {
         // A fetch's response is no reply to the navigation: its loads go by URL,
         // unbounded, whatever page the address bar names when it lands.
