@@ -1181,6 +1181,28 @@ describe('JSON client reconnect to the page on screen', () => {
         }
     });
 
+    // The page on screen is the path and query a navigate asked for, as they were
+    // written: a pending navigate naming it is dropped whatever the query's encoding.
+    it('drops a pending navigate naming the page on screen, its query percent-encoded', () => {
+        const { ws, client } = connected();
+        try {
+            client.navigate('/json/b?q=a%20b');
+            const ref = navs(ws.latest()).at(-1)[2];
+            ws.latest().simulateMessage(
+                JSON.stringify({ ...JSON.parse(replace('json_b')), r: ref }),
+            );
+            ws.latest().close(1006);
+            client.navigate('/json/b?q=a%20b');
+            expect(client._pendingNav).toBeNull();
+            vi.advanceTimersByTime(15000);
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(replace('json_b'));
+            expect(navs(ws.latest())).toEqual([]);
+        } finally {
+            ws.restore();
+        }
+    });
+
     // Two pages that navigate to each other on connect, every navigate answered with
     // a full navigate: the fresh connections answering navigates issued with no
     // person acting are bounded, 10 then one per 30 s, slow until 30 s pass with none.
