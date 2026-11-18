@@ -1,5 +1,6 @@
 -module(arizona_test_server).
 -export([start/0, stop/0, routes/0]).
+-export([start_listener/0]).
 
 start() ->
     %% The session fixtures (arizona_session_view/controller) encrypt the az_session
@@ -15,12 +16,7 @@ start() ->
         [{arizona_local, ~"index.html"}],
         #{layouts => [{arizona_static_layout, render}]}
     ),
-    %% The rich HTML dev error page is opt-in; the crash e2e specs assert on it.
-    {ok, _} = arizona_roadrunner_server:start(http, #{
-        transport_opts => [{port, {env, "PORT", 4040}}],
-        routes => routes(),
-        error_page => {arizona_error_page, render}
-    }),
+    {ok, _} = start_listener(),
     %% Set the server app env *after* the listener is up (arizona_app has already
     %% booted, so this won't double-start a server) so the dev MCP server's
     %% `list_routes` tool can read the live routes.
@@ -28,6 +24,15 @@ start() ->
         adapter => arizona_roadrunner_server, routes => routes()
     }),
     ok.
+
+%% The rich HTML dev error page is opt-in; the crash e2e specs assert on it.
+%% Exposed so the outage fixture (arizona_outage_admin) can bring it back up.
+start_listener() ->
+    arizona_roadrunner_server:start(http, #{
+        transport_opts => [{port, {env, "PORT", 4040}}],
+        routes => routes(),
+        error_page => {arizona_error_page, render}
+    }).
 
 %% The dev server's routes. Exposed so the dev MCP server's `list_routes` tool
 %% can introspect them (see arizona_dev_mcp).
@@ -214,9 +219,153 @@ routes() ->
         {get, <<"/_test/drain">>, arizona_drain_admin, #{
             state => #{adapter => arizona_roadrunner_server}
         }},
+        %% Fails its live mount (4501) while the `az_e2e_flaky` cookie is set.
+        {live, <<"/flaky-mount">>, arizona_crashable, #{
+            layouts => Layouts,
+            middlewares => [fun flaky/2]
+        }},
+        %% A click here crashes the view (4500) and navigates to another view.
+        {live, <<"/crash-nav">>, arizona_crash_nav, #{layouts => Layouts}},
+        %% The same view (same id) under other layouts.
+        {live, <<"/crash-nav-twin">>, arizona_crash_nav, #{
+            layouts => Layouts ++ [{arizona_scroll_layout, render}]
+        }},
+        %% Crashes as a navigate unmounts it: the navigate is what crashes (4500).
+        {live, <<"/crash-nav-leave">>, arizona_crash_nav, #{
+            bindings => #{crash_on_leave => true, tall => true},
+            layouts => Layouts
+        }},
+        %% A page whose load answers late (1.5 s).
+        {live, <<"/crash-nav-slow">>, arizona_crash_nav, #{
+            bindings => #{tall => true},
+            layouts => Layouts,
+            middlewares => [{arizona_crash_nav, slow}]
+        }},
+        %% Two pages that crash and navigate to each other on every connect.
+        {live, <<"/crash-nav-ping">>, arizona_crash_nav, #{
+            bindings => #{loop => true, other => <<"/crash-nav-pong">>},
+            layouts => Layouts
+        }},
+        {live, <<"/crash-nav-pong">>, arizona_crash_nav, #{
+            bindings => #{loop => true, other => <<"/crash-nav-ping">>},
+            layouts => Layouts
+        }},
+        %% Two pages that navigate to each other on every connect, each crashing as
+        %% the navigate unmounts it: every navigate fails over the socket and is
+        %% answered with the load of its page, which works over HTTP.
+        {live, <<"/crash-nav-bounce-a">>, arizona_crash_nav, #{
+            bindings => #{
+                bounce => true, crash_on_leave => true, other => <<"/crash-nav-bounce-b">>
+            },
+            layouts => Layouts
+        }},
+        {live, <<"/crash-nav-bounce-b">>, arizona_crash_nav, #{
+            bindings => #{
+                bounce => true, crash_on_leave => true, other => <<"/crash-nav-bounce-a">>
+            },
+            layouts => Layouts
+        }},
+        %% A wizard whose steps navigate to each other across layouts, on the user's
+        %% click: every step is answered with a page load. `/wizard-q` shares the
+        %% first step's layouts, so a navigate there is served live.
+        {live, <<"/wizard-1">>, arizona_wizard, #{
+            bindings => #{step => <<"1">>, other => <<"/wizard-2">>},
+            layouts => Layouts
+        }},
+        {live, <<"/wizard-2">>, arizona_wizard, #{
+            bindings => #{step => <<"2">>, other => <<"/wizard-1">>},
+            layouts => Layouts ++ [{arizona_scroll_layout, render}]
+        }},
+        %% Navigates to the next step on connect, then, 2 s later, to `/wizard-q`.
+        {live, <<"/wizard-auto">>, arizona_wizard, #{
+            bindings => #{step => <<"auto">>, other => <<"/wizard-2">>, auto => true},
+            layouts => Layouts
+        }},
+        %% A hop the user reaches live from `/wizard-1`, whose view then navigates
+        %% across layouts to the next step on its own.
+        {live, <<"/wizard-r">>, arizona_wizard, #{
+            bindings => #{step => <<"r">>, other => <<"/wizard-2">>, hop => true},
+            layouts => Layouts
+        }},
+        {live, <<"/wizard-q">>, arizona_wizard, #{
+            bindings => #{step => <<"q">>, other => <<"/wizard-2">>},
+            layouts => Layouts
+        }},
+        %% The same loop, the page's own code sending an event first (no person).
+        {live, <<"/crash-nav-ping-connected-a">>, arizona_crash_nav, #{
+            bindings => #{
+                bounce => true,
+                crash_on_leave => true,
+                ping => <<"connected">>,
+                other => <<"/crash-nav-ping-connected-b">>
+            },
+            layouts => Layouts
+        }},
+        {live, <<"/crash-nav-ping-connected-b">>, arizona_crash_nav, #{
+            bindings => #{
+                bounce => true,
+                crash_on_leave => true,
+                ping => <<"connected">>,
+                other => <<"/crash-nav-ping-connected-a">>
+            },
+            layouts => Layouts
+        }},
+        {live, <<"/crash-nav-ping-hooklater-a">>, arizona_crash_nav, #{
+            bindings => #{
+                bounce => true,
+                crash_on_leave => true,
+                ping => <<"hooklater">>,
+                other => <<"/crash-nav-ping-hooklater-b">>
+            },
+            layouts => Layouts
+        }},
+        {live, <<"/crash-nav-ping-hooklater-b">>, arizona_crash_nav, #{
+            bindings => #{
+                bounce => true,
+                crash_on_leave => true,
+                ping => <<"hooklater">>,
+                other => <<"/crash-nav-ping-hooklater-a">>
+            },
+            layouts => Layouts
+        }},
+        %% Crashes and navigates to itself on every connect: a recurring crash.
+        {live, <<"/crash-nav-loop">>, arizona_crash_nav, #{
+            bindings => #{loop => true},
+            layouts => Layouts
+        }},
+        %% A patch here to `?boom=1` crashes the view (4500); a fresh mount does not.
+        {live, <<"/patch-crash">>, arizona_patch_crash, #{
+            layouts => Layouts,
+            middlewares => [arizona_middleware:extract([params])]
+        }},
+        %% A patch here answers with a navigate to a fragment of the patched page.
+        {live, <<"/hash-patch">>, arizona_hash_patch, #{
+            layouts => Layouts,
+            middlewares => [arizona_middleware:extract([params])]
+        }},
+        %% Shows what `?reconnected` read at mount.
+        {live, <<"/reconnect-probe">>, arizona_reconnect_probe, #{layouts => Layouts}},
+        %% Stops the listener, then starts it again: a server outage and restart.
+        {get, <<"/_test/outage">>, arizona_outage_admin, #{}},
+        %% A page whose WebSocket upgrade halts while the `az_e2e_gate` cookie is
+        %% set, while HTTP still answers: a proxy that does not upgrade, or one
+        %% refused reconnect attempt.
+        {live, <<"/upgrade-gate">>, arizona_about, #{
+            bindings => #{title => <<"Gate">>},
+            layouts => Layouts,
+            middlewares => [fun gate/2]
+        }},
         %% Dev-reload fixture: a JSON view holding a fun made by a module the
         %% admin endpoint reloads (e2e/sequential/arizona_reload.spec.js).
         {live, <<"/json/reload-fun">>, arizona_reload_fun_view, #{}},
+        %% Two JSON pages that navigate to each other on connect, every navigate
+        %% failing over the socket and answered with a full navigate.
+        {live, <<"/json/bounce-a">>, arizona_json_bounce, #{
+            bindings => #{other => <<"/json/bounce-b">>}
+        }},
+        {live, <<"/json/bounce-b">>, arizona_json_bounce, #{
+            bindings => #{other => <<"/json/bounce-a">>}
+        }},
         {get, <<"/_test/reload">>, arizona_reload_admin, #{}},
         %% arizona_js:fetch e2e -- a form posts to the controller (sets an HttpOnly
         %% cookie, broadcasts to the live view via pubsub, returns an effect); no reload.
@@ -321,6 +470,21 @@ routes() ->
 
 stop() ->
     arizona_roadrunner_server:stop(http).
+
+gate(Req0, Bindings) ->
+    {Cookies, Req1} = arizona_req:cookies(Req0),
+    {Headers, Req} = arizona_req:headers(Req1),
+    Upgrade = string:lowercase(iolist_to_binary(maps:get(<<"upgrade">>, Headers, <<>>))),
+    case {proplists:get_value(<<"az_e2e_gate">>, Cookies), Upgrade} of
+        {undefined, _} -> {cont, Req, Bindings};
+        {_, <<"websocket">>} -> {halt, arizona_req:redirect(Req, <<"/">>)};
+        {_, _} -> {cont, Req, Bindings}
+    end.
+
+flaky(Req0, Bindings) ->
+    {Cookies, Req} = arizona_req:cookies(Req0),
+    Flaky = proplists:is_defined(<<"az_e2e_flaky">>, Cookies),
+    {cont, Req, Bindings#{crash_on_connect => Flaky}}.
 
 static_site_dir() ->
     filename:absname("_build/e2e-static").

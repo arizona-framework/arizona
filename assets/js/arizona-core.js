@@ -191,6 +191,11 @@ function resolveOrPassthrough(v) {
     return typeof v === 'object' && v.f !== undefined ? resolveHtml(v) : v;
 }
 
+const BACKOFF_DELAYS = [1000, 2000, 5000, 10000];
+
+/** The first attempt index whose delay is the cap. */
+const BACKOFF_CAP_ATTEMPT = BACKOFF_DELAYS.length - 1;
+
 /**
  * Compute reconnection delay with step backoff and ±20% jitter.
  * Caps at 10 s deliberately -- after 4 attempts we keep retrying at the
@@ -200,12 +205,13 @@ function resolveOrPassthrough(v) {
  * @returns {number}
  */
 function backoff(attempt) {
-    const delays = [1000, 2000, 5000, 10000];
+    const delays = BACKOFF_DELAYS;
     const base = attempt < delays.length ? delays[attempt] : 10000;
     return Math.round(base * (0.8 + Math.random() * 0.4));
 }
 
 export {
+    BACKOFF_CAP_ATTEMPT,
     backoff,
     FP_CACHE_MAX,
     fpCache,

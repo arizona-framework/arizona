@@ -6,21 +6,30 @@
  * Sends pre-computed DOM-ready data to the main thread.
  *
  * Worker -> Main protocol (arrays for fast structured clone):
- *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null, ref|null]
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null, ref|null, shown]
  *                                                     -- resolved message; `ref` is
  *                                                        the reply ref of the frame
  *                                                        it answers, if that one
- *                                                        carried one
+ *                                                        carried one; `shown` says it
+ *                                                        answered a navigate/patch
+ *                                                        and put its page on screen
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *   [3]                                               -- pong to a [4] ping
+ *   [4, capped]                                       -- a connect attempt started;
+ *                                                        `capped`: scheduled at the
+ *                                                        backoff's cap
  *
  * Main -> Worker protocol:
- *   [0, wsUrl, isReconnect] -- connect (full URL; isReconnect resyncs an
- *                              already-rendered DOM, e.g. a bfcache restore)
- *   [1, jsonString]         -- send data (pre-stringified on main)
+ *   [0, wsUrl, isReconnect, closes] -- connect (full URL; isReconnect
+ *                              resyncs an already-rendered DOM, e.g. a bfcache
+ *                              restore; `closes` the closes main has seen)
+ *   [1, jsonString, nav?]   -- send data (pre-stringified on main); `nav`
+ *                              ({ref, path, qs, href, base, closes}) tags a
+ *                              navigate/patch frame with the page it asks for,
+ *                              the document base a URL resolves against, and
+ *                              the closes main had seen when it posted it
  *   [2, code]               -- close WS
- *   [3, {path, qs}]         -- an SPA navigation changed the reconnect path
  *   [4]                     -- acknowledge the frames sent so far: a ping, whose
  *                              pong the worker reports as [3]
  *   [5]                     -- the open socket's view mounted
@@ -35,6 +44,11 @@ import {
     setOnPersist,
     takeTouchedFps,
 } from './arizona-core.js';
+
+/** Effect op codes that navigate -- must match `arizona_effect.hrl`. */
+const EFFECT_NAVIGATE = 10;
+const EFFECT_TRANSITION = 20;
+const EFFECT_PATCH = 24;
 
 /** Op codes -- must match server and main thread. */
 const OP_TEXT = 0;
@@ -152,6 +166,98 @@ let _wsUrl = null;
 
 /** @type {boolean} */
 let _reconnecting = false;
+
+/**
+ * The navigate/patch frames sent on the open socket whose reply has not come, by
+ * reply ref: the page each asks for, its user query string already merged with the
+ * connect() extras. A socket that goes away takes them with it.
+ *
+ * The URL a reconnect dials (`_wsUrl`) names the page on screen, so it moves when a
+ * reply arrives that put its page there -- not when the frame is sent, since a
+ * reply lost with the socket leaves the old page up, and the server must resync
+ * the view the DOM holds. A reply carrying a navigate/patch effect of its own (a
+ * redirect, a full load the server answered the frame with) put nothing there. The
+ * move happens here, on arrival, so no reconnect timer can fire between the reply
+ * and a main-thread round trip.
+ * @type {Map<number, {path: string, qs: string, href: string, base: string}>}
+ */
+const _navTargets = new Map();
+
+/**
+ * Closes reported to main (`[2, ...]`), counted from the base main sent on
+ * connect: a navigation tagged with fewer was posted for a socket already gone.
+ * @type {number}
+ */
+let _closes = 0;
+
+/**
+ * Does an effect list navigate away from `href`, the page the reply answers for
+ * (a `navigate`/`patch`, also inside a `transition`)? One that only names a
+ * fragment of that page -- the same path and query, an empty one included -- and
+ * is no full load only scrolls it. A URL resolves against `base`, the document
+ * base, as the main thread resolves it.
+ * @param {Array<Array<*>>|null} effects
+ * @param {string} href
+ * @param {string} base
+ * @returns {boolean}
+ */
+function navigates(effects, href, base) {
+    if (!effects) return false;
+    return effects.some((/** @type {Array<*>} */ c) => {
+        if (c[0] === EFFECT_NAVIGATE || c[0] === EFFECT_PATCH)
+            return c[2]?.full === true || !fragmentOf(c[1], href, base);
+        if (c[0] !== EFFECT_TRANSITION) return false;
+        const inner = c[2];
+        return navigates(Array.isArray(inner?.[0]) ? inner : [inner], href, base);
+    });
+}
+
+/**
+ * Does `url`, resolved against `base`, name a fragment of the page `href`?
+ * @param {*} url
+ * @param {string} href
+ * @param {string} base
+ * @returns {boolean}
+ */
+function fragmentOf(url, href, base) {
+    if (typeof url !== 'string') return false;
+    let u;
+    let page;
+    try {
+        u = new URL(url, base);
+        page = new URL(href);
+    } catch {
+        return false;
+    }
+    const hasQuery = (/** @type {string} */ h) => h.split('#')[0].includes('?');
+    return (
+        (u.hash !== '' || u.href.endsWith('#')) &&
+        u.origin === page.origin &&
+        u.pathname === page.pathname &&
+        u.search === page.search &&
+        hasQuery(u.href) === hasQuery(page.href)
+    );
+}
+
+/**
+ * Point the reconnect URL at `path` + `qs`: set the framework `_az_path`, drop the
+ * previous page's user params, and lay down `qs` (which already carries any
+ * connect() extras). Framework `_az_*` params (e.g. `_az_caps`) are preserved.
+ * @param {string} path
+ * @param {string} qs
+ */
+function dialPage(path, qs) {
+    if (!_wsUrl) return;
+    const u = new URL(_wsUrl);
+    u.searchParams.set('_az_path', path);
+    for (const key of [...u.searchParams.keys()]) {
+        if (!key.startsWith('_az_')) u.searchParams.delete(key);
+    }
+    for (const [k, v] of new URLSearchParams(qs)) {
+        u.searchParams.append(k, v);
+    }
+    _wsUrl = u.toString();
+}
 
 /** @type {number} */
 let _attempt = 0;
@@ -312,7 +418,13 @@ function resolveOps(ops) {
  * Compute reconnection delay with step backoff and jitter.
  * Imported from core but re-used here for the reconnect timer.
  */
-import { backoff } from './arizona-core.js';
+import { BACKOFF_CAP_ATTEMPT, backoff } from './arizona-core.js';
+
+/**
+ * The next connect attempt was scheduled at the backoff's cap: the reconnects
+ * have run through every shorter step without one opening.
+ */
+let _capped = false;
 
 /**
  * `ws` is no longer this worker's socket: tell the main thread (`[2, code]`) and,
@@ -332,7 +444,9 @@ function socketGone(ws, code) {
     _heartbeatInterval = null;
     _heartbeatPending = false;
     _ws = null;
-
+    // The navigations it still owed a reply are the main thread's to send again.
+    _navTargets.clear();
+    _closes++;
     postMessage([2, code]);
 
     if (code === 1000) return;
@@ -349,6 +463,7 @@ function socketGone(ws, code) {
         _attempt = 0;
     }
     _reconnecting = true;
+    _capped = _attempt >= BACKOFF_CAP_ATTEMPT;
     _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
 }
 
@@ -382,6 +497,7 @@ function openSocket() {
 
     const ws = new WebSocket(url);
     _ws = ws;
+    postMessage([4, _capped]);
 
     ws.onopen = () => {
         if (_ws !== ws) return;
@@ -437,7 +553,16 @@ function openSocket() {
         const firstAfterReconnect = _reconnecting && ops !== null;
         if (firstAfterReconnect) _reconnecting = false;
 
-        postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null, msg.r ?? null]);
+        const ref = msg.r ?? null;
+        const target = ref === null ? undefined : _navTargets.get(ref);
+        let shown = false;
+        if (target) {
+            _navTargets.delete(ref);
+            shown = !navigates(effects, target.href, target.base ?? target.href);
+            if (shown) dialPage(target.path, target.qs);
+        }
+
+        postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null, ref, shown]);
     };
 
     ws.onclose = (e) => socketGone(ws, e.code);
@@ -465,6 +590,7 @@ self.onmessage = (e) => {
             // in-worker backoff reconnect.
             _wsUrl = msg[1];
             if (msg[2]) _reconnecting = true;
+            _closes = msg[3] ?? 0;
             openSocket();
 
             // Hydrate in-memory cache from IDB (cross-session persistence),
@@ -484,9 +610,17 @@ self.onmessage = (e) => {
             break;
         }
         case 1: {
-            // [1, jsonString] -- send data
+            // [1, jsonString, nav?] -- send data
+            // A navigation main posted before it saw a close the worker has since
+            // reported was meant for that dead socket: main pends or drops it as
+            // that close says, and sending it on the new one would send it twice.
+            if (msg[2] && msg[2].closes !== _closes) break;
             if (_ws && _ws.readyState === 1) {
                 _ws.send(msg[1]);
+                if (msg[2]) {
+                    const { ref, path, qs, href, base } = msg[2];
+                    _navTargets.set(ref, { path, qs, href, base });
+                }
                 break;
             }
             // The socket is down (typically the reconnect backoff window, up to
@@ -511,27 +645,6 @@ self.onmessage = (e) => {
                 socketGone(ws, msg[1]);
             }
             break;
-        case 3: {
-            // [3, {path, qs}] -- an SPA navigation changed both the path and the
-            // query string, so update the reconnect URL to match: set the
-            // framework `_az_path`, drop the previous page's user params, and lay
-            // down the navigated-to qs (which already carries any connect()
-            // extras). Framework `_az_*` params (e.g. `_az_caps`) are preserved.
-            // Without replacing the user params, the original page's query string
-            // would persist and the navigated-to one would be lost on reconnect.
-            if (!_wsUrl) break;
-            const { path, qs } = msg[1];
-            const u = new URL(_wsUrl);
-            u.searchParams.set('_az_path', path);
-            for (const key of [...u.searchParams.keys()]) {
-                if (!key.startsWith('_az_')) u.searchParams.delete(key);
-            }
-            for (const [k, v] of new URLSearchParams(qs)) {
-                u.searchParams.append(k, v);
-            }
-            _wsUrl = u.toString();
-            break;
-        }
         case 4:
             // [4] -- acknowledge the frames sent so far (see [3] to main).
             if (_ws && _ws.readyState === 1) {

@@ -34,7 +34,9 @@ new(Raw) ->
 
 parse_bindings(#{bindings := Bindings}) -> Bindings.
 
-parse_params(#{params := Params}) -> Params.
+parse_params(#{params := Params}) -> Params;
+%% A request resolve_route/3 returned: its query string, as a real adapter parses it.
+parse_params(#{resolved_qs := Qs}) -> uri_string:dissect_query(Qs).
 
 parse_cookies(#{cookies := Cookies}) -> Cookies.
 

@@ -196,7 +196,8 @@ The contract is enforced where it costs nothing:
   `{non_utf8_render, Byte, Offset}`, finding the bytes in a structured value too (a
   command array). `?json` escapes inside the slot's located evaluation, so its error
   carries the template line; a socket frame failure is logged with the formatted
-  reason and closes 4500 (4501 for the frame delivering a mount), as before.
+  reason and closes 4500 (4501 for the frame delivering the page on screen's own mount; a
+  navigate's is answered with the load of its page first).
 - **Dev mode** (the dev reloader is wired, the signal that also gates the rich error
   page). `arizona_http` renders each page through `arizona_utf8:render_view/2` instead
   of `arizona_render:render_view/2`: the same mount, the same output bytes, but every
@@ -1804,8 +1805,8 @@ matters because the JS worker treats **any non-1000 code as reconnectable**:
 | `{shutdown, drain}` | `?CLOSE_GOING_AWAY` (1001) | **Reconnects** -- the deliberate drain path (RFC 6455 §7.4 "going away"); the main thread preserves form state |
 | `normal` | 1000 | No reconnect |
 | `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
-| anything else, after the view mounted (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects** with no page reload: the worker's backoff reconnect remounts the view in place and the main thread restores typed form fields. A crash within 10 s of the view's last mount (the main thread tells the worker: a first connect's frame, a reconnect's resync, a navigate's `OP_REPLACE`) does not reset the backoff, so a view that crashes right after every remount keeps backing off; the native clients apply the same rule from their `OP_REPLACE`. Crash remount is deliberately not attempted server-side |
-| any failure to mount the view | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a reconnect that mounts first cancels the reload. Consecutive reloads of one path are counted per tab, in one `sessionStorage` key holding `{path, count}` (a reload of another path starts over), so a failing path, which may carry a secret, never outlives the tab; only a successful mount removes it (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff |
+| anything else, after the view mounted (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects** with no page load: the worker's backoff reconnect remounts the page on screen in place, and the main thread restores typed form fields. A navigation the server could not complete was answered with the load of its page before the close; one still owed a reply is not one it failed, and goes out again once the page on screen is live (see "Reconnecting to the page on screen"). A crash within 10 s of the view's last mount (the main thread tells the worker: a first connect's frame, a reconnect's resync, a navigate's `OP_REPLACE`) does not reset the backoff, so a view that crashes right after every remount keeps backing off; the native clients apply the same rule from their `OP_REPLACE`. Crash remount is deliberately not attempted server-side |
+| a failure to mount the page on screen (its connect or a reconnect's resync) | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a mount that succeeds first cancels the reload. Consecutive reloads of one path are counted per tab, in one `sessionStorage` key holding `{path, count}` (a reload of another path starts over), so a failing path, which may carry a secret, never outlives the tab; only a successful mount removes it (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff. A navigation never closes 4501 |
 
 An application stop takes the drain path: `arizona_app:prep_stop/1` drains the `arizona_http`
 listener (its adapter's `drain/2`) instead of
@@ -1840,14 +1841,28 @@ A production node (neither a `reloader` env nor a dev MCP route) reads one persi
 and the app env once per connection and joins nothing.
 
 The mount sites that close 4501 on any raise: the connect's mount in `init/4` (a first connect,
-and an unflagged reconnect's mount + render), the deferred reconnect resync (`flush_resync/1`,
-whichever leg settles it), and a navigate (including a `patch` that degrades to one) -- a crash
-exit under its call, whether in the new page's mount or the old page's unmount. Each covers
-encoding the frame that delivers the view, since until it arrives the client has no mounted view.
-A resync or navigate mount that crashes takes the live process down under the call, so it follows
-the dropped-frame rule below: the socket notes the failed call was a mount, and the queued crash
-exit then closes 4501 instead of 4500 (a live process already gone before the call closes per its
-own exit). A navigate/patch whose middleware halts without a redirect is not a mount failure but
+and an unflagged reconnect's mount + render) and the deferred reconnect resync (`flush_resync/1`,
+whichever leg settles it). Each covers encoding the frame that delivers the view, since until it
+arrives the client has no mounted view. A resync mount that crashes takes the live process down
+under the call, so it follows the dropped-frame rule below: the socket notes the failed call was a
+mount, and the queued crash exit then closes 4501 instead of 4500 (a live process already gone
+before the call closes per its own exit).
+
+A navigate or patch the socket cannot complete is answered instead (`nav_frame/5`): the new page's
+mount or the old page's unmount crashing under the call (a `patch` that degrades to a navigate
+too), a same-handler patch whose `handle_update/3` raises, or a middleware, the route adapter or the
+encode of the reply raising. The server knows which navigation failed, so it answers that frame's
+ref with the full load of its URL -- the same `navigate(Url, #{full => true, replace => true})` a
+target the socket cannot serve in place gets -- and then closes 4500, so the reconnect remounts the
+page on screen if the load does not happen (a `beforeunload` prompt the user cancels). A client
+never sends that navigation over the socket again, where it would fail again. The close comes from
+the crash exit queued behind the process's last pushes, or, with the live process still up (a
+middleware raise), from a message the socket queues to itself behind the reply. With the process
+gone, a frame queued behind the failed one stays unanswered and the close fails its ref; with it
+still up, the frames already queued ahead of that message run and are answered before the close.
+A call that finds the process gone before it (`noproc`) or ended deliberately (a drain) is not the
+navigation's failure: the frame is dropped and the exit decides, as below.
+A navigate/patch whose middleware halts without a redirect is not a mount failure but
 a deliberate refusal: the socket replies with a full navigation to the requested URL
 (`arizona_js:navigate(Url, #{full => true})`), so the browser loads it over HTTP and shows the
 middleware's own response at once -- a reconnect's upgrade, refused by the same middleware, never
@@ -1863,8 +1878,9 @@ event, navigate, patch or resync frame is in flight). The frame is dropped and t
 the queued `'EXIT'`, which arrives behind every push the process sent before exiting -- so a
 drain's `handle_drain/2` effects still ship -- and then closes per the mapping above: 1001 for
 `{shutdown, drain}`, 1000 for a deliberate end, a logged 4500 for a crash (4501 when the failed
-call was a mount). A failed call to a live process that is still alive has no exit to wait for and
-is a crash, as is a `noproc` from any other process a middleware or route adapter calls.
+call was a resync's mount). A failed call to a live process that is still alive has no exit to wait
+for and is a crash, as is a `noproc` from any other process a middleware or route adapter calls --
+except under a navigate or patch frame, which is answered as above.
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{reply_many, [iodata()], Socket}` | `{close, Code, Reason, Socket}`. `reply_many` exists for the
@@ -1899,8 +1915,8 @@ warning rather than stashed for whatever navigation comes next. A `flash` opt th
 through the socket -- an event attribute, a controller response -- has no carrier at all, so
 `arizona_effect`'s encoders refuse it (`flash_outside_live_effect`) instead of shipping it to a
 client that would drop it. The route adapter is recovered from
-`req` on demand. `mount_failed` marks a dropped frame whose failed live call was a mount, so the
-queued crash exit closes 4501.
+`req` on demand. `mount_failed` marks a dropped frame whose failed live call was a resync's mount,
+so the queued crash exit closes 4501.
 
 **Op scoping happens at JSON-encode time, in two steps.** `flatten_ops/2` walks the nested
 `[[ChildViewId, ChildOps] | ...]` shape `arizona_live` produces and returns a flat list of
@@ -2408,14 +2424,144 @@ tells it from one sent after the client applied the swap (dropping the root id f
 eat legitimate events from the new page). So the web client drops every view event raised between
 posting a `navigate` and its reply -- the frame carrying the navigate's reply ref back (its
 `OP_REPLACE`, or a navigate effect: a full-page load, where the server kept the old view, or a
-redirect, which is itself a navigate and re-arms), or a reconnect's resync `OP_REPLACE` -- exactly
-as a full page load would. The window holds the refs of the navigates in flight, so back-to-back
+redirect, which is itself a navigate and re-arms), or a reconnect's resync `OP_REPLACE` (after
+which a navigate still owed is sent again and re-arms, see "Reconnecting to the page on screen") --
+exactly as a full page load would. The window holds the refs of the navigates in flight, so back-to-back
 navigates keep it open until the last reply, and a frame carrying no navigate's ref settles none:
 an old-page push carrying a navigate effect ahead of the reply, or the `OP_REPLACE` of a patch the
 server degraded to a replace, answers something else. A dropped event is logged by name. A `patch`
 does not arm the window: it usually keeps the view, and the client cannot know ahead that the
 server will degrade a cross-handler patch to a replace, so that case keeps the window. The native
 clients (Android/iOS) do not gate yet.
+
+**Reconnecting to the page on screen.** A reconnect always dials the page the DOM holds, never the
+address bar: the resync is an `OP_REPLACE` of that view, by its id, so dialing a page the DOM does
+not hold would mount a view whose id the page lacks, and the old page would stay up under the new
+URL. The web client tracks that page and the worker's reconnect URL follows it: each
+`navigate`/`patch` frame is tagged, for the worker, with the page it asks for, and the worker moves
+its reconnect URL when the frame carrying that ref arrives without a navigate/patch effect of its
+own -- on arrival, before any reconnect timer can fire, and before the frame is applied (a reply
+held behind a view transition is still applied before a later resync. A reply that navigates again
+(a halt redirect, a `handle_update/3` redirect, a full load the server answered the frame with)
+moves nothing; its own navigation does when answered. A
+navigate/patch effect that only names a fragment of the page the reply answers for (the same path
+and query, no `full`) only scrolls it, so it does not count as one. A bfcache respawn builds its URL
+from the same page.
+
+A navigation the socket cannot carry waits for that page to be live again:
+
+- **Issued while down.** With a reconnect due (an abnormal close, a bfcache restore) on a page
+  that has mounted once, a `navigate`/`patch` effect, an `az-navigate`/`az-patch` click and a
+  popstate push (or replace) the history entry as usual and become the one pending navigation --
+  the last one wins -- with the scroll and view transition they were issued with, and send nothing.
+  One naming the page on screen (Back to it) leaves nothing to carry: it drops the pending one.
+  Before a first mount nothing proves a socket will ever open (a proxy that never upgrades), so
+  the page a navigation names loads (a click is left to the browser, a popstate reloads), as with
+  no socket at all.
+- **Owed a reply a close lost.** A close of any code (or `pagehide`) makes the last navigate/patch
+  still owed the pending one (none is pending then: a navigation sent on a live socket supersedes
+  the pending one). A navigation the server failed is never among them: it is answered before
+  the close. One whose reply was lost on the client's side (its socket dropped while the server
+  was still handling it, a `pagehide`) may have run and runs again, so a navigation must be
+  idempotent, as any request.
+
+Once the frame proving the page on screen mounted is applied (the first connect's frame, a
+reconnect's resync, with its form restore and focus), the pending navigation is sent, in that same
+apply, so no user event can be raised between the two; its scroll and transition are armed again
+for its own reply (left armed, the resync's `OP_REPLACE` would consume them). One naming the page
+on screen is dropped. A page a replayed `navigate` reaches is reached by a navigate, so it reads
+`?reconnected` as `false`; a replayed same-handler `patch` keeps the view the reconnect mounted,
+so it keeps reading `true`: a reconnect mounted it.
+
+A navigation the server could not complete (its page failed to mount, its old page crashed as it
+unmounted, the view crashed reacting to a patch, a middleware raised) is answered with the load of
+its page, then the session closes `4500`; see "Exit handling". That is the navigation's one outcome.
+Let through, the load reloads the entry the navigation pushed when its URL is that entry's, fragment
+aside (the frame carries none), so the entry keeps its history state and its fragment, which the
+reloaded page scrolls to, and Back and Forward stay right. A recovery load of the address bar's own
+URL with a fragment (a pending navigation's fallback, the resync of a view the page does not hold)
+cannot go by URL, which would only scroll: an entry the client stamped (`_azIdx`/`_azScroll` in its
+state) reloads with its fragment, an unstamped one loads without it, since it may be a form POST's.
+Any other load (a URL that differs, an app's own `full` navigate, a fragment of the page on screen
+included) goes by URL, as the browser takes it. Cancelled in a `beforeunload` prompt, the navigation
+is settled: the `4500` reconnects the page on screen, which stays live under the address of the page
+asked for, as after any cancelled full load, and nothing asks again. A navigate queued behind a
+crashing event did not run, so it goes out again once the page on screen is live: two pages that
+crash and navigate to each other on connect loop over the socket under the worker's backoff, loading
+nothing.
+
+Newer wins: the reply to a navigation older than the last one issued runs no navigation it carries
+(a halt redirect, the full load the server answered it with), since replies keep frame order and it
+would override the newer one; its ops and other effects still apply. Only navigations the client
+issues itself are ordered: a load started outside it (a plain `<a href>`, Back or Forward to a
+document not in the bfcache, a typed URL, a download, a `full` navigate) is not ordered against an
+older owed navigation's full-load answer, which may still load over it: newer wins does not cover
+it. The client cannot know up front whether such a load commits (a download or a 204 never does), so
+it cannot safely treat it as the newer navigation. And the loads answering navigations issued with
+no person acting since the page mounted are bounded per tab: whether a person acted, not who chose
+the URL, tells a loop from a person. A person acting is a trusted `pointerdown`, `keydown` or
+`click` (a page's own code cannot make those trusted: a scripted `click()` is untrusted; a held
+key's autorepeat is no fresh act), caught on the window and on each Picture-in-Picture window ahead
+of any listener that could stop it, or a cross-page Back or Forward the Navigation API reports
+`userInitiated` (a script's `history.back()` is then no person; how far a browser reports its own UI
+so is its own: Firefox's headless automation reports Playwright's Back as not user-initiated, so it
+is bounded there), and without the API every cross-page traversal counts, the limit of what popstate
+tells. Not `input` or `change`: a page's own checkbox `click()` or `execCommand` fires them trusted.
+The fragment-only popstate fast path (the page on screen, no navigation owed or pending; a script
+writing `location.hash`) never counts, and nor does what the page's own code sends (an
+`arizona:connected` listener, a hook, a timer, an app's `executeJS` or `fetch`). A navigate reply's
+mount keeps its navigation's input, so a person's chain through a live hop stays theirs; any other
+mount clears it. Two pages whose navigations fail over the socket but load over HTTP, each
+navigating to the other on connect, would otherwise load each other forever. Each such load is
+recorded in `sessionStorage` (`arizona:nav-loads`) before it starts, as `{t, slow}`; once 10 fall
+within 5 minutes, every further one waits 30 s first, said once per page load, and that slow state
+sticks until 30 s pass with no such load, so a loop slower than the window cannot drift out of it: a
+loop settles at one load per 30 s plus its own pace (a load answering another such navigation while
+one waits takes its place and keeps its deadline; a reply that puts a newer navigation's page on
+screen live drops it). Nothing clears the record (its entries expire). A load answering a navigation
+issued after user input (a layout-crossing click, a wizard step whose handler redirects) is never
+counted or delayed.
+
+A `1000` (a deliberate end) is never reconnected: a pending navigation loads the address bar's
+URL, and a navigation issued after it loads its URL. After `disconnect()` nothing runs.
+
+A reconnect attempt that never opens tells the client nothing about the page (a proxy restarting
+answers for the app, an upgrade middleware may fail once), so the worker keeps backing off and the
+page stays as it is until an attempt opens -- unless a navigation is pending: once an attempt that
+started after it was pended fails without opening, no socket is about to carry it (a server down,
+an auth gate halting the upgrade), so it runs as with no socket, a load of the address bar's URL --
+leaving the page the user was already leaving. One pended while an attempt is in flight waits for
+the next attempt, so the resync wins when the socket comes back first. One requeued from a lost
+reply waits longer: the user issued nothing while down, so it loads only once an attempt scheduled
+at the backoff's cap (10 s, after the 1, 2 and 5 s steps) fails, and an ordinary server restart has
+time to come back first.
+
+A resync that names a view the page does not hold cannot be applied: the reconnect mounted some
+page other than the one the DOM holds (its view id changed, or the reconnect URL named another
+page). Left alone, the old page would stay up with every event
+reaching a view that is gone, so the client applies nothing and loads the address bar's URL, the
+page the user last asked for (not always the one the reconnect mounted). It does not loop: the
+loaded page holds its own view, so its own resyncs find what they replace.
+
+The reference JSON client (`e2e/utils/json_client.js`) follows the same rule for `?json`: its
+reconnect re-mounts the page on screen, moved by a navigate's reply that put its page there, and a
+navigate a down socket could not carry (issued while down, or owed a reply a close lost; the last
+one wins) goes out once the reconnect's `OP_REPLACE` has put that page back, or is dropped when it
+names that page, whatever the close; a navigate the server answered with a full navigate connects
+fresh to its page, and a reply to an older navigate than the last one sent runs no navigation. It
+connects fresh to a pending navigate after a `1000` close (its full navigate), as it does to a
+navigate issued before its first mount or after such a close. A pending navigate behind attempts
+that keep failing gets the same two rules as on the web: one issued while down connects fresh to its
+page once an attempt started after it fails without opening, one a close lost only once such an
+attempt at the backoff's cap fails. A native client must bound its fresh connections the same way,
+since a full navigate there costs only a socket: the reference client delays one answering a
+navigate issued with no person acting since the view mounted by the web client's rule (10 within 5
+minutes, then one per 30 s until 30 s pass with none). A native client has no DOM to tell a person
+from code, so it marks input from its own touch and key handlers: the reference client's
+`noteUserInput()` (its `tap()` calls it), never a bare app `navigate()`, `navigateAwait()`,
+`pushEvent()` or `pushEventAwait()`. A navigate reply's mount keeps that navigate's own input, any
+other mount clears it. That delay keeps the client's socket closed for up to 30 s. A person's
+navigate during it connects fresh to their page at once; an app's waits it out.
 
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS
 sends `["patch", {path, qs}, ref]`. `arizona_socket` resolves the route + runs middlewares as for
@@ -2651,10 +2797,10 @@ down -- a hooked widget, an embedded component, a status badge:
   its state. Write listeners to be idempotent. `code` is the close code the browser reports: the
   server's (`1001` drain, `4500` crash, `4501` mount failure) or, for a connection that ended
   without a close frame -- a network drop, a failed handshake, a first connect that never opened --
-  `1006`. `reloadInMs` is the delay of the page reload this `4501` scheduled, `null` otherwise
-  (including a `4501` while a reload is already pending). A `1000` close (a deliberate end, which
-  the client does not reconnect after), `disconnect()`, and `pagehide` fire nothing: the last two
-  terminate the worker, so no close reaches the page.
+  `1006`. `reloadInMs` is the delay of the page reload this close scheduled (a `4501`), `null`
+  otherwise (including such a close while a reload is already pending). A `1000` close (a
+  deliberate end, which the client does not reconnect after), `disconnect()`, and `pagehide`
+  fire nothing: the last two terminate the worker, so no close reaches the page.
 - **`arizona:connected`**, detail `{reconnect}` -- a view mounted on a new socket, fired once the
   ops of the frame that proves it (the first frame of a first connect, the resync of a reconnect)
   have been applied -- after a view transition's deferred update when one wraps that frame, and

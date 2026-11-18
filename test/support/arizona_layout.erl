@@ -39,6 +39,18 @@ render(Bindings) ->
                 {script, [{type, ~"module"}], [
                     ~"""
                 import { hooks, connect } from '/priv/arizona.min.js';
+                import { pushEvent } from '/priv/arizona.min.js';
+                // A page whose own code sends on its own, no person acting
+                // (arizona_crash_nav's `ping`): a hook a moment after it mounts, and
+                // an `arizona:connected` listener.
+                hooks.PingLater = {
+                    mounted() {
+                        setTimeout(() => this.pushEvent('hello', {}), 150);
+                    },
+                };
+                document.addEventListener('arizona:connected', () => {
+                    if (document.querySelector('[data-ping=connected]')) pushEvent('hello', {});
+                });
                 hooks.Tick = {
                     mounted() {
                         this.el.dataset.hookMounted = 'true';
@@ -70,7 +82,8 @@ render(Bindings) ->
                         log.events.push(`destroy:${this.el.dataset.kind}:${this.el.isConnected}`);
                     },
                 };
-                connect('/ws');
+                // The disconnect function, for a test that calls it as the page unloads.
+                window.__azDisconnect = connect('/ws');
                 """
                 ]}
             ]}

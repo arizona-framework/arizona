@@ -48,7 +48,7 @@
 -export([navigate_on_crashed_live_process_closes_crash/1]).
 -export([live_crash_log_names_template_line/1]).
 -export([event_drained_under_call_closes_going_away/1]).
--export([navigate_middleware_noproc_closes_crash/1]).
+-export([navigate_middleware_noproc_answers_full_load/1]).
 -export([drain_effects_ship_before_close/1]).
 -export([drain_effects_ship_before_noproc_close/1]).
 -export([crash_under_call_closes_crash/1]).
@@ -63,8 +63,14 @@
 -export([unencodable_resync_closes_mount_failed/1]).
 -export([connect_mount_crash_closes_mount_failed/1]).
 -export([unflagged_reconnect_mount_crash_closes_mount_failed/1]).
--export([navigate_mount_crash_closes_mount_failed/1]).
--export([patch_to_crashing_handler_closes_mount_failed/1]).
+-export([navigate_mount_crash_answers_full_load/1]).
+-export([patch_to_crashing_handler_answers_full_load/1]).
+-export([patch_update_crash_answers_full_load/1]).
+-export([unencodable_navigate_answers_full_load/1]).
+-export([unencodable_patch_answers_full_load/1]).
+-export([unref_navigate_mount_crash_answers_full_load/1]).
+-export([event_crash_leaves_queued_navigate_unanswered/1]).
+-export([navigate_ended_under_call_is_dropped/1]).
 -export([navigate_halt_without_redirect_loads_full_page/1]).
 -export([handler_flash_survives_gate_on_target/1]).
 -export([chained_gate_flash_replays_first_gate/1]).
@@ -142,7 +148,7 @@ all() ->
         navigate_on_crashed_live_process_closes_crash,
         live_crash_log_names_template_line,
         event_drained_under_call_closes_going_away,
-        navigate_middleware_noproc_closes_crash,
+        navigate_middleware_noproc_answers_full_load,
         drain_effects_ship_before_close,
         drain_effects_ship_before_noproc_close,
         crash_under_call_closes_crash,
@@ -157,8 +163,14 @@ all() ->
         unencodable_resync_closes_mount_failed,
         connect_mount_crash_closes_mount_failed,
         unflagged_reconnect_mount_crash_closes_mount_failed,
-        navigate_mount_crash_closes_mount_failed,
-        patch_to_crashing_handler_closes_mount_failed,
+        navigate_mount_crash_answers_full_load,
+        patch_to_crashing_handler_answers_full_load,
+        patch_update_crash_answers_full_load,
+        unencodable_navigate_answers_full_load,
+        unencodable_patch_answers_full_load,
+        unref_navigate_mount_crash_answers_full_load,
+        event_crash_leaves_queued_navigate_unanswered,
+        navigate_ended_under_call_is_dropped,
         navigate_halt_without_redirect_loads_full_page,
         navigate_halt_redirect_replaces_history_entry,
         navigate_halt_redirect_off_origin_replays_gated_path,
@@ -1115,19 +1127,25 @@ event_drained_under_call_closes_going_away(Config) when is_list(Config) ->
         error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
     ).
 
-navigate_middleware_noproc_closes_crash(Config) when is_list(Config) ->
+navigate_middleware_noproc_answers_full_load(Config) when is_list(Config) ->
     %% A `noproc` from a process other than the socket's live process -- here a
-    %% navigate middleware calling a server that is not running -- is a crash,
-    %% not the drain race: logged, 4500.
+    %% navigate middleware calling a server that is not running -- is the
+    %% navigate's failure, not the drain race: logged, its ref answered with the
+    %% full load of its URL, then 4500 although the live process is still up.
     Down = fun(_Req, _B) -> gen_server:call(arizona_socket_suite_no_server, ping) end,
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/down" => {arizona_root_counter, #{middlewares => [Down]}}}
     }),
     {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {Answer, Close} = logged_error(fun() ->
+        settle(arizona_socket:handle_in(navigate_frame(~"/down", 7), Socket), Socket)
+    end),
+    ?assertMatch(#{~"r" := 7}, decode(Answer)),
     ?assertMatch(
-        {close, 4500, ~"server crash", _},
-        logged_error(fun() -> arizona_socket:handle_in(navigate_frame(~"/down"), Socket) end)
-    ).
+        [[?EFFECT_NAVIGATE, ~"/down", #{~"full" := true, ~"replace" := true}]], effects(Answer)
+    ),
+    ?assertMatch({close, 4500, ~"server crash", _}, Close),
+    ?assert(is_process_alive(arizona_socket:live_pid(Socket))).
 
 drain_effects_ship_before_close(Config) when is_list(Config) ->
     %% A drain whose `handle_drain/2` returns effects pushes them, then exits
@@ -1417,33 +1435,134 @@ unflagged_reconnect_mount_crash_closes_mount_failed(Config) when is_list(Config)
         end)
     ).
 
-navigate_mount_crash_closes_mount_failed(Config) when is_list(Config) ->
-    %% A navigate mounts the new page on the live process: its failure is a
-    %% mount failure even though the socket's previous view had mounted. The
-    %% frame is dropped and the live process's queued exit closes.
+navigate_mount_crash_answers_full_load(Config) when is_list(Config) ->
+    %% A navigate whose new page fails to mount kills the live process under the
+    %% call. The server knows which navigation failed, so it answers that frame's
+    %% ref with the full load of its URL, then the crash exit closes 4500 (the page
+    %% on screen remounts) -- never 4501, which is the page on screen's own failure.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/boom" => {arizona_crashable, #{bindings => #{crash_on_mount => true}}}}
     }),
     {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     ?assertMatch(
-        {[], {close, 4501, ~"mount failed", _}},
-        logged_error(fun() ->
-            settle(arizona_socket:handle_in(navigate_frame(~"/boom"), Socket), Socket)
-        end)
+        {full_load, 11, ~"/boom", {close, 4500, ~"server crash", _}},
+        failed_nav(navigate_frame(~"/boom", 11), Socket)
     ).
 
-patch_to_crashing_handler_closes_mount_failed(Config) when is_list(Config) ->
+patch_to_crashing_handler_answers_full_load(Config) when is_list(Config) ->
     %% A patch to a different handler degrades to a navigate, and mounts.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/boom" => {arizona_crashable, #{bindings => #{crash_on_mount => true}}}}
     }),
     {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     ?assertMatch(
-        {[], {close, 4501, ~"mount failed", _}},
-        logged_error(fun() ->
-            settle(arizona_socket:handle_in(patch_frame(~"/boom"), Socket), Socket)
-        end)
+        {full_load, 12, ~"/boom", {close, 4500, ~"server crash", _}},
+        failed_nav(patch_frame(~"/boom", 12), Socket)
     ).
+
+patch_update_crash_answers_full_load(Config) when is_list(Config) ->
+    %% A same-handler patch whose `handle_update/3` raises: the view crashed in
+    %% reaction to the patch, so the patch is answered with the full load of its
+    %% URL (a fresh mount of it may well work), then 4500.
+    Route = {arizona_patch_crash, #{middlewares => [arizona_middleware:extract([params])]}},
+    Req = arizona_req_test_adapter:new(#{routes => #{~"/pc" => Route}}),
+    {reply, _, Socket} = arizona_socket:init(arizona_patch_crash, #{}, Req, #{}),
+    Frame = iolist_to_binary(
+        json:encode([~"patch", #{~"path" => ~"/pc", ~"qs" => ~"boom=1"}, 13])
+    ),
+    ?assertMatch(
+        {full_load, 13, ~"/pc?boom=1", {close, 4500, ~"server crash", _}},
+        failed_nav(Frame, Socket)
+    ),
+    %% The reaction itself crashed: the live process is gone, not a middleware.
+    ?assertNot(is_process_alive(arizona_socket:live_pid(Socket))).
+
+unencodable_navigate_answers_full_load(Config) when is_list(Config) ->
+    %% The new page mounts but its replace cannot be encoded: the navigate failed
+    %% with the live process still up. Answered all the same, then 4500 -- not the
+    %% 4501 of a page on screen that could not be delivered.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/bad" => {arizona_root_counter, #{bindings => #{count => ?BAD_UTF8}}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_timer, #{}, Req, #{}),
+    ?assertMatch(
+        {full_load, 14, ~"/bad", {close, 4500, ~"server crash", _}},
+        failed_nav(navigate_frame(~"/bad", 14), Socket)
+    ).
+
+unencodable_patch_answers_full_load(Config) when is_list(Config) ->
+    %% A same-handler patch whose diff cannot be encoded fails the same way: answered
+    %% with the load of its page, then 4500, the live process still up.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/bad" => {arizona_root_counter, #{bindings => #{count => ?BAD_UTF8}}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    ?assertMatch(
+        {full_load, 15, ~"/bad", {close, 4500, ~"server crash", _}},
+        failed_nav(patch_frame(~"/bad", 15), Socket)
+    ),
+    ?assert(is_process_alive(arizona_socket:live_pid(Socket))).
+
+unref_navigate_mount_crash_answers_full_load(Config) when is_list(Config) ->
+    %% A navigate without a reply ref gets the same full load, unanswered by ref.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/boom" => {arizona_crashable, #{bindings => #{crash_on_mount => true}}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {[Answer], Close} = logged_error(fun() ->
+        settle(arizona_socket:handle_in(navigate_frame(~"/boom"), Socket), Socket)
+    end),
+    ?assertNot(is_map_key(~"r", decode(Answer))),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/boom", #{~"full" := true}]], effects(Answer)),
+    ?assertMatch({close, 4500, ~"server crash", _}, Close).
+
+navigate_ended_under_call_is_dropped(Config) when is_list(Config) ->
+    %% A live process that ends deliberately while a navigate's call is queued --
+    %% a drain, a `shutdown`, a `normal` stop -- did not fail that navigate: the
+    %% frame is dropped unanswered (no full load) and the exit decides the close.
+    Req = arizona_req_test_adapter:new(#{routes => #{~"/rc" => {arizona_root_counter, #{}}}}),
+    Cases = [
+        {drain, 1001},
+        {{terminate, shutdown}, 1000},
+        {{terminate, normal}, 1000}
+    ],
+    lists:foreach(
+        fun({How, Code}) ->
+            {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+            Pid = arizona_socket:live_pid(Socket),
+            ok = sys:suspend(Pid),
+            true = is_pid(
+                case How of
+                    drain ->
+                        Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+                        spawn_link(fun() -> resume_when_queued(Pid, 2) end);
+                    {terminate, Reason} ->
+                        spawn_link(fun() -> terminate_when_queued(Pid, Reason) end)
+                end
+            ),
+            ?assertMatch(
+                {[], {close, Code, _, _}},
+                settle(arizona_socket:handle_in(navigate_frame(~"/rc", 31), Socket), Socket),
+                How
+            )
+        end,
+        Cases
+    ).
+
+event_crash_leaves_queued_navigate_unanswered(Config) when is_list(Config) ->
+    %% An event crashes the view, and a navigate queued behind it reaches the socket
+    %% before the crash exit: it never ran, so it gets no answer (the close fails
+    %% its ref, and a client sends it again once the page on screen is back).
+    Req = arizona_req_test_adapter:new(#{routes => #{~"/rc" => {arizona_root_counter, #{}}}}),
+    {reply, _, Socket} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+    Crash = iolist_to_binary(json:encode([~"crashable", ~"crash", #{}, 21])),
+    {Frames, Close} = logged_error(fun() ->
+        {ok, Socket1} = arizona_socket:handle_in(Crash, Socket),
+        {ok, Socket2} = arizona_socket:handle_in(navigate_frame(~"/rc", 22), Socket1),
+        settle({ok, Socket2}, Socket)
+    end),
+    ?assertEqual([], Frames),
+    ?assertMatch({close, 4500, ~"server crash", _}, Close).
 
 handler_flash_survives_gate_on_target(Config) when is_list(Config) ->
     %% An in-view handler flashes and navigates to /show_flash, whose gate
@@ -2374,11 +2493,34 @@ settle({ok, Socket0}, Socket) ->
                     settle(Other, Socket)
             end;
         {'EXIT', Pid, _} = Exit ->
-            settle(arizona_socket:handle_info(Exit, Socket0), Socket)
+            settle(arizona_socket:handle_info(Exit, Socket0), Socket);
+        arizona_nav_failed = Msg ->
+            settle(arizona_socket:handle_info(Msg, Socket0), Socket)
     after 2000 -> error(no_close)
     end;
+settle({reply, Frame, Socket0}, Socket) ->
+    {Frames, Close} = settle({ok, Socket0}, Socket),
+    {[Frame | Frames], Close};
 settle({close, _, _, _} = Close, _Socket) ->
     {[], Close}.
+
+%% A navigate/patch frame that fails: `{full_load, Ref, Url, Close}` when its
+%% only frame answers its ref with the full load of `Url` (replacing the history
+%% entry) and the session then closes with `Close`, the failure logged.
+failed_nav(Frame, Socket) ->
+    case logged_error(fun() -> settle(arizona_socket:handle_in(Frame, Socket), Socket) end) of
+        {[Answer], Close} ->
+            case {decode(Answer), effects(Answer)} of
+                {#{~"r" := Ref}, [[?EFFECT_NAVIGATE, Url, #{~"full" := true} = Opts]]} when
+                    map_get(~"replace", Opts)
+                ->
+                    {full_load, Ref, Url, Close};
+                Other ->
+                    {unexpected_answer, Other, Close}
+            end;
+        Other ->
+            {unexpected, Other}
+    end.
 
 %% Runs Fun and returns its result, asserting it logged an error on the way: the
 %% crash close must never swallow the reason.
@@ -2420,6 +2562,15 @@ kill_when_queued(Pid) ->
         {message_queue_len, _} ->
             ok = timer:sleep(1),
             kill_when_queued(Pid)
+    end.
+
+terminate_when_queued(Pid, Reason) ->
+    case erlang:process_info(Pid, message_queue_len) of
+        {message_queue_len, Len} when Len >= 1 ->
+            ok = sys:terminate(Pid, Reason);
+        {message_queue_len, _} ->
+            ok = timer:sleep(1),
+            terminate_when_queued(Pid, Reason)
     end.
 
 resume_when_queued(Pid, N) ->

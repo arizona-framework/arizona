@@ -43,6 +43,8 @@
  *   transition?: {types?: string[], kind: 'any'|'replace'}) => void} navigate
  *   a navigate or patch effect, under the view transition running it, if any
  * @property {(url: string, replace?: boolean) => void} leavePage load `url` as a real page
+ * @property {(win: Window, signal: AbortSignal) => void} [watchInput] watch a Picture-in-
+ *   Picture window for a person's input, until `signal` aborts
  */
 
 /** @type {Host} */

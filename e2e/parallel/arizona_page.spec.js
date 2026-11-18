@@ -967,9 +967,9 @@ test.describe('SPA navigation', () => {
         await page.goto('/');
         await page.waitForSelector('#status:has-text("Connected")');
         // Wrapping the click asserts the WebSocket stays connected through
-        // the navigate -- a silent server-side crash on the new mount would
-        // close 4501 and reload the page, and the destination assertion would
-        // still pass. This is the catch-net for that whole class of regression.
+        // the navigate -- a silent server-side crash on the new mount would be
+        // answered with a full load of the page and close 4500, and the destination
+        // assertion would still pass. This is the catch-net for that whole class of regression.
         await expectStaysConnected(page, async () => {
             await page.click('a[href="/about"]');
             await expect(page.locator('main h1')).toHaveText('About');
@@ -2138,5 +2138,1045 @@ test.describe('az-form-reset with a navigation that leaves the page', () => {
         await page.waitForURL((u) => u.search === '?exported=1');
         expect(await page.evaluate(() => window.__mark)).toBe(1);
         await expect(page.locator('main h1')).toHaveText('Welcome');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Reconnect to the page on screen
+// ---------------------------------------------------------------------------
+
+// A navigation the socket cannot carry -- issued while it is down, or owed a reply
+// the close lost -- leaves the old page on screen. The reconnect resyncs THAT page,
+// and the navigation goes out once it is live again.
+test.describe('reconnect to the page on screen', () => {
+    /** The `_az_path` of every socket the page opens, the frames it sends, its loads. */
+    const track = (page) => {
+        const t = { ws: [], frames: [], loads: 0 };
+        page.on('websocket', (ws) => {
+            t.ws.push(new URL(ws.url()).searchParams.get('_az_path'));
+            ws.on('framesent', (f) => t.frames.push(String(f.payload)));
+        });
+        page.on('load', () => t.loads++);
+        return t;
+    };
+    /** The navigate/patch frames sent so far. */
+    const navFrames = (t) => t.frames.filter((f) => /^\["(navigate|patch)"/.test(f));
+
+    /** Close the socket; run `commands` as effects once the page knows it is down. */
+    const downThen = (page, commands) =>
+        page.evaluate(async (commands) => {
+            const mod = await import('/priv/arizona.min.js');
+            document.addEventListener('arizona:disconnected', () => mod.applyEffects(commands), {
+                once: true,
+            });
+            window._ws.close(4000);
+        }, commands);
+
+    /** Run `commands` with their navigate/patch frame held back, then close the socket. */
+    const loseReply = (page, commands) =>
+        page.evaluate(async (commands) => {
+            const post = Worker.prototype.postMessage;
+            Worker.prototype.postMessage = function (msg, ...rest) {
+                if (msg[0] === 1 && /^\["(navigate|patch)"/.test(msg[1])) return;
+                return post.call(this, msg, ...rest);
+            };
+            const mod = await import('/priv/arizona.min.js');
+            mod.applyEffects(commands);
+            Worker.prototype.postMessage = post;
+            window._ws.close(4000);
+        }, commands);
+
+    test('a navigate to another view while down swaps it in after the reconnect', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        await downThen(page, [[10, '/about', {}]]);
+        await expect(page.locator('main h1')).toHaveText('About');
+        await wsReady(page);
+        expect(new URL(page.url()).pathname).toBe('/about');
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+        expect(navFrames(t)).toEqual([expect.stringMatching(/^\["navigate",\{"path":"\/about"/)]);
+    });
+
+    test('a page reached by a navigate after the reconnect reads ?reconnected false', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await downThen(page, [[10, '/reconnect-probe', {}]]);
+        await expect(page.locator('main#reconnect_probe')).toHaveText('false');
+    });
+
+    test('a navigate whose frame was held back is sent again after the reconnect', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        await loseReply(page, [[10, '/about', {}]]);
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a navigate whose reply was lost after the server applied it lands too', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        // The frame goes out ahead of the close: the server mounts /about, and its
+        // reply dies with the socket.
+        await page.evaluate(async () => {
+            const mod = await import('/priv/arizona.min.js');
+            mod.applyEffects([[10, '/about', {}]]);
+            window._ws.close(4000);
+        });
+        await expect(page.locator('main h1')).toHaveText('About');
+        await wsReady(page);
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+    });
+
+    for (const [name, effects] of [
+        ['while down', downThen],
+        ['whose frame was held back', loseReply],
+    ]) {
+        test(`a same-handler patch ${name} keeps the view and the typed text`, async ({ page }) => {
+            await page.goto('/ctl-parity');
+            await wsReady(page);
+            await page.fill('#runbound', 'typed-by-user');
+            await page.evaluate(() => {
+                window.__marker = 'alive';
+            });
+            const t = track(page);
+            await effects(page, [[24, '/ctl-parity?head=1', {}]]);
+            await expect.poll(() => navFrames(t).length).toBe(1);
+            expect(navFrames(t)[0]).toMatch(/^\["patch",\{"path":"\/ctl-parity","qs":"head=1"/);
+            await wsReady(page);
+            await expect(page.locator('#runbound')).toHaveValue('typed-by-user');
+            expect(await page.evaluate(() => window.__marker)).toBe('alive');
+            expect(t.ws).toEqual(['/ctl-parity']);
+            expect(t.loads).toBe(0);
+            expect(new URL(page.url()).search).toBe('?head=1');
+        });
+    }
+
+    test('a cross-handler patch while down swaps the other view in', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        await downThen(page, [[24, '/about', {}]]);
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a navigate across layouts whose reply was lost loads the page', async ({ page }) => {
+        await page.goto('/scroll-about');
+        await wsReady(page);
+        const t = track(page);
+        const loaded = page.waitForEvent('load');
+        await loseReply(page, [[10, '/scroll-section', {}]]);
+        await loaded;
+        expect(new URL(page.url()).pathname).toBe('/scroll-section');
+        await expect(page.locator('section.scroll-section')).toHaveCount(1);
+        expect(t.ws[0]).toBe('/scroll-about');
+    });
+
+    test('a load across layouts the user cancels keeps the page on screen live', async ({
+        page,
+    }) => {
+        await page.goto('/scroll-about');
+        await wsReady(page);
+        await page.evaluate(() => {
+            window.__guard = (e) => {
+                e.preventDefault();
+                e.returnValue = '';
+            };
+            window.addEventListener('beforeunload', window.__guard);
+        });
+        // A beforeunload prompt needs a user gesture on the page.
+        await page.mouse.click(5, 5);
+        let prompts = 0;
+        page.on('dialog', async (d) => {
+            prompts++;
+            await d.dismiss();
+        });
+        const t = track(page);
+        await loseReply(page, [[10, '/scroll-section', {}]]);
+        await expect.poll(() => prompts).toBe(1);
+        await wsReady(page);
+        expect(new URL(page.url()).pathname).toBe('/scroll-section');
+        await expect(page.locator('section.scroll-section')).toHaveCount(0);
+        // The page on screen is still /scroll-about: a later close reconnects to
+        // it, in place, with no second prompt.
+        const opened = t.ws.length;
+        await page.evaluate(() => window._ws.close(4000));
+        await expect.poll(() => t.ws.length).toBe(opened + 1);
+        await wsReady(page);
+        expect(prompts).toBe(1);
+        expect(t.ws.every((p) => p === '/scroll-about')).toBe(true);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a navigate to an unroutable path while down loads its 404', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const resp = page.waitForResponse((r) => r.url().endsWith('/no-such-route'));
+        await downThen(page, [[10, '/no-such-route', {}]]);
+        expect((await resp).status()).toBe(404);
+    });
+
+    test('several navigates while down: the last is sent, history keeps them all', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const len0 = await page.evaluate(() => history.length);
+        const t = track(page);
+        await downThen(page, [
+            [10, '/scroll-home', {}],
+            [10, '/ctl-parity', {}],
+            [10, '/about', {}],
+        ]);
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(await page.evaluate(() => history.length)).toBe(len0 + 3);
+        expect(navFrames(t).length).toBe(1);
+        // Back is served live.
+        await page.goBack();
+        await expect(page.locator('#runbound')).toHaveCount(1);
+        expect(new URL(page.url()).pathname).toBe('/ctl-parity');
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+    });
+
+    test('Back while down waits for the page on screen, then navigates', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        await page.evaluate(async () => {
+            const mod = await import('/priv/arizona.min.js');
+            mod.applyEffects([[10, '/about', {}]]);
+        });
+        await expect(page.locator('main h1')).toHaveText('About');
+        const t = track(page);
+        await page.evaluate(() => {
+            document.addEventListener('arizona:disconnected', () => history.back(), {
+                once: true,
+            });
+            window._ws.close(4000);
+        });
+        await expect.poll(() => new URL(page.url()).pathname).toBe('/');
+        await expect(page.locator('main h1')).toHaveText('Welcome');
+        await wsReady(page);
+        expect(t.ws).toEqual(['/about']);
+        expect(t.loads).toBe(0);
+        // ...and Forward while down too.
+        await page.evaluate(() => {
+            document.addEventListener('arizona:disconnected', () => history.forward(), {
+                once: true,
+            });
+            window._ws.close(4000);
+        });
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(t.ws).toEqual(['/about', '/']);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a navigate while down to a halting route shows the flash where it redirects', async ({
+        page,
+    }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        await downThen(page, [[10, '/protected', {}]]);
+        await expect.poll(() => new URL(page.url()).pathname).toBe('/login');
+        await expect(page.getByText('Please sign in first.')).toBeVisible();
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a navigate while down to a page that fails to mount loads it, without a loop', async ({
+        page,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        const loaded = page.waitForEvent('load', { timeout: 14000 });
+        await downThen(page, [[10, '/crash-on-connect', {}]]);
+        // The navigate is sent once and fails to mount, so the server answers it with
+        // the load of its page: the resync of the page on screen sends nothing again.
+        await loaded;
+        expect(new URL(page.url()).pathname).toBe('/crash-on-connect');
+        expect(t.ws[0]).toBe('/');
+        expect(t.ws.slice(0, -1).every((p) => p === '/')).toBe(true);
+        expect(navFrames(t).length).toBe(1);
+    });
+
+    test('a navigate while down scrolls to its #fragment after it lands', async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 150 });
+        await page.goto('/');
+        await wsReady(page);
+        await downThen(page, [[10, '/about#tags', {}]]);
+        await expect(page.locator('main h1')).toHaveText('About');
+        await expect
+            .poll(() =>
+                page.evaluate(() => {
+                    const top = document.getElementById('tags').getBoundingClientRect().top;
+                    const max = document.documentElement.scrollHeight - innerHeight;
+                    return Math.abs(top) < 5 || Math.abs(scrollY - max) < 2;
+                }),
+            )
+            .toBe(true);
+        expect(await page.evaluate(() => scrollY)).toBeGreaterThan(0);
+    });
+
+    test('a transition navigate while down animates its own swap, not the resync', async ({
+        page,
+    }) => {
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.goto('/');
+        await wsReady(page);
+        test.skip(
+            !(await page.evaluate(() => typeof document.startViewTransition === 'function')),
+            'no view transitions in this browser',
+        );
+        await page.evaluate(() => {
+            window.__vt = [];
+            const orig = document.startViewTransition.bind(document);
+            document.startViewTransition = (cb) =>
+                orig(async () => {
+                    const before = document.querySelector('main h1')?.textContent;
+                    await (typeof cb === 'function' ? cb() : cb.update());
+                    window.__vt.push([before, document.querySelector('main h1')?.textContent]);
+                });
+        });
+        await downThen(page, [[20, {}, [[10, '/about', {}]]]]);
+        await expect(page.locator('main h1')).toHaveText('About');
+        await expect.poll(() => page.evaluate(() => window.__vt)).toEqual([['Welcome', 'About']]);
+    });
+
+    test('an az-navigate click while down is queued, not a page load', async ({ page }) => {
+        await page.goto('/');
+        await wsReady(page);
+        const t = track(page);
+        await page.evaluate(() => {
+            const a = document.createElement('a');
+            a.href = '/about';
+            a.setAttribute('az-navigate', '');
+            a.id = 'down-link';
+            a.textContent = 'go';
+            document.body.prepend(a);
+            window._ws.close(4000);
+        });
+        await page.waitForFunction(() =>
+            document.documentElement.classList.contains('az-disconnected'),
+        );
+        await page.click('#down-link');
+        await expect(page.locator('main h1')).toHaveText('About');
+        expect(t.ws).toEqual(['/']);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a refused upgrade while HTTP answers resyncs the page in place once one opens', async ({
+        page,
+        context,
+        baseURL,
+    }) => {
+        await page.goto('/upgrade-gate');
+        await wsReady(page);
+        await page.evaluate(() => {
+            window.__marker = 'alive';
+        });
+        const t = track(page);
+        // The route halts while the cookie is set, the WebSocket upgrade included,
+        // and HTTP still answers: one refused attempt says nothing about the page.
+        await context.addCookies([{ name: 'az_e2e_gate', value: '1', url: baseURL }]);
+        await page.evaluate(() => window._ws.close(4000));
+        // The first reconnect attempt goes out about 1 s later, and is refused.
+        await page.waitForTimeout(2000);
+        await context.clearCookies({ name: 'az_e2e_gate' });
+        await wsReady(page);
+        expect(await page.evaluate(() => window.__marker)).toBe('alive');
+        expect(t.loads).toBe(0);
+        expect(new URL(page.url()).pathname).toBe('/upgrade-gate');
+    });
+
+    // Behind a proxy that never upgrades the page never mounts: a navigation loads
+    // its page, as with no socket at all, rather than waiting for a reconnect that
+    // nothing proves will come.
+    for (const how of ['an az-navigate click', 'a navigate effect']) {
+        test(`${how} on a page that never mounted loads the page`, async ({
+            page,
+            context,
+            baseURL,
+        }) => {
+            await context.addCookies([{ name: 'az_e2e_gate', value: '1', url: baseURL }]);
+            await page.goto('/upgrade-gate');
+            await page.evaluate(() => {
+                const a = document.createElement('a');
+                a.href = '/about';
+                a.setAttribute('az-navigate', '');
+                a.id = 'unmounted-link';
+                a.textContent = 'go';
+                document.body.prepend(a);
+            });
+            // Long enough for the first connect and a reconnect attempt to fail.
+            await page.waitForTimeout(2000);
+            expect(
+                await page.evaluate(() =>
+                    document.documentElement.classList.contains('az-connected'),
+                ),
+            ).toBe(false);
+            const loaded = page.waitForEvent('load');
+            if (how === 'an az-navigate click') await page.click('#unmounted-link');
+            else
+                await page.evaluate(async () => {
+                    const mod = await import('/priv/arizona.min.js');
+                    mod.applyEffects([[10, '/about', {}]]);
+                });
+            await loaded;
+            await expect(page.locator('main h1')).toHaveText('About');
+        });
+    }
+
+    test('a patch answered with a navigate to a fragment reconnects to the patched page', async ({
+        page,
+    }) => {
+        await page.goto('/hash-patch?s=one');
+        await wsReady(page);
+        const t = track(page);
+        await page.evaluate(async () => {
+            const mod = await import('/priv/arizona.min.js');
+            mod.applyEffects([[24, '/hash-patch?s=two', {}]]);
+        });
+        await expect(page.locator('#sec')).toHaveText('two');
+        await expect.poll(() => new URL(page.url()).hash).toBe('#bottom');
+        await page.evaluate(() => window._ws.close(4000));
+        await expect.poll(() => t.ws.length).toBe(1);
+        await wsReady(page);
+        await page.waitForTimeout(500);
+        await expect(page.locator('#sec')).toHaveText('two');
+        expect(new URL(page.url()).search).toBe('?s=two');
+        expect(navFrames(t)).toEqual([]);
+    });
+
+    test('a remount cancels a mount-failure reload after the app rewrote its own URL', async ({
+        page,
+        context,
+        baseURL,
+    }) => {
+        test.setTimeout(40000);
+        await page.goto('/flaky-mount?utm_source=x');
+        await wsReady(page);
+        const t = track(page);
+        // The app strips its tracking params itself: the same page, a new address.
+        await page.evaluate(() => history.replaceState(history.state, '', '/flaky-mount'));
+        await page.evaluate(() => {
+            window.__reloadIn = null;
+            document.addEventListener('arizona:disconnected', (e) => {
+                if (e.detail.reloadInMs !== null) window.__reloadIn = e.detail.reloadInMs;
+            });
+        });
+        await context.addCookies([{ name: 'az_e2e_flaky', value: '1', url: baseURL }]);
+        await page.evaluate(() => window._ws.close(4000));
+        // A reconnect fails to mount (4501) and schedules a reload...
+        await page.waitForFunction(() => window.__reloadIn !== null, null, { timeout: 10000 });
+        await context.clearCookies({ name: 'az_e2e_flaky' });
+        // ...which the next reconnect's successful mount of this page cancels.
+        await wsReady(page);
+        await page.waitForTimeout(11000);
+        expect(t.loads).toBe(0);
+    });
+
+    test('a patch that crashes the view loads its page once', async ({ page }) => {
+        // The server answers the patch it could not complete with the load of its
+        // page, where a fresh mount of the same URL renders fine. It never goes out
+        // over the socket again.
+        test.setTimeout(30000);
+        await page.goto('/patch-crash?q=a');
+        await wsReady(page);
+        const t = track(page);
+        const loaded = page.waitForEvent('load', { timeout: 10000 });
+        await page.evaluate(async () => {
+            const mod = await import('/priv/arizona.min.js');
+            mod.applyEffects([[24, '/patch-crash?boom=1', {}]]);
+        });
+        await loaded;
+        expect(new URL(page.url()).search).toBe('?boom=1');
+        await expect(page.locator('#q')).toHaveText('none');
+        await wsReady(page);
+        await page.waitForTimeout(3000);
+        expect(t.loads).toBe(1);
+        expect(navFrames(t)).toEqual([]);
+    });
+
+    // An upgrade-only outage after a mount (an auth gate halting the upgrade): a
+    // link waits for the attempt in flight, then loads once one started after it
+    // fails, as main loads a link while disconnected.
+    test('a link during an upgrade-only outage loads its page once an attempt fails', async ({
+        page,
+        context,
+        baseURL,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/upgrade-gate');
+        await wsReady(page);
+        await page.evaluate(() => {
+            const a = document.createElement('a');
+            a.href = '/about';
+            a.setAttribute('az-navigate', '');
+            a.id = 'gated-link';
+            a.textContent = 'go';
+            document.body.prepend(a);
+        });
+        await context.addCookies([{ name: 'az_e2e_gate', value: '1', url: baseURL }]);
+        await page.evaluate(() => window._ws.close(4000));
+        await page.waitForFunction(() =>
+            document.documentElement.classList.contains('az-disconnected'),
+        );
+        const loaded = page.waitForEvent('load', { timeout: 15000 });
+        await page.click('#gated-link');
+        await loaded;
+        await expect(page.locator('main h1')).toHaveText('About');
+    });
+
+    // A navigate that crashes the view as it unmounts it fails on the server, which
+    // answers it with the load of its page: exactly one load, and the navigate never
+    // goes out over the socket again.
+    test('a navigate that crashes the view as it leaves loads its page once', async ({ page }) => {
+        test.setTimeout(30000);
+        await page.goto('/crash-nav-leave');
+        await wsReady(page);
+        const t = track(page);
+        const loaded = page.waitForEvent('load', { timeout: 10000 });
+        await page.click('#leave-about');
+        await loaded;
+        expect(new URL(page.url()).pathname).toBe('/about');
+        await expect(page.locator('main h1')).toHaveText('About');
+        await wsReady(page);
+        await page.waitForTimeout(3000);
+        expect(t.loads).toBe(1);
+        // Sent on the socket open before tracking began; no later socket carries it.
+        expect(navFrames(t)).toEqual([]);
+    });
+
+    // A crashing event and a navigate behind it: the navigate did not run (the server
+    // answers no frame queued behind a crash), so it goes out again once the page on
+    // screen is live -- over the socket, with no page load.
+    test('a crash event before a navigate: the navigate lands after the reconnect', async ({
+        page,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/crash-nav');
+        await wsReady(page);
+        const t = track(page);
+        await page.click('#crash-about');
+        await expect(page.locator('main h1')).toHaveText('About', { timeout: 10000 });
+        expect(new URL(page.url()).pathname).toBe('/about');
+        await page.waitForTimeout(2000);
+        expect(t.loads).toBe(0);
+        // Sent first on the socket open before tracking began, then once on the next.
+        expect(navFrames(t).length).toBe(1);
+    });
+
+    // The same to the same view under other layouts: the navigate goes out again,
+    // and the server, which cannot serve other layouts in place, answers it with
+    // the load of its page -- a navigate or a patch alike.
+    for (const button of ['#crash-twin', '#crash-twin-patch']) {
+        test(`a crash event before ${button} to the same view under other layouts loads it`, async ({
+            page,
+        }) => {
+            test.setTimeout(30000);
+            await page.goto('/crash-nav');
+            await wsReady(page);
+            const t = track(page);
+            const loaded = page.waitForEvent('load', { timeout: 15000 });
+            await page.click(button);
+            await loaded;
+            expect(new URL(page.url()).pathname).toBe('/crash-nav-twin');
+            await expect(page.locator('section.scroll-section #crash_nav')).toHaveCount(1);
+            await wsReady(page);
+            await page.waitForTimeout(2000);
+            expect(t.loads).toBe(1);
+        });
+    }
+
+    // The view crashes and navigates to its own page on every mount. The navigate
+    // names the page on screen, which the reconnect already mounts, so the page
+    // keeps reconnecting under the worker's backoff -- 1, 2, 5, then 10 s -- with no
+    // page load, as a view that crashes after every mount does.
+    test('a crash that recurs after every mount settles into the reconnect backoff', async ({
+        page,
+    }) => {
+        test.setTimeout(45000);
+        const opened = [];
+        page.on('websocket', () => opened.push(Date.now()));
+        await page.goto('/crash-nav-loop');
+        let loads = 0;
+        page.on('load', () => loads++);
+        await page.waitForTimeout(25000);
+        expect(loads).toBe(0);
+        expect(new URL(page.url()).pathname).toBe('/crash-nav-loop');
+        // Backing off: a handful of sockets in 25 s, their gaps growing.
+        expect(opened.length).toBeGreaterThanOrEqual(3);
+        expect(opened.length).toBeLessThanOrEqual(8);
+        const gaps = opened.slice(1).map((t, n) => t - opened[n]);
+        expect(gaps.at(-1)).toBeGreaterThan(gaps[0]);
+    });
+
+    // Two pages crash and navigate to each other on every connect. Each navigate is
+    // innocent (the crash event before it is what failed), so it goes out again
+    // over the socket: the pages swap over the socket under the worker's backoff,
+    // and no page ever loads.
+    test('a crash loop between two pages stays on the socket, loading nothing', async ({
+        page,
+    }) => {
+        test.setTimeout(45000);
+        const opened = [];
+        page.on('websocket', () => opened.push(Date.now()));
+        await page.goto('/crash-nav-ping');
+        let loads = 0;
+        page.on('load', () => loads++);
+        await page.waitForTimeout(25000);
+        expect(loads).toBe(0);
+        expect(opened.length).toBeGreaterThanOrEqual(3);
+        expect(opened.length).toBeLessThanOrEqual(8);
+        const gaps = opened.slice(1).map((t, n) => t - opened[n]);
+        expect(gaps.at(-1)).toBeGreaterThan(gaps[0]);
+    });
+
+    // Two pages navigate to each other on every connect, and each navigate fails on
+    // the server while the page loads fine over HTTP: every navigate is answered
+    // with a page load. The loads answering navigations issued with no person
+    // acting are bounded per tab: once 10 fall within 5 min, each waits 30 s, said once, and
+    // the loop then stays at that pace.
+    test('a navigate-and-load loop between two pages settles at one load per 30 s', async ({
+        page,
+    }) => {
+        test.setTimeout(150000);
+        const loads = [];
+        page.on('load', () => loads.push(Date.now()));
+        let failsafeAt = 0;
+        page.on('console', (m) => {
+            if (m.type() === 'error' && m.text().includes('loading every 30 s') && !failsafeAt)
+                failsafeAt = Date.now();
+        });
+        await page.goto('/crash-nav-bounce-a');
+        await expect
+            .poll(() => failsafeAt, { timeout: 60000, intervals: [500] })
+            .toBeGreaterThan(0);
+        const before = loads.length;
+        expect(before).toBeLessThanOrEqual(12);
+        // The next two loads each come 30 s after the one before: a steady pace.
+        await expect
+            .poll(() => loads.length, { timeout: 100000, intervals: [1000] })
+            .toBeGreaterThanOrEqual(before + 2);
+        expect(loads[before] - failsafeAt).toBeGreaterThan(25000);
+        expect(loads[before + 1] - loads[before]).toBeGreaterThan(25000);
+    });
+
+    // The same loop with the page's own code sending an event after each mount --
+    // an `arizona:connected` listener, a hook a moment after it mounts. No person
+    // acted, so the loop reaches the failsafe all the same.
+    for (const ping of ['connected', 'hooklater']) {
+        test(`a navigate-and-load loop whose page sends on its own (${ping}) is bounded`, async ({
+            page,
+        }) => {
+            test.setTimeout(120000);
+            let failsafeAt = 0;
+            page.on('console', (m) => {
+                if (m.type() === 'error' && m.text().includes('loading every 30 s') && !failsafeAt)
+                    failsafeAt = Date.now();
+            });
+            const loads = [];
+            page.on('load', () => loads.push(Date.now()));
+            await page.goto(`/crash-nav-ping-${ping}-a`);
+            await expect
+                .poll(() => failsafeAt, { timeout: 90000, intervals: [500] })
+                .toBeGreaterThan(0);
+            expect(loads.length).toBeLessThanOrEqual(12);
+        });
+    }
+
+    // The same loop with the page's own code writing history: a `location.hash`
+    // write, or its own entry and `history.back()`. Fragment-only traversals are no
+    // person, so the loop reaches the failsafe all the same.
+    for (const [name, script] of [
+        [
+            'hash',
+            "document.addEventListener('arizona:connected', () => { location.hash = 't' + Date.now(); });",
+        ],
+        [
+            'back',
+            "document.addEventListener('arizona:connected', () => { history.pushState(history.state, '', '#p'); history.back(); });",
+        ],
+    ]) {
+        test(`a navigate-and-load loop whose page writes history on its own (${name}) is bounded`, async ({
+            page,
+        }) => {
+            test.setTimeout(120000);
+            await page.addInitScript(script);
+            let failsafeAt = 0;
+            page.on('console', (m) => {
+                if (m.type() === 'error' && m.text().includes('loading every 30 s') && !failsafeAt)
+                    failsafeAt = Date.now();
+            });
+            const loads = [];
+            page.on('load', () => loads.push(Date.now()));
+            await page.goto('/crash-nav-ping-connected-a');
+            await expect
+                .poll(() => failsafeAt, { timeout: 90000, intervals: [500] })
+                .toBeGreaterThan(0);
+            expect(loads.length).toBeLessThanOrEqual(12);
+        });
+    }
+
+    // Back is a person only when the browser says it started it (the Navigation
+    // API's `userInitiated`). The crash page is reached by the page's own untrusted
+    // click, so only the Back can count. Chromium reports Playwright's `goBack()` as
+    // user-initiated: the load comes at once. Firefox (headless, Juggler) reports it
+    // as not user-initiated, so there it is bounded like any traversal no person
+    // started: it waits out the failsafe.
+    test('a Back the browser started is a person, one it did not is bounded', async ({
+        page,
+        browserName,
+    }) => {
+        test.setTimeout(90000);
+        await page.goto('/about');
+        await wsReady(page);
+        await page.evaluate(() => {
+            const a = document.createElement('a');
+            a.id = 'to-leave';
+            a.href = '/crash-nav-leave';
+            a.setAttribute('az-navigate', '');
+            a.textContent = 'leave';
+            document.body.prepend(a);
+            setTimeout(() => a.click(), 0); // the page's own: untrusted
+        });
+        await expect(page.locator('#crash_nav')).toBeVisible();
+        await wsReady(page);
+        await page.evaluate(() =>
+            sessionStorage.setItem(
+                'arizona:nav-loads',
+                JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+            ),
+        );
+        const t0 = Date.now();
+        const loaded = page.waitForEvent('load', { timeout: 60000 });
+        await page.goBack();
+        await loaded;
+        expect(new URL(page.url()).pathname).toBe('/about');
+        if (browserName === 'chromium') expect(Date.now() - t0).toBeLessThan(10000);
+        else expect(Date.now() - t0).toBeGreaterThan(25000);
+    });
+
+    // A page's own code that fires trusted `input`/`change` events -- a checkbox's
+    // scripted click(), `execCommand` -- is no person: the loop stays bounded.
+    for (const [name, script] of [
+        [
+            'checkbox',
+            "document.addEventListener('arizona:connected', () => { const c = document.createElement('input'); c.type = 'checkbox'; document.body.append(c); c.click(); });",
+        ],
+        [
+            'execCommand',
+            "document.addEventListener('arizona:connected', () => { const i = document.createElement('input'); document.body.append(i); i.focus(); document.execCommand('insertText', false, 'x'); });",
+        ],
+    ]) {
+        test(`a navigate-and-load loop whose page fires trusted input itself (${name}) is bounded`, async ({
+            page,
+        }) => {
+            test.setTimeout(120000);
+            await page.addInitScript(script);
+            let failsafeAt = 0;
+            page.on('console', (m) => {
+                if (m.type() === 'error' && m.text().includes('loading every 30 s') && !failsafeAt)
+                    failsafeAt = Date.now();
+            });
+            const loads = [];
+            page.on('load', () => loads.push(Date.now()));
+            await page.goto('/crash-nav-ping-connected-a');
+            await expect
+                .poll(() => failsafeAt, { timeout: 90000, intervals: [500] })
+                .toBeGreaterThan(0);
+            expect(loads.length).toBeLessThanOrEqual(12);
+        });
+    }
+
+    // A `full` navigate effect to a fragment of the page on screen goes by URL, as
+    // the browser takes it: a same-document scroll, no load, the fragment kept.
+    for (const [from, to] of [
+        ['/about', '/about#x'],
+        ['/about#a', '/about#b'],
+    ]) {
+        test(`a full navigate from ${from} to ${to} only scrolls`, async ({ page }) => {
+            await page.goto(from);
+            await wsReady(page);
+            const docs = [];
+            page.on('request', (r) => {
+                if (r.resourceType() === 'document') docs.push(r.url());
+            });
+            await page.evaluate(async (t) => {
+                window.__kept = 1;
+                const mod = await import('/priv/arizona.min.js');
+                mod.applyEffects([[10, t, { full: true }]]);
+            }, to);
+            await expect
+                .poll(() => page.evaluate(() => location.hash))
+                .toBe(new URL(to, 'http://x').hash);
+            await page.waitForTimeout(1000);
+            expect(docs).toEqual([]);
+            expect(await page.evaluate(() => window.__kept ?? null)).toBe(1);
+        });
+    }
+
+    // A person's click inside a Document Picture-in-Picture window is a person too:
+    // the step it raises, answered with a load, is never delayed, the record full.
+    test('a person acting in a Picture-in-Picture window is never delayed', async ({
+        page,
+        context,
+        browserName,
+    }) => {
+        test.skip(browserName !== 'chromium', 'Document Picture-in-Picture is Chromium-only');
+        test.setTimeout(60000);
+        await page.goto('/wizard-1');
+        await wsReady(page);
+        await page.evaluate(() =>
+            sessionStorage.setItem(
+                'arizona:nav-loads',
+                JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+            ),
+        );
+        const opened = context.waitForEvent('page', { timeout: 10000 });
+        await page.evaluate(() => document.getElementById('pop').click());
+        const pip = await opened;
+        await pip.waitForSelector('#next');
+        const t0 = Date.now();
+        const loaded = page.waitForEvent('load', { timeout: 15000 });
+        await pip.click('#next');
+        await loaded;
+        expect(Date.now() - t0).toBeLessThan(10000);
+        await expect(page.locator('#step')).toHaveText('2');
+    });
+
+    // A person's chain: a click navigates live to a page whose view then navigates
+    // across layouts on its own (answered with a load), and a click back. Every
+    // load answers the person's click, so none is ever delayed.
+    test("a person's chain through a live hop is never delayed", async ({ page }) => {
+        test.setTimeout(120000);
+        await page.goto('/wizard-1');
+        await wsReady(page);
+        await page.evaluate(() => sessionStorage.clear());
+        let errors = 0;
+        page.on('console', (m) => {
+            if (m.type() === 'error' && m.text().includes('[arizona]')) errors++;
+        });
+        for (let i = 0; i < 13; i++) {
+            const t0 = Date.now();
+            await page.click('#tor');
+            await expect(page.locator('#step')).toHaveText('2', { timeout: 10000 });
+            await wsReady(page);
+            expect(Date.now() - t0).toBeLessThan(10000);
+            await page.click('#to1');
+            await expect(page.locator('#step')).toHaveText('1', { timeout: 10000 });
+            await wsReady(page);
+        }
+        expect(errors).toBe(0);
+    });
+
+    // The user crossing layout families: every click is answered with a full load,
+    // which the bound never counts, since the user issued the navigation.
+    test('a user crossing layouts 20 times is never delayed', async ({ page }) => {
+        test.setTimeout(120000);
+        await page.goto('/crash-nav');
+        await wsReady(page);
+        let errors = 0;
+        page.on('console', (m) => {
+            if (m.type() === 'error' && m.text().includes('[arizona]')) errors++;
+        });
+        for (let i = 0; i < 20; i++) {
+            const to = i % 2 === 0 ? '/crash-nav-twin' : '/crash-nav';
+            await page.evaluate((href) => {
+                const a = document.createElement('a');
+                a.id = 'cross';
+                a.href = href;
+                a.setAttribute('az-navigate', '');
+                a.textContent = 'cross';
+                document.body.prepend(a);
+            }, to);
+            const t0 = Date.now();
+            const loaded = page.waitForEvent('load', { timeout: 10000 });
+            await page.click('#cross');
+            await loaded;
+            await wsReady(page);
+            expect(new URL(page.url()).pathname).toBe(to);
+            expect(Date.now() - t0).toBeLessThan(10000);
+        }
+        expect(errors).toBe(0);
+    });
+
+    // A wizard whose every step's handler navigates across layouts: each of the
+    // user's clicks is answered with a page load. A person acted, so it is no loop,
+    // however many steps: none waits.
+    test('a user stepping through server redirects across layouts is never delayed', async ({
+        page,
+    }) => {
+        test.setTimeout(120000);
+        await page.goto('/wizard-1');
+        await wsReady(page);
+        await page.evaluate(() => sessionStorage.clear());
+        let errors = 0;
+        page.on('console', (m) => {
+            if (m.type() === 'error' && m.text().includes('[arizona]')) errors++;
+        });
+        for (let i = 0; i < 13; i++) {
+            const step = i % 2 === 0 ? '2' : '1';
+            const t0 = Date.now();
+            const loaded = page.waitForEvent('load', { timeout: 10000 });
+            await page.click('#next');
+            await loaded;
+            await expect(page.locator('#step')).toHaveText(step);
+            await wsReady(page);
+            expect(Date.now() - t0).toBeLessThan(10000);
+        }
+        expect(errors).toBe(0);
+    });
+
+    // A link to page#fragment the server answers with a load (other layouts): the
+    // frame carries no fragment, so the load reloads the entry the link pushed,
+    // which keeps it and lands at it.
+    test('a navigation to page#fragment answered with a load lands at the fragment', async ({
+        page,
+    }) => {
+        await page.goto('/wizard-1');
+        await wsReady(page);
+        const loaded = page.waitForEvent('load', { timeout: 10000 });
+        await page.click('#tofrag');
+        await loaded;
+        await expect(page.locator('#step')).toHaveText('2');
+        expect(new URL(page.url()).hash).toBe('#sec');
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(1000);
+    });
+
+    // A load waiting out the failsafe must not override a newer navigation the
+    // server then served live: `/wizard-auto` navigates across layouts on connect
+    // (the record already full, so that load waits), then 2 s later to a page under
+    // its own layouts, which goes live.
+    test('a waiting load never overrides a newer navigation served live', async ({ page }) => {
+        test.setTimeout(60000);
+        await page.addInitScript(() => {
+            if (!sessionStorage.getItem('az-e2e-seeded')) {
+                sessionStorage.setItem('az-e2e-seeded', '1');
+                sessionStorage.setItem(
+                    'arizona:nav-loads',
+                    JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+                );
+            }
+        });
+        let loads = 0;
+        page.on('load', () => loads++);
+        await page.goto('/wizard-auto');
+        await expect(page.locator('#step')).toHaveText('q', { timeout: 10000 });
+        await page.waitForTimeout(33000);
+        expect(loads).toBe(1);
+        expect(new URL(page.url()).pathname).toBe('/wizard-q');
+        await expect(page.locator('#step')).toHaveText('q');
+    });
+
+    // The load answering a failed navigate: the user lets it through or no prompt is
+    // shown, and it reloads the address bar's own entry, which keeps its state
+    // (`_azIdx`), Back and Forward as with no failure at all; or the user cancels it,
+    // and the page on screen stays live under the address of the page it asked
+    // for, the navigation settled: nothing re-arms, and no second prompt comes.
+    // `/crash-nav-slow` answers late, so the navigate is in flight a while.
+    for (const mode of ['none', 'accept', 'dismiss']) {
+        test(`the load answering a failed navigate, prompt: ${mode}`, async ({ page }) => {
+            test.setTimeout(60000);
+            await page.goto('/crash-nav-leave');
+            await wsReady(page);
+            if (mode !== 'none') {
+                await page.evaluate(() => {
+                    window.addEventListener('beforeunload', (e) => {
+                        e.preventDefault();
+                        e.returnValue = '';
+                    });
+                });
+            }
+            await page.mouse.click(5, 5); // a beforeunload prompt needs a user gesture
+            let prompts = 0;
+            page.on('dialog', async (d) => {
+                prompts++;
+                await (mode === 'dismiss' ? d.dismiss() : d.accept());
+            });
+            let loads = 0;
+            page.on('load', () => loads++);
+            // A traversal that loads a document destroys the context mid-read.
+            const state = () =>
+                page
+                    .evaluate(() => ({
+                        path: location.pathname,
+                        idx: history.state?._azIdx ?? null,
+                        len: history.length,
+                    }))
+                    .catch(() => null);
+            await page.click('#leave-slow');
+            await expect.poll(async () => (await state())?.path).toBe('/crash-nav-slow');
+            const before = await state();
+            expect(typeof before.idx).toBe('number');
+            if (mode === 'dismiss') {
+                await expect.poll(() => prompts, { timeout: 15000 }).toBe(1);
+                // The 4500 that follows the answer reconnects the page on screen.
+                await expect(page.locator('#crash_nav')).toBeVisible();
+                await expect
+                    .poll(() =>
+                        page.evaluate(() =>
+                            document.documentElement.classList.contains('az-connected'),
+                        ),
+                    )
+                    .toBe(true);
+                await page.waitForTimeout(12000);
+                expect(prompts).toBe(1);
+                expect(loads).toBe(0);
+                expect(await state()).toEqual(before);
+                await expect(page.locator('html')).toHaveClass(/az-connected/);
+                return;
+            }
+            await expect.poll(() => loads, { timeout: 15000 }).toBe(1);
+            expect(prompts).toBe(mode === 'accept' ? 1 : 0);
+            await wsReady(page);
+            expect(await state()).toEqual(before);
+            await page.evaluate(() => history.back());
+            await expect
+                .poll(state)
+                .toEqual({ ...before, path: '/crash-nav-leave', idx: before.idx - 1 });
+            await page.evaluate(() => history.forward()).catch(() => {});
+            await expect.poll(state).toEqual(before);
+        });
+    }
+
+    // Newer wins: a navigate the server answers with the load of its page, after
+    // the user issued a newer one. The load must not override the newer navigate,
+    // which, queued behind the failure, goes out again once the page on screen is
+    // live. `/crash-nav-slow` answers late, so the newer one is issued before.
+    test('the load answering an older navigate never overrides a newer one', async ({ page }) => {
+        test.setTimeout(30000);
+        await page.goto('/crash-nav');
+        await wsReady(page);
+        await page.click('#arm');
+        await expect(page.locator('#arm')).toHaveText('armed');
+        const t = track(page);
+        await page.evaluate(async () => {
+            const mod = await import('/priv/arizona.min.js');
+            mod.applyEffects([[10, '/crash-nav-slow', {}]]);
+            mod.applyEffects([[10, '/about', {}]]);
+        });
+        await expect(page.locator('main h1')).toHaveText('About', { timeout: 15000 });
+        await page.waitForTimeout(3000);
+        expect(new URL(page.url()).pathname).toBe('/about');
+        expect(t.loads).toBe(0);
     });
 });

@@ -81,8 +81,24 @@ function setupView(viewId, innerHTML) {
 function setupMockWorker(mod, names = TEST_ATTRS) {
     const posted = [];
     let workerOnmessage = null;
+    // What the real worker keeps: the navigate/patch frames sent on an open socket,
+    // by reply ref, so a reply carrying one reports whether it put its page on screen.
+    let open = false;
+    const navRefs = new Map();
+    let dialPath = '';
+    const navigates = (effects) =>
+        (effects ?? []).some(
+            (c) =>
+                c[0] === 10 ||
+                c[0] === 24 ||
+                (c[0] === 20 && navigates(Array.isArray(c[2]?.[0]) ? c[2] : [c[2]])),
+        );
     const mockWorkerInstance = {
-        postMessage: (data) => posted.push(data),
+        postMessage: (data) => {
+            posted.push(data);
+            if (data[0] === 0) dialPath = new URL(data[1]).searchParams.get('_az_path') ?? '';
+            if (data[0] === 1 && data[2] && open) navRefs.set(data[2].ref, data[2].path);
+        },
         set onmessage(fn) {
             workerOnmessage = fn;
         },
@@ -105,16 +121,28 @@ function setupMockWorker(mod, names = TEST_ATTRS) {
         posted,
         /** Simulate Worker open message [1, isReconnect] -- sets _connected=true */
         simulateOpen(isReconnect = false) {
+            open = true;
             mockWorkerInstance.onmessage({ data: [1, isReconnect] });
         },
         /** Simulate Worker close message [2, code] -- sets _connected=false */
         simulateClose(code = 1006) {
-            mockWorkerInstance.onmessage({ data: [2, code] });
+            open = false;
+            // On a crash, the last navigate/patch still owed is dialed when it names
+            // the dialed path.
+            const last = code === 4500 ? [...navRefs].pop() : undefined;
+            const shown = last && last[1] === dialPath ? last[0] : null;
+            // ...and names the last one it sent, which the crash may be about.
+            const sent = last ? last[0] : null;
+            navRefs.clear();
+            mockWorkerInstance.onmessage({ data: [2, code, shown, sent] });
         },
-        /** Simulate Worker resolved message [0, ops, effects, firstAfterReconnect, azAttrs, ref] */
+        /** Simulate Worker resolved message [0, ops, effects, firstAfterReconnect, azAttrs, ref, shown] */
         simulateMessage(ops, effects, firstAfterReconnect = false, ref = null) {
+            const path = ref === null ? undefined : navRefs.get(ref);
+            const shown = path !== undefined && navRefs.delete(ref) && !navigates(effects);
+            if (shown) dialPath = path;
             mockWorkerInstance.onmessage({
-                data: [0, ops, effects, firstAfterReconnect, null, ref],
+                data: [0, ops, effects, firstAfterReconnect, null, ref, shown],
             });
         },
         /** The reply ref the last frame sent carries, or null when it carries none. */
@@ -5371,6 +5399,7 @@ describe('crash and mount-failure recovery', () => {
     /** @type {ReturnType<typeof setupMockWorker> | null} */
     let mock;
     let reload;
+    let replace;
     let errSpy;
     let random;
     const KEY = 'arizona:mount-reloads';
@@ -5383,6 +5412,7 @@ describe('crash and mount-failure recovery', () => {
         sessionStorage.clear();
         localStorage.clear();
         reload = vi.fn();
+        replace = vi.fn();
         errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         random = vi.spyOn(Math, 'random').mockReturnValue(0); // 5 s delay
     });
@@ -5402,13 +5432,23 @@ describe('crash and mount-failure recovery', () => {
     // Stub location and fake the timers AFTER connect() runs: connect builds the
     // Worker URL via `new URL(..., import.meta.url)`, which vitest+jsdom resolves
     // against the real `location`, so replacing it beforehand throws.
+    /** @type {any} */
+    let mod;
     async function start() {
         vi.resetModules();
-        const mod = await import('./arizona.js');
+        mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
         history.replaceState(null, '', '/page'); // the path connect() mounts
         mock = setupMockWorker(mod);
-        vi.stubGlobal('location', { reload, href: 'http://localhost/page', pathname: '/page' });
+        const { origin } = location;
+        vi.stubGlobal('location', {
+            reload,
+            replace,
+            href: `${origin}/page`,
+            origin,
+            pathname: '/page',
+            search: '',
+        });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         return mock;
     }
@@ -5416,7 +5456,7 @@ describe('crash and mount-failure recovery', () => {
     /** How long after now the reload fires, or null if none does within 60 s. */
     function reloadDelay() {
         for (let t = 0; t <= 60000; t += 1) {
-            if (reload.mock.calls.length > 0) return t;
+            if (reload.mock.calls.length + replace.mock.calls.length > 0) return t;
             vi.advanceTimersByTime(1);
         }
         return null;
@@ -5575,8 +5615,45 @@ describe('crash and mount-failure recovery', () => {
         const m = await start();
         m.simulateOpen(true);
         m.simulateMessage(null, null, false); // names only: nothing mounted yet
+        mod.applyEffects([[10, '/next', {}]]);
         location.pathname = '/next';
-        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, false, m.lastRef());
+        expect(sessionStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('a remount cancels the reload after the app rewrote the address bar itself', async () => {
+        // The page strips its tracking params with its own replaceState: the address
+        // bar no longer reads as the page loaded, but no navigation was lost or is
+        // pending, so the page that mounts is the page the user is on.
+        const m = await start();
+        m.simulateOpen();
+        m.simulateMessage(null, null, false); // the first connect's mount
+        location.search = '?utm_source=x';
+        m.simulateClose(4501);
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, true);
+        expect(reloadDelay()).toBeNull();
+    });
+
+    it('a mount of the page on screen cancels the reload, and an owed navigate goes out', async () => {
+        // A 4501 is the page on screen's own mount failure; a navigate it caught
+        // owed a reply is not one the server failed. The reconnect's resync mounts the
+        // page on screen, which cancels the reload, and the navigate is sent again.
+        const m = await start();
+        m.simulateOpen();
+        m.simulateMessage(null, null, false); // the first connect's mount
+        location.pathname = '/next'; // the stub follows the navigation
+        location.href = 'http://localhost:3000/next';
+        mod.applyEffects([[10, '/next', {}]]);
+        m.simulateClose(4501);
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, true);
+        expect(m.getSentMessages().filter((f) => f[0] === 'navigate').length).toBe(2);
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
         expect(sessionStorage.getItem(KEY)).toBeNull();
     });
 
@@ -7779,16 +7856,39 @@ describe('navigation scroll', () => {
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
 
-    it('cross-page popstate while disconnected falls back to a full page load', async () => {
+    it('cross-page popstate while down waits for the page on screen, then navigates', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        history.replaceState(null, '', '/cur');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateMessage(null, null); // the first connect's mount
+        mock.simulateClose();
+
+        // The browser already changed the URL on Back; the reconnect still dials
+        // the page on screen, and the navigation goes out once that is live.
+        const reload = vi.fn();
+        vi.stubGlobal('location', { pathname: '/other', search: '', hash: '', reload });
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        vi.unstubAllGlobals();
+        expect(reload).not.toHaveBeenCalled();
+        const navs = () => mock.getSentMessages().filter((m) => m[0] === 'navigate');
+        expect(navs()).toEqual([]);
+        mock.simulateOpen(true);
+        mock.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, true);
+        expect(navs().map((m) => m[1])).toEqual([{ path: '/other', qs: '' }]);
+    });
+
+    it('cross-page popstate after a deliberate end (1000) loads the page', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         history.replaceState(null, '', '/cur');
         mock = setupMockWorker(mod);
         mock.simulateOpen();
-        mock.simulateClose();
+        mock.simulateClose(1000);
 
-        // The browser already changed the URL on Back; returning silently would
-        // desync URL and content and leave the reconnect URL stale.
+        // No socket comes back to serve it: load the URL the browser now shows.
         const reload = vi.fn();
         vi.stubGlobal('location', {
             origin: window.location.origin,
@@ -8686,18 +8786,20 @@ describe('form submit', () => {
         }
     });
 
-    // An SPA navigation cannot travel a down socket, but the page it names can be
-    // loaded for real -- what a disconnected az-navigate click does.
+    // After a deliberate end (1000) no socket comes back: the page the navigation
+    // names is loaded for real, as a navigate effect or an az-navigate click is.
     it.each([
         ['navigate', '[10,"/next"]', 'assign'],
         ['patch', '[24,"/next?tab=2"]', 'assign'],
         ['transition-wrapped navigate', '[20,{},[10,"/next"]]', 'assign'],
         ['replace navigate', '[10,"/next",{"replace":true}]', 'replace'],
-    ])('degrades a disconnected %s submit to a full page load', async (_label, cmd, how) => {
+    ])('loads the page of a %s submit after a deliberate end', async (_label, cmd, how) => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', `<form id="f" az-submit='${cmd}'></form>`);
         mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose(1000);
         const assign = vi.fn();
         const replace = vi.fn();
         const ev = new Event('submit', { bubbles: true, cancelable: true });
@@ -8721,6 +8823,112 @@ describe('form submit', () => {
         // Resolved as the submit ran (the load is held until its form reset).
         expect({ assign, replace }[how]).toHaveBeenCalledWith(new URL(url, document.baseURI).href);
         expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    // With a reconnect due (a first connect still dialing, an abnormal close), the
+    // navigation waits for the page on screen to be live again, as a link click or
+    // a navigate effect does: nothing loads, and it goes out after the resync. It
+    // raised no push_event, so its az-form-reset resets at once, as on a live socket.
+    it.each([['an abnormal close', 1006]])(
+        'a navigate submit during %s waits for the resync',
+        async (_label, code) => {
+            vi.resetModules();
+            const mod = await import('./arizona.js');
+            setupView(
+                'page',
+                `<form id="f" az-submit='[10,"/next"]' az-form-reset><input name="q" value=""></form>`,
+            );
+            mock = setupMockWorker(mod);
+            if (code !== null) {
+                mock.simulateOpen();
+                mock.simulateMessage(null, null);
+                mock.simulateClose(code);
+            }
+            const input = /** @type {HTMLInputElement} */ (document.querySelector('input'));
+            input.value = 'typed';
+            const assign = vi.fn();
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            const { origin, href, pathname, search } = window.location;
+            vi.stubGlobal('location', { assign, replace: assign, origin, href, pathname, search });
+            try {
+                document.getElementById('f').dispatchEvent(ev);
+            } finally {
+                await Promise.resolve();
+                vi.unstubAllGlobals();
+            }
+            expect(ev.defaultPrevented).toBe(true);
+            expect(assign).not.toHaveBeenCalled();
+            expect(input.value).toBe('');
+            const navs = () => mock.getSentMessages().filter((m) => m[0] === 'navigate');
+            expect(navs()).toEqual([]);
+            mock.simulateOpen(code !== null);
+            mock.simulateMessage(
+                code === null ? null : [[8, 'page', '<div id="page" az-view></div>']],
+                null,
+                code !== null,
+            );
+            expect(navs().map((m) => m[1])).toEqual([{ path: '/next', qs: '' }]);
+            history.replaceState(null, '', '/');
+        },
+    );
+
+    // Before the page has mounted once nothing proves a socket will open (a proxy
+    // that never upgrades): the navigation loads its page, as with no socket.
+    it('loads the page of a navigate submit before the page has mounted', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[10,"/next"]'></form>`);
+        mock = setupMockWorker(mod);
+        const assign = vi.fn();
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        const { origin, href, pathname, search } = window.location;
+        vi.stubGlobal('location', { assign, replace: assign, origin, href, pathname, search });
+        try {
+            document.getElementById('f').dispatchEvent(ev);
+        } finally {
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+        }
+        expect(ev.defaultPrevented).toBe(true);
+        expect(assign).toHaveBeenCalledWith('http://localhost:3000/next');
+        expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    // A navigate submit pended while down loads once a reconnect attempt started
+    // after it fails without opening, as a link click does.
+    it('loads the page of a pending navigate submit once a later attempt fails', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[10,"/next"]'></form>`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateMessage(null, null); // the first connect's mount
+        mock.simulateClose(1006);
+        document
+            .getElementById('f')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const load = vi.fn();
+        const { origin, href, pathname, search } = window.location;
+        vi.stubGlobal('location', {
+            replace: load,
+            assign: load,
+            reload: load,
+            origin,
+            href,
+            pathname,
+            search,
+        });
+        try {
+            mock.worker.onmessage({ data: [4] }); // an attempt starts
+            mock.simulateClose(1006); // and fails without opening
+        } finally {
+            await Promise.resolve();
+            vi.unstubAllGlobals();
+        }
+        // The address bar's own page, reloaded.
+        expect(load).toHaveBeenCalledOnce();
+        expect(href).toContain('/next');
+        history.replaceState(null, '', '/');
     });
 
     // A submit with no push_event of its own resets whatever its navigation does:
@@ -9234,6 +9442,8 @@ describe('form submit', () => {
         const mod = await import('./arizona.js');
         setupView('page', `<form id="f" az-submit='[10,"javascript:alert(1)"]'></form>`);
         mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose(1000);
         const assign = vi.fn();
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.stubGlobal('location', {
@@ -10589,14 +10799,21 @@ describe('page lifecycle -- bfcache', () => {
         const mod = await import('./arizona.js');
         const originalHref = location.href;
         history.replaceState(null, '', '/start');
+        setupView('page', '<div az="0"></div>');
         const mock = setupMockWorker(mod);
         mock.simulateOpen();
 
-        // An SPA navigation moves the path; the worker (which tracked it via
-        // W_UPDATE_PATH) is then killed on pagehide, so the respawned worker
-        // must be handed the CURRENT route, flagged as a reconnect -- the DOM
-        // exists with evolved live state and needs the server's full resync.
+        // An SPA navigation whose reply arrived put /next on screen; the worker is
+        // killed on pagehide, so the respawned worker must be handed that route,
+        // flagged as a reconnect -- the DOM exists with evolved live state and
+        // needs the server's full resync.
         mod.applyEffects([[10, '/next?tab=2']]);
+        mock.simulateMessage(
+            [[8, 'page', '<div id="page" az-view></div>']],
+            null,
+            false,
+            mock.lastRef(),
+        );
         window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
         window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
 
@@ -10607,6 +10824,35 @@ describe('page lifecycle -- bfcache', () => {
         expect(url).toContain('tab=2');
         expect(url).not.toContain('%2Fstart');
         expect(reconnect).toBe(true);
+
+        mock.restore();
+        history.replaceState(null, '', originalHref);
+    });
+
+    it('a navigate whose reply pagehide lost reconnects to the page on screen, then is sent again', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const originalHref = location.href;
+        history.replaceState(null, '', '/start');
+        setupView('page', '<div az="0"></div>');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // The reply never came: the restored DOM still holds /start, the view the
+        // server must resync, and /next is asked for once that is live.
+        mod.applyEffects([[10, '/next?tab=2']]);
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        const [, url] = mock.posted.filter((d) => d[0] === 0)[1];
+        expect(url).toContain('_az_path=%2Fstart');
+        expect(url).not.toContain('tab=2');
+
+        const navs = () => mock.getSentMessages().filter((m) => m[0] === 'navigate');
+        mock.simulateOpen(true);
+        expect(navs().length).toBe(1);
+        mock.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, true);
+        expect(navs().length).toBe(2);
+        expect(navs()[1][1]).toEqual({ path: '/next', qs: 'tab=2' });
 
         mock.restore();
         history.replaceState(null, '', originalHref);

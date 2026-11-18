@@ -336,31 +336,239 @@ describe('arizona-worker', () => {
         expect(ws.latest().url).toContain('_az_reconnect=1');
     });
 
-    it('W_UPDATE_PATH replaces the user qs on reconnect, keeping framework params', () => {
+    /** Send a navigate frame tagged with the page it asks for (`qs` as main merges it). */
+    function sendNav(ref, path, qs) {
+        slf.send([
+            1,
+            JSON.stringify(['navigate', { path, qs }, ref]),
+            { ref, path, qs, closes: 0 },
+        ]);
+    }
+
+    /** Close the open socket abnormally and return the URL the reconnect dials. */
+    function redialUrl() {
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        return ws.latest().url;
+    }
+
+    it('a navigate reply that put its page on screen moves the reconnect URL, keeping framework params', () => {
         // Connected on /search?q=a (a page param) with a framework caps param.
         slf.send([0, 'ws://host/ws?_az_path=%2Fsearch&q=a&_az_caps=%7B%7D']);
         ws.latest().simulateOpen();
-        // An SPA navigation to /items?page=2 updates path + qs.
-        slf.send([3, { path: '/items', qs: 'page=2' }]);
-        // A blip forces a reconnect, whose URL must reflect the navigation.
-        ws.latest().close(1006);
-        vi.advanceTimersByTime(10000);
-        const url = ws.latest().url;
+        sendNav(7, '/items', 'page=2');
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(JSON.stringify({ o: [], r: 7 }));
+        expect(slf.posted).toEqual([[0, [], null, false, null, 7, true]]);
+        const url = redialUrl();
         expect(url).toContain('_az_path=%2Fitems'); // navigated path
         expect(url).toContain('page=2'); // navigated qs is present
         expect(url).not.toContain('q=a'); // the stale page param is dropped
         expect(url).toContain('_az_caps='); // framework param preserved
     });
 
-    it('W_UPDATE_PATH lays down connect() extras carried in the posted qs', () => {
-        // arizona.js merges connect() extras into the qs it posts, so a constant
+    it('a navigate whose reply has not come leaves the reconnect URL on the page on screen', () => {
+        // The reply is lost with the socket: the DOM still holds /search, which is
+        // the view the reconnect must resync.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fsearch&q=a']);
+        ws.latest().simulateOpen();
+        sendNav(7, '/items', 'page=2');
+        const url = redialUrl();
+        expect(url).toContain('_az_path=%2Fsearch');
+        expect(url).toContain('q=a');
+        expect(url).not.toContain('page=2');
+    });
+
+    it('a reply that navigates again moves nothing', () => {
+        // A redirect, or a full load the server degraded the frame to: the page it
+        // asked for never went on screen.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        ws.latest().simulateOpen();
+        sendNav(7, '/protected', '');
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(
+            JSON.stringify({ e: [[10, '/login', { replace: true }]], r: 7 }),
+        );
+        sendNav(8, '/wrapped', '');
+        ws.latest().simulateMessage(
+            JSON.stringify({ e: [[20, {}, [[24, '/elsewhere', {}]]]], r: 8 }),
+        );
+        expect(slf.posted.map((m) => m[6])).toEqual([false, false]);
+        expect(redialUrl()).toContain('_az_path=%2Fstart');
+    });
+
+    it('a reply whose navigate only names a fragment of the page it put on screen moves the URL', () => {
+        // A patch whose handle_update/3 returns navigate("#bottom"): the page is on
+        // screen, the effect only scrolls it.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        ws.latest().simulateOpen();
+        slf.send([
+            1,
+            JSON.stringify(['patch', { path: '/hash', qs: 's=two' }, 7]),
+            { ref: 7, path: '/hash', qs: 's=two', href: 'http://host/hash?s=two', closes: 0 },
+        ]);
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [],
+                e: [
+                    [10, '#bottom', {}],
+                    [20, {}, [24, '?s=two#x', {}]],
+                ],
+                r: 7,
+            }),
+        );
+        expect(slf.posted.map((m) => m[6])).toEqual([true]);
+        const url = redialUrl();
+        expect(url).toContain('_az_path=%2Fhash');
+        expect(url).toContain('s=two');
+    });
+
+    it('resolves a reply navigate against the document base, as the main thread does', () => {
+        // Under <base href="/">, on /docs/intro, "docs/intro#sec" names a fragment of
+        // the page; resolved against the page itself it would be /docs/docs/intro.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        ws.latest().simulateOpen();
+        slf.send([
+            1,
+            JSON.stringify(['patch', { path: '/docs/intro', qs: '' }, 7]),
+            {
+                ref: 7,
+                closes: 0,
+                path: '/docs/intro',
+                qs: '',
+                href: 'http://host/docs/intro',
+                base: 'http://host/',
+            },
+        ]);
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(
+            JSON.stringify({ o: [], e: [[10, 'docs/intro#sec', {}]], r: 7 }),
+        );
+        expect(slf.posted.map((m) => m[6])).toEqual([true]);
+        expect(redialUrl()).toContain('_az_path=%2Fdocs%2Fintro');
+    });
+
+    it('a fragment of another page, or a full load of the same one, still navigates', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        ws.latest().simulateOpen();
+        const tag = (ref) => ({ ref, path: '/hash', qs: '', href: 'http://host/hash', closes: 0 });
+        slf.posted.length = 0;
+        slf.send([1, JSON.stringify(['patch', { path: '/hash', qs: '' }, 7]), tag(7)]);
+        ws.latest().simulateMessage(JSON.stringify({ e: [[10, '/other#x', {}]], r: 7 }));
+        slf.send([1, JSON.stringify(['patch', { path: '/hash', qs: '' }, 8]), tag(8)]);
+        ws.latest().simulateMessage(JSON.stringify({ e: [[10, '?#x', {}]], r: 8 }));
+        slf.send([1, JSON.stringify(['patch', { path: '/hash', qs: '' }, 9]), tag(9)]);
+        ws.latest().simulateMessage(JSON.stringify({ e: [[10, '#x', { full: true }]], r: 9 }));
+        expect(slf.posted.map((m) => m[6])).toEqual([false, false, false]);
+        expect(redialUrl()).toContain('_az_path=%2Fstart');
+    });
+
+    it('reports every connect attempt it starts, and whether the backoff was at its cap', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        expect(slf.posted).toEqual([[4, false]]);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // Never opening, the attempts walk the backoff: 1 s, 2 s, 5 s, then 10 s.
+        ws.latest().close(1006);
+        const capped = [];
+        for (let n = 0; n < 5; n++) {
+            vi.advanceTimersByTime(12000);
+            capped.push(slf.posted.filter((m) => m[0] === 4).at(-1)[1]);
+            ws.latest().close(1006);
+        }
+        expect(capped).toEqual([false, false, false, true, true]);
+    });
+
+    it('a crash (4500) reports its code alone and dials the page on screen', () => {
+        // A navigation still owed a reply at a close is not one the server failed (it
+        // answers one it could not complete): main sends it again once the page on screen is
+        // live. The reconnect does not dial it, even to the page on screen's own path.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart&q=a']);
+        ws.latest().simulateOpen();
+        sendNav(7, '/items', 'page=2');
+        sendNav(8, '/start', 'x=1');
+        slf.posted.length = 0;
+        ws.latest().close(4500);
+        expect(slf.posted).toEqual([[2, 4500]]);
+        vi.advanceTimersByTime(10000);
+        expect(ws.latest().url).toContain('_az_path=%2Fstart');
+        expect(ws.latest().url).toContain('q=a');
+        expect(ws.latest().url).not.toContain('x=1');
+    });
+
+    for (const code of [1006, 4501]) {
+        it(`a ${code} close with a navigation to the same path owed dials nothing`, () => {
+            // The reconnect after any close resyncs the page on screen, and main
+            // sends the navigation again once it is live.
+            slf.send([0, 'ws://host/ws?_az_path=%2Fstart&q=a']);
+            ws.latest().simulateOpen();
+            sendNav(8, '/start', 'x=1');
+            ws.latest().close(code);
+            vi.advanceTimersByTime(10000);
+            expect(ws.latest().url).toContain('q=a');
+            expect(ws.latest().url).not.toContain('x=1');
+        });
+    }
+
+    it('drops a navigation main posted before it saw a close the worker reported', () => {
+        // Main is busy while the socket closes and reopens: its navigation, posted
+        // for the dead socket, would reach the new one, and main then sends it
+        // again as that close says. The tag names the closes main had seen.
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart', false, 2]);
+        ws.latest().simulateOpen();
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        ws.latest().simulateOpen();
+        const nav = (closes) => [
+            1,
+            JSON.stringify(['navigate', { path: '/next', qs: '' }, 5]),
+            { ref: 5, path: '/next', qs: '', closes },
+        ];
+        slf.send(nav(2));
+        expect(ws.latest().sent).toEqual([]);
+        slf.send(nav(3));
+        expect(ws.latest().sent).toEqual([
+            JSON.stringify(['navigate', { path: '/next', qs: '' }, 5]),
+        ]);
+    });
+
+    it('any other close reports no page and keeps the reconnect on the page on screen', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        ws.latest().simulateOpen();
+        sendNav(7, '/items', '');
+        slf.posted.length = 0;
+        ws.latest().close(4501);
+        expect(slf.posted).toEqual([[2, 4501]]);
+        vi.advanceTimersByTime(10000);
+        expect(ws.latest().url).toContain('_az_path=%2Fstart');
+    });
+
+    it('a navigate sent while the socket is down is not tracked, nor one a close lost', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2Fstart']);
+        sendNav(6, '/never-sent', '');
+        ws.latest().simulateOpen();
+        sendNav(7, '/lost', '');
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // Frames carrying those refs on the new socket answer nothing it sent.
+        ws.latest().simulateMessage(JSON.stringify({ o: [], r: 6 }));
+        ws.latest().simulateMessage(JSON.stringify({ o: [], r: 7 }));
+        expect(slf.posted.map((m) => m[6])).toEqual([false, false]);
+        expect(redialUrl()).toContain('_az_path=%2Fstart');
+    });
+
+    it('lays down connect() extras carried in the tagged qs', () => {
+        // arizona.js merges connect() extras into the qs it tags, so a constant
         // connection param survives while the page qs is replaced.
         slf.send([0, 'ws://host/ws?_az_path=%2Fsearch&q=a&token=abc']);
         ws.latest().simulateOpen();
-        slf.send([3, { path: '/items', qs: 'page=2&token=abc' }]);
-        ws.latest().close(1006);
-        vi.advanceTimersByTime(10000);
-        const url = ws.latest().url;
+        sendNav(7, '/items', 'page=2&token=abc');
+        ws.latest().simulateMessage(JSON.stringify({ o: [], r: 7 }));
+        const url = redialUrl();
         expect(url).toContain('token=abc'); // connect extra preserved
         expect(url).toContain('page=2');
         expect(url).not.toContain('q=a');
@@ -480,20 +688,18 @@ describe('arizona-worker', () => {
         expect(inStep(reopenDelay(1006), [4000, 6000])).toBe(true);
     });
 
-    it('update-path message [3, {path, qs}] rewrites the cached URL', () => {
-        slf.send([0, 'ws://host/ws?_az_path=%2Fold']);
-        slf.send([3, { path: '/new', qs: '' }]);
-        ws.latest().close(1006);
-        vi.advanceTimersByTime(10000);
-        expect(ws.latest().url).toContain('_az_path=%2Fnew');
-    });
-
-    it('update-path targets _az_path by exact key and replaces a like-named user param', () => {
+    it('a navigate reply targets _az_path by exact key and replaces a like-named user param', () => {
         slf.send([0, 'ws://host/ws?upload_path=%2Ffoo&_az_path=%2Fold']);
+        ws.latest().simulateOpen();
         // Navigate to a page that also carries an `upload_path` param: `_az_path`
         // is updated by its exact key (never confused with the user param), and
         // the stale page value is replaced by the navigated-to one.
-        slf.send([3, { path: '/new', qs: 'upload_path=%2Fbar' }]);
+        slf.send([
+            1,
+            JSON.stringify(['navigate', { path: '/new', qs: 'upload_path=%2Fbar' }, 7]),
+            { ref: 7, path: '/new', qs: 'upload_path=%2Fbar', closes: 0 },
+        ]);
+        ws.latest().simulateMessage(JSON.stringify({ o: [], r: 7 }));
         ws.latest().close(1006);
         vi.advanceTimersByTime(10000);
         const url = ws.latest().url;

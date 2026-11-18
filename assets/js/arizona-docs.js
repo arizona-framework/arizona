@@ -1,5 +1,6 @@
 import { _eventDocs, _passiveBound, bindDocumentEvents } from './arizona-events.js';
 import { destroyHooks } from './arizona-hooks.js';
+import { host } from './arizona-host.js';
 
 // --------------------------------------------------------------------------
 // Multi-document support (Document Picture-in-Picture)
@@ -308,6 +309,8 @@ export async function requestPip(viewId, opts = {}) {
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
     bindDocumentEvents(pip.document, controller.signal, () => controller.abort());
+    // A person acting in the floating window is a person acting on the page.
+    host.watchInput?.(pip, controller.signal);
 
     pip.addEventListener(
         'pagehide',
