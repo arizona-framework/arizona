@@ -751,6 +751,31 @@ describe('a navigation and a crash', () => {
         expect(l.replace).toHaveBeenCalledWith('http://localhost:3000/next');
     });
 
+    it('a full load answering a navigation under a <base href> reloads its entry', async () => {
+        // The frame asks for the page the base resolves the link to, `/sub/x`.
+        await connected();
+        const base = document.createElement('base');
+        base.setAttribute('href', '/sub/');
+        document.head.appendChild(base);
+        try {
+            navigate('x');
+            const ref = mock.navs()[0][2];
+            expect(mock.navs()[0][1]).toEqual({ path: '/sub/x', qs: '' });
+            const l = await loads(() =>
+                mock.frame(
+                    null,
+                    [[JS_NAVIGATE, '/sub/x', { full: true, replace: true }]],
+                    false,
+                    ref,
+                ),
+            );
+            expect(l.reload).toHaveBeenCalledOnce();
+            expect(l.count).toBe(1);
+        } finally {
+            base.remove();
+        }
+    });
+
     it("a full load of its page a reply's fetch response asks for goes by URL", async () => {
         // A fetch's response is no reply to the navigation: its loads go by URL,
         // unbounded, whatever page the address bar names when it lands.
