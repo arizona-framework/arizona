@@ -113,6 +113,9 @@ render(Bindings) ->
                 ],
                 [~"crash, then patch to this view under other layouts"]},
             {a, [{id, ~"leave-about"}, {href, ~"/about"}, az_navigate], [~"/about"]},
+            {a, [{id, ~"twin-empty-query"}, {href, ~"/crash-nav-twin?"}, az_navigate], [
+                ~"this view under other layouts, an empty query"
+            ]},
             {a, [{id, ~"leave-slow"}, {href, ~"/crash-nav-slow"}, az_navigate], [~"slow"]},
             {a, [{id, ~"plain-slow"}, {href, ~"/crash-nav-slow"}], [~"slow, as a plain link"]},
             {button, [{id, ~"crash"}, {az_click, arizona_js:push_event(~"crash")}], [~"crash"]},

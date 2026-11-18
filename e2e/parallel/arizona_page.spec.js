@@ -2706,6 +2706,27 @@ test.describe('reconnect to the page on screen', () => {
         });
     }
 
+    // A link to `page?`: the entry it pushes keeps the empty query, but the frame
+    // asks for `qs: ''`, so the server's full-load answer names the page without the
+    // `?`. It answers this page's own navigation all the same, so the entry reloads,
+    // keeping its `?` and its state.
+    test('a navigation to page? answered with a load reloads the entry it pushed', async ({
+        page,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/crash-nav');
+        await wsReady(page);
+        const loaded = page.waitForEvent('load', { timeout: 15000 });
+        await page.click('#twin-empty-query');
+        await loaded;
+        await expect(page.locator('section.scroll-section #crash_nav')).toHaveCount(1);
+        expect(page.url()).toMatch(/\/crash-nav-twin\?$/);
+        expect(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type)).toBe(
+            'reload',
+        );
+        expect(typeof (await page.evaluate(() => history.state?._azIdx))).toBe('number');
+    });
+
     // The view crashes and navigates to its own page on every mount. The navigate
     // names the page on screen, which the reconnect already mounts, so the page
     // keeps reconnecting under the worker's backoff -- 1, 2, 5, then 10 s -- with no

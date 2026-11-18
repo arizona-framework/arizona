@@ -673,6 +673,21 @@ describe('a navigation and a crash', () => {
         expect(l.replace).not.toHaveBeenCalled();
     });
 
+    it('a full load answering a navigation to page? reloads its entry too', async () => {
+        // An empty query is part of the page the entry names, but the frame asks for
+        // `qs: ''`, so the server's answer names the page without the `?`: what the
+        // frame asked for decides, not the URL's spelling.
+        await connected();
+        navigate('/next?');
+        const ref = mock.navs()[0][2];
+        expect(location.href).toBe('http://localhost:3000/next?');
+        const l = await loads(() =>
+            mock.frame(null, [[JS_NAVIGATE, '/next', { full: true, replace: true }]], false, ref),
+        );
+        expect(l.reload).toHaveBeenCalledOnce();
+        expect(l.replace).not.toHaveBeenCalled();
+    });
+
     it('a full navigate to a fragment of the page on screen goes by URL, as the browser does', async () => {
         await connected();
         const l = await loads(() => navigate('/start#sec', { full: true }));

@@ -185,8 +185,12 @@ let _navLoadTimer = null;
 /** The effects being applied answer a navigation issued with no user input. */
 let _answeringNav = false;
 
-/** The effects being applied answer a navigation of this page (its reply). */
-let _answeringOwn = false;
+/**
+ * The navigation of this page whose reply is being applied: the page its frame asked
+ * for, `null` outside such a reply.
+ * @type {{path: string, qs: string} | null}
+ */
+let _answeringOwn = null;
 
 /**
  * Record a load that answers a navigation issued with no input, and return how long
@@ -1478,13 +1482,16 @@ function leavePage(url, replace, recover = false) {
         // A replace finishes a navigation whose entry already names `url`, so the
         // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
         _unloadingToOtherPage = Boolean(replace);
-        const target = pageUrl(url).href;
+        const u = pageUrl(url);
+        const target = u.href;
         const bare = location.href.split('#')[0];
-        if (own && target === bare) {
-            // The load answering this page's own navigation, of the URL it pushed (its
-            // fragment aside: the frame carries none), reloads that entry so it keeps
-            // its state (`_azIdx`, the transition edges) and its fragment, which the
-            // reloaded page scrolls to: a `location.replace` starts it afresh.
+        if (own && isOwnPage(u, own)) {
+            // The load answering this page's own navigation, of the page its frame
+            // asked for, reloads the entry it pushed so the entry keeps its state
+            // (`_azIdx`, the transition edges), its fragment (the frame carries none),
+            // which the reloaded page scrolls to, and its URL as the link spelled it
+            // (`/x?`, whose frame asks for `qs: ''`): a `location.replace` starts it
+            // afresh under the server's spelling.
             reloadPage();
         } else if (
             recover &&
@@ -1524,6 +1531,23 @@ function leavePage(url, replace, recover = false) {
         _navLoadNext = null;
         next?.();
     }, delay);
+}
+
+/**
+ * Whether `u` is the page a navigation frame asked for, named by the server's answer:
+ * by what the frame carried (path and query), not by the URL's spelling, since the
+ * server builds its answer from those (`/x?` asks for `qs: ''` and comes back as
+ * `/x`). Never with a fragment of its own: the frame carries none, so one there is
+ * a load the server asked for by URL. And only while the address bar still names
+ * that page, the entry a reload would reload.
+ * @param {URL} u
+ * @param {{path: string, qs: string}} owed
+ * @returns {boolean}
+ */
+function isOwnPage(u, owed) {
+    const names = (/** @type {URL | Location} */ l) =>
+        l.origin === location.origin && l.pathname === owed.path && l.search.slice(1) === owed.qs;
+    return names(u) && u.hash === '' && !u.href.endsWith('#') && names(location);
 }
 
 /**
@@ -2287,14 +2311,14 @@ export function connect(endpoint, params = {}) {
                             // A navigation's reply: a load among its effects answers
                             // it, bounded when the page had no user input when it
                             // was issued.
-                            _answeringOwn = owed !== undefined;
+                            _answeringOwn = owed ?? null;
                             _answeringNav = owed !== undefined && !owed.acted;
                             if (effects) applyEffects(effects);
                         } finally {
                             _inFrame = false;
                             _applying = null;
                             _answeringNav = false;
-                            _answeringOwn = false;
+                            _answeringOwn = null;
                         }
                         settleCtls(msg[5]);
                         if (msg[3]) restoreFormState();
