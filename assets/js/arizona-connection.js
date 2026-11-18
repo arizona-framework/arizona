@@ -185,8 +185,12 @@ let _navLoadTimer = null;
 /** The effects being applied answer a navigation issued with no user input. */
 let _answeringNav = false;
 
-/** The effects being applied answer a navigation of this page (its reply). */
-let _answeringOwn = false;
+/**
+ * The navigation of this page whose reply is being applied: the page its frame asked
+ * for, `null` outside such a reply.
+ * @type {{path: string, qs: string} | null}
+ */
+let _answeringOwn = null;
 
 /**
  * Record a load that answers a navigation issued with no input, and return how long
@@ -507,17 +511,34 @@ let _eventsSent = 0;
  * Keep the origin of the command running now for work it runs later: the returned
  * runner runs that work as the command would have, so one a server frame ran (a
  * handler's `transition(set_attr(...))`) still writes as the server (`_inFrame`).
+ * With `nav` -- a transition, whose update callback runs the very commands of the
+ * frame later -- a load in a navigation's reply
+ * (`transition(navigate(Url, #{full => true}))`) still answers that navigation
+ * (`_answeringNav`, `_answeringOwn`): bounded, and a reload of the entry it pushed
+ * when it names that page. A fetch's response is no reply to a navigation, so its
+ * loads go by URL, unbounded.
+ * @param {boolean} [nav]
  * @returns {(fn: () => void) => void}
  */
-function keepOrigin() {
+function keepOrigin(nav = false) {
     const inFrame = _inFrame;
+    const answeringNav = _answeringNav;
+    const answeringOwn = _answeringOwn;
     return (fn) => {
         const outerFrame = _inFrame;
+        const outerNav = _answeringNav;
+        const outerOwn = _answeringOwn;
         _inFrame = inFrame;
+        if (nav) {
+            _answeringNav = answeringNav;
+            _answeringOwn = answeringOwn;
+        }
         try {
             fn();
         } finally {
             _inFrame = outerFrame;
+            _answeringNav = outerNav;
+            _answeringOwn = outerOwn;
         }
     };
 }
@@ -1458,9 +1479,12 @@ function replayPendingNav() {
 /**
  * Load `url` as a real page. `replace` finishes a navigation already in history
  * -- the server answering the client's own navigate frame with a full load, its
- * entry pushed before asking -- so it must not add a second entry. A load of the
- * address bar's own page reloads it, keeping the entry's state. A load the server
- * answered a navigation with is bounded (`navLoadDelay`).
+ * entry pushed before asking -- so it must not add a second entry. One that loads
+ * the very page that navigation asked for reloads the entry instead, keeping its
+ * state (`isOwnPage`). A load the server answered a navigation with is bounded
+ * (`navLoadDelay`). The URL is resolved now, as `loadPage` resolves it, so a load
+ * waiting out the bound goes where it named when asked for, wherever the address
+ * bar has moved since.
  *
  * Only an http(s) URL may be loaded. Any other scheme (`javascript:`, `data:`)
  * would run in this page, and the URL can come from a server that echoed a
@@ -1474,17 +1498,20 @@ function replayPendingNav() {
 function leavePage(url, replace, recover = false) {
     if (!isWebUrl(url)) return;
     const own = _answeringOwn;
+    const u = pageUrl(url);
+    const target = u.href;
     const load = () => {
         // A replace finishes a navigation whose entry already names `url`, so the
         // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
         _unloadingToOtherPage = Boolean(replace);
-        const target = pageUrl(url).href;
         const bare = location.href.split('#')[0];
-        if (own && target === bare) {
-            // The load answering this page's own navigation, of the URL it pushed (its
-            // fragment aside: the frame carries none), reloads that entry so it keeps
-            // its state (`_azIdx`, the transition edges) and its fragment, which the
-            // reloaded page scrolls to: a `location.replace` starts it afresh.
+        if (own && isOwnPage(u, own)) {
+            // The load answering this page's own navigation, of the page its frame
+            // asked for, reloads the entry it pushed so the entry keeps its state
+            // (`_azIdx`, the transition edges), its fragment (the frame carries none),
+            // which the reloaded page scrolls to, and its URL as the link spelled it
+            // (`/x?`, whose frame asks for `qs: ''`): a `location.replace` starts it
+            // afresh under the server's spelling.
             reloadPage();
         } else if (
             recover &&
@@ -1502,7 +1529,7 @@ function leavePage(url, replace, recover = false) {
         } else {
             // A load an effect or a link asked for goes by URL, a fragment of the page
             // on screen included (which only scrolls, as the browser does).
-            loadPage(url, replace);
+            loadPage(target, replace);
         }
     };
     // A load answering a navigation issued with no input while another waits takes its
@@ -1524,6 +1551,23 @@ function leavePage(url, replace, recover = false) {
         _navLoadNext = null;
         next?.();
     }, delay);
+}
+
+/**
+ * Whether `u` is the page a navigation frame asked for, named by the server's answer:
+ * by what the frame carried (path and query), not by the URL's spelling, since the
+ * server builds its answer from those (`/x?` asks for `qs: ''` and comes back as
+ * `/x`). Never with a fragment of its own: the frame carries none, so one there is
+ * a load the server asked for by URL. And only while the address bar still names
+ * that page, the entry a reload would reload.
+ * @param {URL} u
+ * @param {{path: string, qs: string}} owed
+ * @returns {boolean}
+ */
+function isOwnPage(u, owed) {
+    const names = (/** @type {URL | Location} */ l) =>
+        l.origin === location.origin && l.pathname === owed.path && l.search.slice(1) === owed.qs;
+    return names(u) && u.hash === '' && !u.href.endsWith('#') && names(location);
 }
 
 /**
@@ -2287,14 +2331,14 @@ export function connect(endpoint, params = {}) {
                             // A navigation's reply: a load among its effects answers
                             // it, bounded when the page had no user input when it
                             // was issued.
-                            _answeringOwn = owed !== undefined;
+                            _answeringOwn = owed ?? null;
                             _answeringNav = owed !== undefined && !owed.acted;
                             if (effects) applyEffects(effects);
                         } finally {
                             _inFrame = false;
                             _applying = null;
                             _answeringNav = false;
-                            _answeringOwn = false;
+                            _answeringOwn = null;
                         }
                         settleCtls(msg[5]);
                         if (msg[3]) restoreFormState();

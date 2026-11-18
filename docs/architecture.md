@@ -2393,26 +2393,26 @@ that is a path on this origin (`arizona_req:location_kind/1`); any other -- an i
 provider -- cannot be SPA-navigated, so the socket instead has the browser load the gated path
 over HTTP, where the same halt is a real 3xx that also carries any cookie the middleware set
 before redirecting (the gate's middlewares run twice, the cost the flash replay already pays).
-An unsafe-scheme `Location` takes the same road, so it never reaches the client. Every full load
-the socket degrades a navigate/patch frame to (no live route, a layout change, these halts, the
-flash replay) carries `replace => true` and runs as `location.replace`: it finishes a navigation
-the client already recorded. On `cont`, `arizona_live:navigate/4` is called. Before mounting the
-new handler it cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the
-whole `$arizona_timers` registry) and then unmounts the outgoing page **children first, then the
-root** (`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2`
-on the old root).
-Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
-`terminate/2` uses the same order for any exit reason -- every child's `unmount/1` runs while the
-root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is
-against the root: `views` is flat and walked with `maps:foreach`, so nested views unmount in key
-order, not parent-before-child. Then the new handler is mounted and gen_server state is reset. The
-mount runs in a `handle_continue/2` from a state whose snapshot and views are cleared, which is
-what `terminate/2` reads as "nothing mounted", so a new mount that raises exits the process without
-unmounting the old page a second time.
-Returns `{ok, NewViewId, PageHTML, Observed}`. The WS handler sends one frame: the old page's pushes
-queued ahead of the live process's barrier, their ops first, then `[OP_REPLACE, OldViewId,
-PageHTML]` (their effects are dropped with a log line, see `handle_info/2` above). Browser
-back/forward also triggers navigate via `popstate`.
+An unsafe-scheme `Location` takes the same road, so it never reaches the client. Every full load the
+socket degrades a navigate/patch frame to (no live route, a layout change, these halts, the flash
+replay) carries `replace => true` and runs as `location.replace`: it finishes a navigation the
+client already recorded. The exception is a load of the very page the frame asked for, which reloads
+the entry the navigation pushed (see "Reconnecting to the page on screen"). On `cont`,
+`arizona_live:navigate/4` is called. Before mounting the new handler it cancels every pending
+`send_after` timer (`cancel_pending_timers/0`, over the whole `$arizona_timers` registry) and then
+unmounts the outgoing page **children first, then the root** (`unmount_removed_views/1` over the old
+views map, then `arizona_stateful:call_unmount/2` on the old root). Discarding the page is a
+removal, so it unmounts exactly like a diff removal does, and `terminate/2` uses the same order for
+any exit reason -- every child's `unmount/1` runs while the root is still mounted, and no handler
+has to propagate unmount by hand. Note the guarantee is against the root: `views` is flat and walked
+with `maps:foreach`, so nested views unmount in key order, not parent-before-child. Then the new
+handler is mounted and gen_server state is reset. The mount runs in a `handle_continue/2` from a
+state whose snapshot and views are cleared, which is what `terminate/2` reads as "nothing mounted",
+so a new mount that raises exits the process without unmounting the old page a second time. Returns
+`{ok, NewViewId, PageHTML, Observed}`. The WS handler sends one frame: the old page's pushes queued
+ahead of the live process's barrier, their ops first, then `[OP_REPLACE, OldViewId, PageHTML]`
+(their effects are dropped with a log line, see `handle_info/2` above). Browser back/forward also
+triggers navigate via `popstate`.
 
 **The page-swap window is closed by the client.** The server replaces the root while handling the
 navigate frame, but the old DOM stays on screen until the `OP_REPLACE` arrives, and an event sent
@@ -2476,19 +2476,26 @@ so it keeps reading `true`: a reconnect mounted it.
 A navigation the server could not complete (its page failed to mount, its old page crashed as it
 unmounted, the view crashed reacting to a patch, a middleware raised) is answered with the load of
 its page, then the session closes `4500`; see "Exit handling". That is the navigation's one outcome.
-Let through, the load reloads the entry the navigation pushed when its URL is that entry's, fragment
-aside (the frame carries none), so the entry keeps its history state and its fragment, which the
-reloaded page scrolls to, and Back and Forward stay right. A recovery load of the address bar's own
-URL with a fragment (a pending navigation's fallback, the resync of a view the page does not hold)
-cannot go by URL, which would only scroll: an entry the client stamped (`_azIdx`/`_azScroll` in its
-state) reloads with its fragment, an unstamped one loads without it, since it may be a form POST's.
-Any other load (a URL that differs, an app's own `full` navigate, a fragment of the page on screen
-included) goes by URL, as the browser takes it. Cancelled in a `beforeunload` prompt, the navigation
-is settled: the `4500` reconnects the page on screen, which stays live under the address of the page
-asked for, as after any cancelled full load, and nothing asks again. A navigate queued behind a
-crashing event did not run, so it goes out again once the page on screen is live: two pages that
-crash and navigate to each other on connect loop over the socket under the worker's backoff, loading
-nothing.
+Let through, the load reloads the entry the navigation pushed when it names the page the
+navigation's frame asked for, while the address bar still names it -- as does any full load among a
+navigation's reply effects, the app's own included (a patch's `handle_update/3` returning one): the
+path and query the frame carried, compared as the frame carried them rather than as URL text (a link
+to `/x?` asks for `qs: ''`, and the server answers with `/x`), and no fragment of its own (the frame
+carries none). The entry keeps its history state, its URL as the link wrote it and its fragment,
+which the reloaded page scrolls to, and Back and Forward stay right. A load the reply runs inside a
+`transition`, in the transition's update callback after the reply has been applied, still answers
+the navigation: it reloads the entry the same way and is bounded as the reply's own load. A recovery
+load of the address bar's own URL with a fragment (a pending navigation's fallback, the resync of a
+view the page does not hold) cannot go by URL, which would only scroll: an entry the client stamped
+(`_azIdx`/`_azScroll` in its state) reloads with its fragment, an unstamped one loads without it,
+since it may be a form POST's. Any other load (a URL that differs, a fragment of the page on screen
+included, an app's `full` navigate outside a navigation's reply, a `fetch` response's load, which is
+also unbounded) goes by URL, as the browser takes it. Cancelled in a `beforeunload` prompt, the
+navigation is settled: the `4500` reconnects the page on screen, which stays live under the address
+of the page asked for, as after any cancelled full load, and nothing asks again. A navigate queued
+behind a crashing event did not run, so it goes out again once the page on screen is live: two pages
+that crash and navigate to each other on connect loop over the socket under the worker's backoff,
+loading nothing.
 
 Newer wins: the reply to a navigation older than the last one issued runs no navigation it carries
 (a halt redirect, the full load the server answered it with), since replies keep frame order and it

@@ -28,6 +28,7 @@ function person(type = 'pointerdown', init = {}, target = document.body) {
 const OP_REPLACE = 8;
 const JS_NAVIGATE = 10;
 const JS_TRANSITION = 20;
+const JS_FETCH = 22;
 const JS_PATCH = 24;
 
 // A reconnect resyncs the page on screen -- the view the DOM holds -- and a
@@ -575,6 +576,10 @@ describe('a navigation back to the page on screen while one is pending', () => {
 // page, then closes 4500. A navigation still owed a reply at a close is one it never
 // ran, so it goes out again once the page on screen is live.
 describe('a navigation and a crash', () => {
+    // The loads here answer navigations issued with no input: each test starts with
+    // an empty record, so none waits out the bound another test filled.
+    beforeEach(() => sessionStorage.removeItem('arizona:nav-loads'));
+
     /** Run `fn` with `location` stubbed, returning the loads it asked for. */
     async function loads(/** @type {() => void | Promise<void>} */ fn) {
         const reload = vi.fn();
@@ -671,6 +676,174 @@ describe('a navigation and a crash', () => {
         );
         expect(l.reload).toHaveBeenCalledOnce();
         expect(l.replace).not.toHaveBeenCalled();
+    });
+
+    it('a full load answering a navigation to page? reloads its entry too', async () => {
+        // An empty query is part of the page the entry names, but the frame asks for
+        // `qs: ''`, so the server's answer names the page without the `?`: what the
+        // frame asked for decides, not the URL's spelling.
+        await connected();
+        navigate('/next?');
+        const ref = mock.navs()[0][2];
+        expect(location.href).toBe('http://localhost:3000/next?');
+        const l = await loads(() =>
+            mock.frame(null, [[JS_NAVIGATE, '/next', { full: true, replace: true }]], false, ref),
+        );
+        expect(l.reload).toHaveBeenCalledOnce();
+        expect(l.replace).not.toHaveBeenCalled();
+    });
+
+    it('a full load of its page inside a view transition in the reply reloads its entry too', async () => {
+        // The transition runs the load in its update callback, after the reply has
+        // been applied: it still answers that reply's navigation.
+        await connected();
+        /** @type {Array<() => void>} */
+        const updates = [];
+        /** @type {any} */ (document).startViewTransition = (/** @type {() => void} */ fn) => {
+            updates.push(fn);
+        };
+        try {
+            navigate('/next');
+            const ref = mock.navs()[0][2];
+            mock.frame(
+                null,
+                [[JS_TRANSITION, {}, [JS_NAVIGATE, '/next', { full: true }]]],
+                false,
+                ref,
+            );
+            expect(updates.length).toBe(1);
+            const l = await loads(() => updates[0]());
+            expect(l.reload).toHaveBeenCalledOnce();
+            expect(l.count).toBe(1);
+        } finally {
+            delete (/** @type {any} */ (document).startViewTransition);
+        }
+    });
+
+    it('a full load answering a navigation to another query of its page replaces the entry', async () => {
+        // The query is part of the page the frame asked for: `?a=2` is another page.
+        await connected();
+        navigate('/next?a=1');
+        const ref = mock.navs()[0][2];
+        const l = await loads(() =>
+            mock.frame(
+                null,
+                [[JS_NAVIGATE, '/next?a=2', { full: true, replace: true }]],
+                false,
+                ref,
+            ),
+        );
+        expect(l.reload).not.toHaveBeenCalled();
+        expect(l.replace).toHaveBeenCalledWith('http://localhost:3000/next?a=2');
+    });
+
+    it('a full load of its page once the address bar names another goes by URL', async () => {
+        // A reload would reload the entry on screen now, not the one the navigation
+        // pushed.
+        await connected();
+        navigate('/next');
+        const ref = mock.navs()[0][2];
+        history.replaceState(history.state, '', '/moved');
+        const l = await loads(() =>
+            mock.frame(null, [[JS_NAVIGATE, '/next', { full: true, replace: true }]], false, ref),
+        );
+        expect(l.reload).not.toHaveBeenCalled();
+        expect(l.replace).toHaveBeenCalledWith('http://localhost:3000/next');
+    });
+
+    it('a full load answering a navigation under a <base href> reloads its entry', async () => {
+        // The frame asks for the page the base resolves the link to, `/sub/x`.
+        await connected();
+        const base = document.createElement('base');
+        base.setAttribute('href', '/sub/');
+        document.head.appendChild(base);
+        try {
+            navigate('x');
+            const ref = mock.navs()[0][2];
+            expect(mock.navs()[0][1]).toEqual({ path: '/sub/x', qs: '' });
+            const l = await loads(() =>
+                mock.frame(
+                    null,
+                    [[JS_NAVIGATE, '/sub/x', { full: true, replace: true }]],
+                    false,
+                    ref,
+                ),
+            );
+            expect(l.reload).toHaveBeenCalledOnce();
+            expect(l.count).toBe(1);
+        } finally {
+            base.remove();
+        }
+    });
+
+    it("a full load a reply's fetch response asks for is not bounded", async () => {
+        // The navigation was issued with no input, but the fetch's response is no
+        // reply to it: its load starts at once, past a full record, and counts nothing.
+        await connected();
+        const full = JSON.stringify(Array(10).fill({ t: Date.now(), slow: false }));
+        sessionStorage.setItem('arizona:nav-loads', full);
+        navigate('/next');
+        const ref = mock.navs()[0][2];
+        /** @type {(r: *) => void} */
+        let resolve = () => {};
+        const pending = new Promise((r) => {
+            resolve = r;
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => pending),
+        );
+        mock.frame(null, [[JS_FETCH, '/api', { method: 'post' }]], false, ref);
+        vi.unstubAllGlobals();
+        const l = await loads(async () => {
+            resolve({
+                ok: true,
+                status: 200,
+                url: 'http://localhost:3000/api',
+                text: () =>
+                    Promise.resolve(
+                        JSON.stringify({ e: [[JS_NAVIGATE, '/login', { full: true }]] }),
+                    ),
+            });
+            await new Promise((r) => setTimeout(r, 0));
+            await new Promise((r) => setTimeout(r, 0));
+        });
+        expect(l.assign).toHaveBeenCalledExactlyOnceWith('http://localhost:3000/login');
+        expect(sessionStorage.getItem('arizona:nav-loads')).toBe(full);
+    });
+
+    it("a full load of its page a reply's fetch response asks for goes by URL", async () => {
+        // A fetch's response is no reply to the navigation: its loads go by URL,
+        // unbounded, whatever page the address bar names when it lands.
+        await connected();
+        navigate('/next');
+        const ref = mock.navs()[0][2];
+        /** @type {(r: *) => void} */
+        let resolve = () => {};
+        const pending = new Promise((r) => {
+            resolve = r;
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => pending),
+        );
+        mock.frame(null, [[JS_FETCH, '/api', { method: 'post' }]], false, ref);
+        vi.unstubAllGlobals();
+        const l = await loads(async () => {
+            resolve({
+                ok: true,
+                status: 200,
+                url: 'http://localhost:3000/api',
+                text: () =>
+                    Promise.resolve(
+                        JSON.stringify({ e: [[JS_NAVIGATE, '/next', { full: true }]] }),
+                    ),
+            });
+            await new Promise((r) => setTimeout(r, 0));
+            await new Promise((r) => setTimeout(r, 0));
+        });
+        expect(l.reload).not.toHaveBeenCalled();
+        expect(l.assign).toHaveBeenCalledExactlyOnceWith('http://localhost:3000/next');
     });
 
     it('a full navigate to a fragment of the page on screen goes by URL, as the browser does', async () => {
@@ -1178,6 +1351,60 @@ describe('the bound on loads answering navigations', () => {
         }
         expect(stored()).toEqual([]);
         expect(error).not.toHaveBeenCalled();
+    });
+
+    it('a delayed load goes where its URL named when the server asked for it', async () => {
+        // A relative URL resolves against the page the answer came to, not the one
+        // the address bar names once the failsafe delay is over.
+        await setup();
+        sessionStorage.setItem(KEY, JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })));
+        mock.frame(null, [[JS_NAVIGATE, '/dir/a', {}]]);
+        mock.frame(
+            null,
+            [[JS_NAVIGATE, 'b', { full: true, replace: true }]],
+            false,
+            mock.navs().at(-1)[2],
+        );
+        history.replaceState(history.state, '', '/elsewhere/page');
+        const replace = vi.fn();
+        const { origin, href, pathname, search, hash } = window.location;
+        vi.stubGlobal('location', { replace, origin, href, pathname, search, hash });
+        try {
+            vi.advanceTimersByTime(30000);
+            await Promise.resolve();
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(replace).toHaveBeenCalledExactlyOnceWith('http://localhost:3000/dir/b');
+    });
+
+    it('bounds a load inside a view transition in the reply too', async () => {
+        // The transition runs the load in its update callback, after the reply has
+        // been applied: it still answers that reply's navigation.
+        await setup();
+        /** @type {Array<() => void>} */
+        const updates = [];
+        /** @type {any} */ (document).startViewTransition = (/** @type {() => void} */ fn) => {
+            updates.push(fn);
+        };
+        try {
+            sessionStorage.setItem(
+                KEY,
+                JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+            );
+            mock.frame(null, [[JS_NAVIGATE, '/a', {}]]);
+            mock.frame(
+                null,
+                [[JS_TRANSITION, {}, [JS_NAVIGATE, '/b', { full: true }]]],
+                false,
+                mock.navs().at(-1)[2],
+            );
+            expect(updates.length).toBe(1);
+            expect(await loads(() => updates[0]())).toBe(0);
+            expect(await loads(() => vi.advanceTimersByTime(30000))).toBe(1);
+        } finally {
+            delete (/** @type {any} */ (document).startViewTransition);
+        }
     });
 
     it('lets 10 through, then delays each by 30 s, said once', async () => {

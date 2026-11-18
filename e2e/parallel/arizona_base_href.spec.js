@@ -96,3 +96,23 @@ test('a query patch in a fetch response patches the page, not the endpoint', asy
     await expect(page.locator('#content')).toHaveText('overview');
     await expect(page.locator('#clicks')).toHaveText('1');
 });
+
+// A relative navigate under `<base href>` to a view under other layouts: the server
+// answers the frame with the full load of the page the base resolved it to (from
+// `/patch-demo/overview`, `crash-nav-twin` names `/crash-nav-twin` only under the
+// base), which is that navigation's own page, so the entry it pushed reloads,
+// keeping its state.
+test('a relative navigate answered with a load reloads the entry it pushed', async ({ page }) => {
+    await page.goto('/patch-demo/overview');
+    await wsReady(page);
+    await addRelativeNav(page, '/', [10, 'crash-nav-twin']);
+    const loaded = page.waitForEvent('load', { timeout: 15000 });
+    await page.locator('#rel-nav').click();
+    await loaded;
+    await expect(page.locator('section.scroll-section #crash_nav')).toHaveCount(1);
+    expect(new URL(page.url()).pathname).toBe('/crash-nav-twin');
+    expect(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type)).toBe(
+        'reload',
+    );
+    expect(typeof (await page.evaluate(() => history.state?._azIdx))).toBe('number');
+});

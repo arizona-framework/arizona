@@ -37,8 +37,9 @@
  *   is answered by a frame, so a view transition can wait for it
  * @property {(t: {types?: string[], kind: 'any'|'replace'}) => void} armTransition arm a view
  *   transition for the reply a command just sent awaits
- * @property {() => (fn: () => void) => void} keepOrigin keep the origin of the command
- *   running now (a server frame's or the user's) for work it runs later
+ * @property {(nav?: boolean) => (fn: () => void) => void} keepOrigin keep the origin of
+ *   the command running now (a server frame's or the user's) for work it runs later;
+ *   with `nav` (a transition), also the navigation reply it answers
  * @property {(url: string, opts: Object<string, *>, kind: 'navigate'|'patch',
  *   transition?: {types?: string[], kind: 'any'|'replace'}) => void} navigate
  *   a navigate or patch effect, under the view transition running it, if any

@@ -2706,6 +2706,27 @@ test.describe('reconnect to the page on screen', () => {
         });
     }
 
+    // A link to `page?`: the entry it pushes keeps the empty query, but the frame
+    // asks for `qs: ''`, so the server's full-load answer names the page without the
+    // `?`. It answers this page's own navigation all the same, so the entry reloads,
+    // keeping its `?` and its state.
+    test('a navigation to page? answered with a load reloads the entry it pushed', async ({
+        page,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/crash-nav');
+        await wsReady(page);
+        const loaded = page.waitForEvent('load', { timeout: 15000 });
+        await page.click('#twin-empty-query');
+        await loaded;
+        await expect(page.locator('section.scroll-section #crash_nav')).toHaveCount(1);
+        expect(page.url()).toMatch(/\/crash-nav-twin\?$/);
+        expect(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type)).toBe(
+            'reload',
+        );
+        expect(typeof (await page.evaluate(() => history.state?._azIdx))).toBe('number');
+    });
+
     // The view crashes and navigates to its own page on every mount. The navigate
     // names the page on screen, which the reconnect already mounts, so the page
     // keeps reconnecting under the worker's backoff -- 1, 2, 5, then 10 s -- with no
@@ -3085,6 +3106,47 @@ test.describe('reconnect to the page on screen', () => {
         expect(loads).toBe(1);
         expect(new URL(page.url()).pathname).toBe('/wizard-q');
         await expect(page.locator('#step')).toHaveText('q');
+    });
+
+    // A reply's load inside a view transition runs in the transition's update
+    // callback, after the reply has been applied: it is still that reply's load.
+    // `/transition-load` patches on connect, with no input, and its reply loads
+    // `/transition-load` again, a loop the record (already full here) holds off.
+    test('a reply load inside a view transition is bounded too', async ({ page }) => {
+        test.setTimeout(30000);
+        await page.addInitScript(() => {
+            if (!sessionStorage.getItem('az-e2e-seeded')) {
+                sessionStorage.setItem('az-e2e-seeded', '1');
+                sessionStorage.setItem(
+                    'arizona:nav-loads',
+                    JSON.stringify(Array(10).fill({ t: Date.now(), slow: false })),
+                );
+            }
+        });
+        let loads = 0;
+        page.on('load', () => loads++);
+        await page.goto('/transition-load');
+        await expect(page.locator('#patched')).toHaveText('patched', { timeout: 10000 });
+        await page.waitForTimeout(5000);
+        expect(loads).toBe(1);
+    });
+
+    // ...and when it loads the page the navigation asked for, it reloads the entry
+    // the patch pushed, keeping its state.
+    test('a reply load of its own page inside a view transition reloads the entry', async ({
+        page,
+    }) => {
+        test.setTimeout(30000);
+        await page.goto('/transition-own');
+        await expect
+            .poll(() => new URL(page.url()).pathname, { timeout: 10000 })
+            .toBe('/transition-own/p');
+        await page.waitForLoadState('load');
+        await expect(page.locator('#patched')).toHaveText('mounted');
+        await expect
+            .poll(() => page.evaluate(() => performance.getEntriesByType('navigation')[0].type))
+            .toBe('reload');
+        expect(typeof (await page.evaluate(() => history.state?._azIdx))).toBe('number');
     });
 
     // The load answering a failed navigate: the user lets it through or no prompt is

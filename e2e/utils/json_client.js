@@ -130,6 +130,10 @@ export class NativeClient {
             '/ws?_az_path=' +
             encodeURIComponent(path) +
             '&_az_reconnect=1';
+        // The page on screen, the path and query as a navigate asked for them (as
+        // written, the way the web client keeps `_shownPath`/`_shownQs`): what the
+        // reconnect dials re-encodes the query, `q=a%20b` as `q=a+b`.
+        [this._shownPath, this._shownQs = ''] = path.split('?');
         // fingerprint -> { s, t }, in least-recently-used FIRST order: a Map
         // iterates by insertion order, and `_statics` re-inserts on every hit, so
         // the announce-time prune just drops from the front (see FP_CACHE_MAX).
@@ -535,17 +539,15 @@ export class NativeClient {
 
     // The page on screen, as a URL fragments resolve against.
     _shownUrl() {
-        const u = new URL(this.wsUrl);
-        const qs = new URLSearchParams(
-            [...u.searchParams].filter(([k]) => !k.startsWith('_az_')),
-        ).toString();
-        return pageUrl(u.searchParams.get('_az_path'), qs);
+        return pageUrl(this._shownPath, this._shownQs);
     }
 
     // Point the reconnect at the page on screen: the route in `_az_path`, the
     // query as plain params beside the framework ones (the way the browser
     // connect carries them).
     _dialPage(path, qs) {
+        this._shownPath = path;
+        this._shownQs = qs;
         const u = new URL(this.wsUrl);
         u.searchParams.set('_az_path', path);
         for (const key of [...u.searchParams.keys()]) {

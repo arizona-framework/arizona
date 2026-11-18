@@ -1141,7 +1141,7 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 // every caller's containment -- a throwing command would become
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
-                const later = host.keepOrigin();
+                const later = host.keepOrigin(true);
                 runTransition(opts, () =>
                     later(() => {
                         try {

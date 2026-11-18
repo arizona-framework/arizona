@@ -406,8 +406,13 @@ Triggers a SPA navigation to `Path` with options.
 - `full` -- do a real full-page navigation (`location.assign`, or `location.replace`
   with `replace`) instead of a SPA navigation. For a target that is not a live route
   (a controller/asset path, a 404); the framework itself emits this to degrade a
-  navigate/patch whose path does not resolve to a live view. An `http`/`https`
-  `Path` on another origin is always loaded this way, since `pushState` refuses it.
+  navigate/patch whose path does not resolve to a live view. A full load among a
+  navigation's reply effects (the framework's or the app's own) that names the very
+  page the navigation asked for, while the address bar still names it, reloads the
+  history entry it pushed instead, keeping its state; any other load goes by URL, a
+  `fetch/2` response's included (unbounded).
+  An `http`/`https` `Path` on another origin is always loaded this way, since
+  `pushState` refuses it.
   In a `fetch/2` response a relative `Path` resolves against the URL the response
   came from (after redirects), as an HTTP 3xx `Location` does; anywhere else, against
   the document base. Any other scheme (`javascript:`, `data:`) is never loaded: the
