@@ -404,7 +404,9 @@ Triggers a SPA navigation to `Path` with options.
   navigate, or set the flash from the controller with `arizona_req:put_flash/3` and
   navigate with `full => true`.
 - `full` -- do a real full-page navigation (`location.assign`, or `location.replace`
-  with `replace`) instead of a SPA navigation. For a target that is not a live route
+  with `replace`) instead of a SPA navigation. A full load the framework answers a
+  navigation with that names the very page the navigation asked for reloads the
+  history entry it pushed instead, keeping its state. For a target that is not a live route
   (a controller/asset path, a 404); the framework itself emits this to degrade a
   navigate/patch whose path does not resolve to a live view. An `http`/`https`
   `Path` on another origin is always loaded this way, since `pushState` refuses it.
