@@ -28,6 +28,7 @@ function person(type = 'pointerdown', init = {}, target = document.body) {
 const OP_REPLACE = 8;
 const JS_NAVIGATE = 10;
 const JS_TRANSITION = 20;
+const JS_FETCH = 22;
 const JS_PATCH = 24;
 
 // A reconnect resyncs the page on screen -- the view the DOM holds -- and a
@@ -575,6 +576,10 @@ describe('a navigation back to the page on screen while one is pending', () => {
 // page, then closes 4500. A navigation still owed a reply at a close is one it never
 // ran, so it goes out again once the page on screen is live.
 describe('a navigation and a crash', () => {
+    // The loads here answer navigations issued with no input: each test starts with
+    // an empty record, so none waits out the bound another test filled.
+    beforeEach(() => sessionStorage.removeItem('arizona:nav-loads'));
+
     /** Run `fn` with `location` stubbed, returning the loads it asked for. */
     async function loads(/** @type {() => void | Promise<void>} */ fn) {
         const reload = vi.fn();
@@ -713,6 +718,40 @@ describe('a navigation and a crash', () => {
         } finally {
             delete (/** @type {any} */ (document).startViewTransition);
         }
+    });
+
+    it("a full load of its page a reply's fetch response asks for goes by URL", async () => {
+        // A fetch's response is no reply to the navigation: its loads go by URL,
+        // unbounded, whatever page the address bar names when it lands.
+        await connected();
+        navigate('/next');
+        const ref = mock.navs()[0][2];
+        /** @type {(r: *) => void} */
+        let resolve = () => {};
+        const pending = new Promise((r) => {
+            resolve = r;
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => pending),
+        );
+        mock.frame(null, [[JS_FETCH, '/api', { method: 'post' }]], false, ref);
+        vi.unstubAllGlobals();
+        const l = await loads(async () => {
+            resolve({
+                ok: true,
+                status: 200,
+                url: 'http://localhost:3000/api',
+                text: () =>
+                    Promise.resolve(
+                        JSON.stringify({ e: [[JS_NAVIGATE, '/next', { full: true }]] }),
+                    ),
+            });
+            await new Promise((r) => setTimeout(r, 0));
+            await new Promise((r) => setTimeout(r, 0));
+        });
+        expect(l.reload).not.toHaveBeenCalled();
+        expect(l.assign).toHaveBeenCalledExactlyOnceWith('http://localhost:3000/next');
     });
 
     it('a full navigate to a fragment of the page on screen goes by URL, as the browser does', async () => {
